@@ -3,13 +3,29 @@ import unittest
 from local_llm.chat import (
     DEFAULT_SYSTEM_PROMPT,
     ChatMessage,
+    format_chat,
     format_chatml,
+    require_chat_template,
     require_chatml,
 )
 from local_llm.tokenizer import BPETokenizer, ByteTokenizer
 
 
 class ChatTests(unittest.TestCase):
+    @staticmethod
+    def tokenizer(chat_template=None):
+        return BPETokenizer(
+            {"a": 0, "<s>": 1, "</s>": 2},
+            [],
+            [
+                {"id": 1, "content": "<s>", "special": True},
+                {"id": 2, "content": "</s>", "special": True},
+            ],
+            bos_token_id=1,
+            eos_token_id=2,
+            chat_template=chat_template,
+        )
+
     def test_formats_official_smollm2_template(self):
         rendered = format_chatml([ChatMessage("user", "Bonjour")])
         self.assertEqual(
@@ -50,6 +66,52 @@ class ChatTests(unittest.TestCase):
             ],
         )
         require_chatml(tokenizer)
+
+    def test_renders_embedded_zephyr_template(self):
+        template = (
+            "{% for message in messages %}\n"
+            "{% if message['role'] == 'user' %}\n"
+            "{{ '<|user|>\\n' + message['content'] + eos_token }}\n"
+            "{% elif message['role'] == 'system' %}\n"
+            "{{ '<|system|>\\n' + message['content'] + eos_token }}\n"
+            "{% elif message['role'] == 'assistant' %}\n"
+            "{{ '<|assistant|>\\n' + message['content'] + eos_token }}\n"
+            "{% endif %}\n"
+            "{% if loop.last and add_generation_prompt %}\n"
+            "{{ '<|assistant|>' }}\n"
+            "{% endif %}\n"
+            "{% endfor %}"
+        )
+        rendered = format_chat(
+            [ChatMessage("system", "Bref."), ChatMessage("user", "Bonjour")],
+            self.tokenizer(template),
+        )
+        self.assertEqual(
+            rendered,
+            "<|system|>\nBref.</s>\n<|user|>\nBonjour</s>\n<|assistant|>\n",
+        )
+
+    def test_selects_named_template(self):
+        tokenizer = self.tokenizer({
+            "default": "{{ messages[0]['content'] }} default",
+            "short": "{{ messages[0]['content'] }} short",
+        })
+        messages = [ChatMessage("user", "test")]
+        self.assertEqual(format_chat(messages, tokenizer), "test default")
+        self.assertEqual(format_chat(messages, tokenizer, template_name="short"), "test short")
+        with self.assertRaisesRegex(ValueError, "available"):
+            format_chat(messages, tokenizer, template_name="missing")
+
+    def test_requires_embedded_template(self):
+        with self.assertRaisesRegex(ValueError, "embedded chat template"):
+            require_chat_template(self.tokenizer())
+
+    def test_supports_generation_blocks_and_template_errors(self):
+        tokenizer = self.tokenizer("{% generation %}assistant{% endgeneration %}")
+        self.assertEqual(format_chat([ChatMessage("user", "test")], tokenizer), "assistant")
+        tokenizer = self.tokenizer("{{ raise_exception('bad conversation') }}")
+        with self.assertRaisesRegex(ValueError, "bad conversation"):
+            format_chat([ChatMessage("user", "test")], tokenizer)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ import os
 import unittest
 from pathlib import Path
 
-from local_llm.chat import ChatMessage, format_chatml
+from local_llm.chat import ChatMessage, format_chat
 from local_llm.generation import generate
 from local_llm.loading import load_runtime
 
@@ -16,8 +16,9 @@ MODEL_PATH = os.environ.get("LOCAL_LLM_TEST_INSTRUCT")
 class RealInstructTests(unittest.TestCase):
     def test_chat_template_and_greedy_answer_match_transformers(self):
         model, tokenizer = load_runtime(Path(MODEL_PATH))
-        prompt = format_chatml(
-            [ChatMessage("user", "Quelle est la capitale de la France ? Réponds en une phrase.")]
+        prompt = format_chat(
+            [ChatMessage("user", "Quelle est la capitale de la France ? Réponds en une phrase.")],
+            tokenizer,
         )
         input_ids = [
             1, 9690, 198, 2683, 359, 253, 5356, 5646, 11173, 3365, 3511, 308,

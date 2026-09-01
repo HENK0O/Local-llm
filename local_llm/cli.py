@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence
 
-from .chat import ChatMessage, format_chatml, require_chatml
+from .chat import ChatMessage, format_chat, require_chat_template
 from .benchmark import compare_report, load_report, run_benchmark, save_report
 from .generation import GenerationStats, generate_tokens
 from .gguf import GGUFReader, q8_backend_name
@@ -48,7 +48,7 @@ def _run_once(
     seed: Optional[int],
 ) -> str:
     # ByteTokenizer adds BOS by default; pretrained BPE tokenizers generally do
-    # not. In chat mode the first ChatML token is itself the correct beginning.
+    # not. In chat mode the embedded template supplies the correct beginning.
     prompt_tokens = tokenizer.encode(prompt)
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     stats = None
@@ -77,7 +77,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--model", dest="model_option", type=Path, help="model directory")
     run.add_argument("--prompt", help="input prompt; omit with --interactive")
     run.add_argument("--interactive", action="store_true", help="read prompts until EOF or /quit")
-    run.add_argument("--chat", action="store_true", help="use the SmolLM2-Instruct ChatML template")
+    run.add_argument("--chat", action="store_true", help="use the model's embedded chat template")
+    run.add_argument("--chat-template", help="named embedded template (implies --chat)")
     run.add_argument("--system", help="system prompt (implies --chat)")
     run.add_argument("--max-new-tokens", type=int, default=64)
     run.add_argument("--temperature", type=float, default=0.0)
@@ -143,6 +144,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("tensor types: " + ", ".join(f"{name}={count}" for name, count in sorted(counts.items())))
         if counts.get("Q8_0"):
             print(f"Q8 backend: {q8_backend_name()}")
+        template_names = reader.metadata.get("tokenizer.chat_templates", [])
+        if "tokenizer.chat_template" in reader.metadata or template_names:
+            names = (["default"] if "tokenizer.chat_template" in reader.metadata else [])
+            if isinstance(template_names, list):
+                names.extend(str(name) for name in template_names)
+            print("chat templates: " + ", ".join(names))
         if args.tensors:
             for info in reader.tensors.values():
                 print(f"{info.name:<42} {str(info.shape):<20} {info.type_name}")
@@ -191,10 +198,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if tokenizer.vocab_size != model.config.vocab_size:
         parser.error("tokenizer vocabulary size does not match the model")
 
-    chat_mode = args.chat or args.system is not None
+    chat_mode = args.chat or args.system is not None or args.chat_template is not None
     if chat_mode:
         try:
-            require_chatml(tokenizer)
+            require_chat_template(tokenizer, args.chat_template)
         except ValueError as exc:
             parser.error(str(exc))
 
@@ -203,7 +210,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     def answer(prompt: str) -> None:
         if chat_mode:
             history.append(ChatMessage("user", prompt))
-            model_prompt = format_chatml(history, system_prompt=args.system)
+            model_prompt = format_chat(history, tokenizer, system_prompt=args.system,
+                                       template_name=args.chat_template)
             response = _run_once(model, tokenizer, model_prompt, args.max_new_tokens,
                                  args.temperature, args.top_k, args.top_p, args.seed)
             history.append(ChatMessage("assistant", response))

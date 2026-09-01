@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
+
+
+ChatTemplate = Union[str, Dict[str, str]]
 
 
 def _bytes_to_unicode() -> Tuple[Dict[int, str], Dict[str, int]]:
@@ -74,7 +77,8 @@ class BPETokenizer:
     def __init__(self, vocab: Dict[str, int], merges: Sequence[Union[str, Sequence[str]]],
                  added_tokens: Sequence[dict] = (), bos_token_id: Optional[int] = None,
                  eos_token_id: Optional[int] = None, pad_token_id: Optional[int] = None,
-                 pattern: Optional[str] = None, individual_digits: bool = False) -> None:
+                 pattern: Optional[str] = None, individual_digits: bool = False,
+                 chat_template: Optional[ChatTemplate] = None) -> None:
         try:
             import regex
         except ImportError as exc:
@@ -86,6 +90,7 @@ class BPETokenizer:
         self.vocab_size = max(self.id_to_token, default=-1) + 1
         self.byte_encoder, self.byte_decoder = _bytes_to_unicode()
         self.bos_token_id, self.eos_token_id, self.pad_token_id = bos_token_id, eos_token_id, pad_token_id
+        self.chat_template = chat_template
         self.special_by_text = {item["content"]: int(item["id"]) for item in added_tokens
                                 if item.get("special") and isinstance(item.get("content"), str)}
         self.special_ids = set(self.special_by_text.values())
@@ -125,6 +130,24 @@ class BPETokenizer:
             return True
         return any(BPETokenizer._has_individual_digits(child) for child in raw.get("pretokenizers", []))
 
+    @staticmethod
+    def _normalize_chat_template(value: object) -> Optional[ChatTemplate]:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, Mapping):
+            templates = {str(name): template for name, template in value.items()
+                         if isinstance(template, str)}
+            return templates or None
+        if isinstance(value, list):
+            templates = {
+                str(item["name"]): item["template"]
+                for item in value
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+                and isinstance(item.get("template"), str)
+            }
+            return templates or None
+        return None
+
     @classmethod
     def load(cls, path: Path) -> "BPETokenizer":
         with path.open("r", encoding="utf-8") as handle:
@@ -150,7 +173,19 @@ class BPETokenizer:
         pre_tokenizer = raw.get("pre_tokenizer", {})
         return cls(model["vocab"], model.get("merges", []), raw.get("added_tokens", []),
                    special_id("bos_token"), special_id("eos_token"), special_id("pad_token"),
-                   cls._pattern_from_pre_tokenizer(pre_tokenizer), cls._has_individual_digits(pre_tokenizer))
+                   cls._pattern_from_pre_tokenizer(pre_tokenizer), cls._has_individual_digits(pre_tokenizer),
+                   cls._normalize_chat_template(tokenizer_config.get("chat_template")))
+
+    def template_special_tokens(self) -> Dict[str, str]:
+        result: Dict[str, str] = {}
+        for name, token_id in (
+            ("bos_token", self.bos_token_id),
+            ("eos_token", self.eos_token_id),
+            ("pad_token", self.pad_token_id),
+        ):
+            if token_id is not None and token_id in self.id_to_token:
+                result[name] = self.id_to_token[token_id]
+        return result
 
     @lru_cache(maxsize=65536)
     def _bpe(self, token: str) -> Tuple[str, ...]:

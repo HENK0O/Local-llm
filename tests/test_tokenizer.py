@@ -4,6 +4,17 @@ from local_llm.tokenizer import BPETokenizer, ByteTokenizer
 
 
 class TokenizerTests(unittest.TestCase):
+    def test_normalizes_named_chat_templates(self):
+        templates = BPETokenizer._normalize_chat_template([
+            {"name": "default", "template": "default template"},
+            {"name": "tool_use", "template": "tool template"},
+            {"name": 3, "template": "ignored"},
+        ])
+        self.assertEqual(templates, {
+            "default": "default template",
+            "tool_use": "tool template",
+        })
+
     def test_utf8_round_trip(self):
         tokenizer = ByteTokenizer()
         text = "Bonjour 👋 — ça va ?"

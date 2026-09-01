@@ -13,7 +13,7 @@ Le runtime comprend :
 - lecteur GGUF v3 natif F32/F16/BF16/Q8_0 avec métadonnées, tokenizer et `mmap` ;
 - kernel Q8_0 C++ optionnel, vectorisé et multithread avec fallback NumPy ;
 - génération gloutonne, température, top-k, top-p et graine reproductible ;
-- streaming, mode chat ChatML avec historique, débit prefill/décodage et taille du cache KV ;
+- streaming, templates de chat Jinja automatiques avec historique, débit et cache KV ;
 - tests comparant les logits et la génération avec une voie lente sans cache.
 
 ## Démarrage rapide
@@ -52,8 +52,8 @@ Pour obtenir des réponses d'assistant, il faut un checkpoint **Instruct**. Le
 modèle `SmolLM2-135M` utilisé pour vérifier les calculs est un modèle **Base** :
 il complète du texte, mais n'a pas été entraîné à répondre à une conversation.
 
-Avec `SmolLM2-360M-Instruct`, le runtime applique le template ChatML attendu par
-le modèle :
+Avec `SmolLM2-360M-Instruct`, le runtime lit le template ChatML attendu
+directement depuis `tokenizer_config.json` ou le GGUF :
 
 ```bash
 python -m local_llm run models/SmolLM2-360M-Instruct \
@@ -71,6 +71,22 @@ python -m local_llm run models/SmolLM2-360M-Instruct.official.F16.gguf \
 
 Le message système est personnalisable avec
 `--system "Réponds brièvement en français."`.
+
+Le moteur n'impose plus le format de SmolLM : `--chat` rend automatiquement le
+template Jinja embarqué par le modèle. Les variables standard `messages`,
+`bos_token`, `eos_token`, `pad_token` et `add_generation_prompt` sont prises en
+charge dans un environnement sandboxé. Si un GGUF propose plusieurs variantes,
+`inspect` les affiche et `--chat-template <nom>` permet d'en choisir une :
+
+```bash
+python -m local_llm inspect model.gguf
+python -m local_llm run model.gguf --chat-template default --interactive
+```
+
+Un modèle dépourvu de template peut toujours être exécuté en complétion sans
+`--chat`, mais le runtime refuse de deviner son format de conversation.
+Cette amélioration règle la mise en forme du dialogue ; le modèle doit toujours
+utiliser une architecture Llama et un tokenizer BPE actuellement pris en charge.
 
 ### Modèle Base de validation
 
@@ -142,9 +158,10 @@ mémoire, au prix d'une approximation numérique et avec une vitesse qui dépend
 de la qualité des kernels utilisés.
 
 Dans ce projet, notre propre lecteur analyse l'en-tête GGUF, reconstruit la
-configuration et le tokenizer, associe les noms `blk.N.*` aux couches Llama,
-puis fournit les tenseurs au passage avant NumPy. Aucune bibliothèque
-d'inférence externe n'exécute le modèle.
+configuration et le tokenizer, récupère `tokenizer.chat_template` et ses
+variantes nommées, associe les noms `blk.N.*` aux couches Llama, puis fournit
+les tenseurs au passage avant NumPy. Aucune bibliothèque d'inférence externe
+n'exécute le modèle.
 
 Un modèle est un dossier contenant :
 

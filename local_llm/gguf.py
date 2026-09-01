@@ -326,10 +326,27 @@ def tokenizer(reader: GGUFReader) -> BPETokenizer:
         for index, value in enumerate(tokens)
     ]
     pre = str(metadata.get("tokenizer.ggml.pre", "")).lower()
+    templates: Dict[str, str] = {}
+    default_template = metadata.get("tokenizer.chat_template")
+    if isinstance(default_template, str):
+        templates["default"] = default_template
+    template_names = metadata.get("tokenizer.chat_templates", [])
+    if isinstance(template_names, list):
+        for name in template_names:
+            value = metadata.get(f"tokenizer.chat_template.{name}")
+            if isinstance(name, str) and isinstance(value, str):
+                templates[name] = value
+    for key, value in metadata.items():
+        prefix = "tokenizer.chat_template."
+        if key.startswith(prefix) and isinstance(value, str):
+            templates.setdefault(key[len(prefix):], value)
+    chat_template = (default_template if len(templates) <= 1 and isinstance(default_template, str)
+                     else templates or None)
     return BPETokenizer(
         {value: index for index, value in enumerate(tokens)}, merges, added_tokens,
         bos_token_id=metadata.get("tokenizer.ggml.bos_token_id"),
         eos_token_id=metadata.get("tokenizer.ggml.eos_token_id"),
         pad_token_id=metadata.get("tokenizer.ggml.padding_token_id"),
         individual_digits="smollm" in pre,
+        chat_template=chat_template,
     )

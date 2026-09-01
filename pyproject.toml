@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-llm"
-version = "0.6.0"
+version = "0.7.0"
 description = "A minimal NumPy inference runtime for Llama-like language models"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
+  "jinja2>=3.1",
   "numpy>=1.24",
   "regex>=2023.0.0",
 ]

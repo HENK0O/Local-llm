@@ -107,6 +107,9 @@ class GGUFTests(unittest.TestCase):
             "tokenizer.ggml.tokens": [chr(256 + i) for i in range(32)], "tokenizer.ggml.merges": [],
             "tokenizer.ggml.token_type": [1] * 32, "tokenizer.ggml.bos_token_id": 1,
             "tokenizer.ggml.eos_token_id": 2, "tokenizer.ggml.padding_token_id": 0,
+            "tokenizer.chat_template": "{{ messages[0]['content'] }} default",
+            "tokenizer.chat_templates": ["short"],
+            "tokenizer.chat_template.short": "{{ messages[0]['content'] }} short",
         }
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "toy.gguf"
@@ -116,6 +119,10 @@ class GGUFTests(unittest.TestCase):
             actual = loaded.forward(np.array([1, 5, 9, 3]))
             np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=2e-5)
             self.assertEqual(tokenizer.vocab_size, 32)
+            self.assertEqual(tokenizer.chat_template, {
+                "default": "{{ messages[0]['content'] }} default",
+                "short": "{{ messages[0]['content'] }} short",
+            })
 
     def test_f16_tensor_is_memory_mapped(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,6 +1,6 @@
 """Small, readable Llama inference runtime."""
 
-from .chat import ChatMessage, format_chatml
+from .chat import ChatMessage, format_chat, format_chatml
 from .config import ModelConfig
 from .generation import GenerationResult, generate
 from .gguf import GGUFReader
@@ -16,9 +16,10 @@ __all__ = [
     "GGUFReader",
     "LlamaModel",
     "ModelConfig",
+    "format_chat",
     "format_chatml",
     "generate",
     "load_runtime",
     "load_tokenizer",
 ]
-__version__ = "0.6.0"
+__version__ = "0.7.0"
