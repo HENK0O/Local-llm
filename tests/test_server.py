@@ -97,7 +97,7 @@ class HTTPServerTests(unittest.TestCase):
         status, content_type, body = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("text/html", content_type)
-        self.assertIn(b"Que veux-tu demander", body)
+        self.assertIn(b"local-llm run --local", body)
         self.assertIn(b'id="modelName"', body)
         self.assertIn(b"/v1/chat/completions", body)
         status, _, body = self.request("GET", "/health")

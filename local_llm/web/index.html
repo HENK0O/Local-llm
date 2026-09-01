@@ -508,8 +508,6 @@
     <section id="conversation" aria-live="polite">
       <div class="welcome" id="welcome">
         <div class="prompt-symbol">$ local-llm run --local</div>
-        <h1>Que veux-tu demander ?</h1>
-        <p>Le modèle tourne sur cette machine. Aucun message ne quitte le serveur local.</p>
         <div class="suggestions">
           <button class="suggestion" type="button">Présente-toi en français.</button>
           <button class="suggestion" type="button">Combien font 17 × 6 ?</button>
@@ -708,7 +706,7 @@
       conversation.replaceChildren();
       const reset = document.createElement('div');
       reset.className = 'welcome';
-      reset.innerHTML = '<div class="prompt-symbol">$ clear --history</div><h1>Nouvelle conversation.</h1><p>Pose une question au modèle chargé sur cette machine.</p>';
+      reset.innerHTML = '<div class="prompt-symbol">$ clear --history</div>';
       conversation.append(reset);
       metrics.textContent = 'Prêt';
     });
