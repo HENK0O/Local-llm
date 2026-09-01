@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Interface locale du moteur d’inférence local-llm">
+  <title>local-llm — Chat local</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #10120f;
+      --panel: rgba(31, 34, 28, .88);
+      --panel-strong: #242820;
+      --line: rgba(232, 238, 216, .12);
+      --text: #f2f4ea;
+      --muted: #a4aa98;
+      --accent: #d9ff72;
+      --accent-dark: #1e2b0a;
+      --user: #384425;
+      --danger: #ff9a8d;
+      --radius: 22px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 18% 10%, rgba(166, 214, 89, .12), transparent 30%),
+        radial-gradient(circle at 82% 90%, rgba(94, 136, 85, .10), transparent 35%),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, textarea, input { font: inherit; }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      height: 100vh;
+      max-width: 1500px;
+      margin: 0 auto;
+    }
+
+    aside {
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+      padding: 30px 24px;
+      border-right: 1px solid var(--line);
+      background: rgba(12, 14, 11, .45);
+    }
+
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border-radius: 12px;
+      background: var(--accent);
+      color: #11150b;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-weight: 900;
+      box-shadow: 0 0 30px rgba(217, 255, 114, .15);
+    }
+    .brand strong { display: block; letter-spacing: -.02em; }
+    .brand small { color: var(--muted); }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 12px var(--accent);
+    }
+    .status-dot.offline { background: var(--danger); box-shadow: none; }
+
+    .model-card, .settings {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+    }
+    .eyebrow {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    #modelName { margin: 0; overflow-wrap: anywhere; font-size: 14px; line-height: 1.45; }
+
+    .settings { display: grid; gap: 17px; }
+    .control-row { display: grid; gap: 8px; }
+    .control-label { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+    input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+    .clear {
+      margin-top: auto;
+      padding: 11px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .clear:hover { color: var(--text); border-color: rgba(232, 238, 216, .3); }
+
+    main { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      min-height: 82px;
+      padding: 18px clamp(22px, 5vw, 70px);
+      border-bottom: 1px solid var(--line);
+    }
+    header h1 { margin: 0; font-size: clamp(20px, 3vw, 28px); letter-spacing: -.04em; }
+    header span { color: var(--muted); font-size: 13px; }
+
+    #conversation {
+      overflow-y: auto;
+      padding: 32px clamp(22px, 7vw, 100px) 22px;
+      scroll-behavior: smooth;
+    }
+
+    .welcome {
+      display: grid;
+      place-content: center;
+      min-height: 100%;
+      max-width: 680px;
+      margin: auto;
+      text-align: center;
+    }
+    .welcome .kicker { color: var(--accent); font: 700 12px ui-monospace, monospace; letter-spacing: .16em; }
+    .welcome h2 { margin: 14px 0 12px; font-size: clamp(34px, 6vw, 64px); line-height: .98; letter-spacing: -.055em; }
+    .welcome p { margin: 0 auto; max-width: 540px; color: var(--muted); line-height: 1.65; }
+    .suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 9px; margin-top: 28px; }
+    .suggestion {
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, .02);
+      color: var(--text);
+      cursor: pointer;
+    }
+    .suggestion:hover { border-color: var(--accent); color: var(--accent); }
+
+    .message { display: grid; gap: 8px; max-width: 760px; margin: 0 auto 26px; }
+    .message.user { justify-items: end; }
+    .message-role { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+    .bubble {
+      max-width: min(100%, 680px);
+      padding: 15px 18px;
+      border: 1px solid var(--line);
+      border-radius: 18px 18px 18px 5px;
+      background: var(--panel);
+      line-height: 1.62;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .user .bubble { border-radius: 18px 18px 5px 18px; background: var(--user); }
+    .assistant.pending .bubble::after {
+      content: "";
+      display: inline-block;
+      width: 7px;
+      height: 16px;
+      margin-left: 4px;
+      vertical-align: -2px;
+      background: var(--accent);
+      animation: blink .85s steps(2) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .composer-wrap { padding: 16px clamp(18px, 6vw, 88px) 24px; }
+    .composer {
+      max-width: 820px;
+      margin: auto;
+      padding: 10px 10px 10px 18px;
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      border: 1px solid rgba(217, 255, 114, .24);
+      border-radius: var(--radius);
+      background: var(--panel-strong);
+      box-shadow: 0 18px 60px rgba(0, 0, 0, .25);
+    }
+    textarea {
+      flex: 1;
+      min-height: 44px;
+      max-height: 150px;
+      padding: 11px 2px;
+      resize: none;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      line-height: 1.45;
+    }
+    textarea::placeholder { color: #7e8475; }
+    .send {
+      width: 46px;
+      height: 46px;
+      flex: 0 0 auto;
+      border: 0;
+      border-radius: 15px;
+      background: var(--accent);
+      color: #12170a;
+      font-size: 20px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .send:hover { filter: brightness(1.08); }
+    .send:disabled { cursor: not-allowed; opacity: .45; }
+    .hint { max-width: 820px; margin: 9px auto 0; color: var(--muted); text-align: center; font-size: 11px; }
+    #metrics { color: var(--accent); }
+
+    @media (max-width: 760px) {
+      body { overflow: auto; }
+      .shell { grid-template-columns: 1fr; height: 100dvh; }
+      aside { display: none; }
+      header { min-height: 64px; padding: 13px 18px; }
+      header span { display: none; }
+      #conversation { padding: 22px 16px; }
+      .composer-wrap { padding: 10px 12px 16px; }
+      .welcome h2 { font-size: 42px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #conversation { scroll-behavior: auto; }
+      .assistant.pending .bubble::after { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand">
+        <div class="mark">L</div>
+        <div><strong>local-llm</strong><small>Moteur d’inférence local</small></div>
+      </div>
+
+      <div class="status"><span class="status-dot" id="statusDot"></span><span id="statusText">Connexion…</span></div>
+
+      <section class="model-card">
+        <p class="eyebrow">Modèle chargé</p>
+        <p id="modelName">Chargement…</p>
+      </section>
+
+      <section class="settings">
+        <p class="eyebrow">Génération</p>
+        <label class="control-row">
+          <span class="control-label"><span>Température</span><output id="temperatureValue">0.0</output></span>
+          <input id="temperature" type="range" min="0" max="1.5" step="0.1" value="0">
+        </label>
+        <label class="control-row">
+          <span class="control-label"><span>Tokens maximum</span><output id="tokensValue">120</output></span>
+          <input id="maxTokens" type="range" min="16" max="256" step="8" value="120">
+        </label>
+      </section>
+
+      <button class="clear" id="clearButton" type="button">Nouvelle conversation</button>
+    </aside>
+
+    <main>
+      <header>
+        <h1>Discussion locale</h1>
+        <span>Les données restent sur cet ordinateur</span>
+      </header>
+
+      <section id="conversation" aria-live="polite">
+        <div class="welcome" id="welcome">
+          <span class="kicker">100 % LOCAL</span>
+          <h2>Parle à ton moteur.</h2>
+          <p>Chaque réponse traverse ton tokenizer, ton Transformer NumPy, son cache KV et le modèle GGUF chargé en mémoire.</p>
+          <div class="suggestions">
+            <button class="suggestion" type="button">Présente-toi en français.</button>
+            <button class="suggestion" type="button">Combien font 17 × 6 ?</button>
+            <button class="suggestion" type="button">Écris une phrase positive.</button>
+          </div>
+        </div>
+      </section>
+
+      <div class="composer-wrap">
+        <form class="composer" id="composer">
+          <textarea id="prompt" rows="1" placeholder="Écris ton message…" aria-label="Message"></textarea>
+          <button class="send" id="sendButton" type="submit" aria-label="Envoyer">↑</button>
+        </form>
+        <div class="hint"><span id="metrics">Prêt</span> · Entrée pour envoyer · Maj + Entrée pour une nouvelle ligne</div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const conversation = document.querySelector('#conversation');
+    const composer = document.querySelector('#composer');
+    const promptInput = document.querySelector('#prompt');
+    const sendButton = document.querySelector('#sendButton');
+    const clearButton = document.querySelector('#clearButton');
+    const metrics = document.querySelector('#metrics');
+    const temperature = document.querySelector('#temperature');
+    const maxTokens = document.querySelector('#maxTokens');
+    const defaultSystemMessage = {
+      role: 'system',
+      content: 'Tu es un assistant utile. Réponds en français, sauf si l’utilisateur demande une autre langue.'
+    };
+    const messages = [{ ...defaultSystemMessage }];
+    let generating = false;
+    let controller = null;
+
+    function setStatus(ok, text) {
+      document.querySelector('#statusDot').classList.toggle('offline', !ok);
+      document.querySelector('#statusText').textContent = text;
+    }
+
+    async function loadStatus() {
+      try {
+        const response = await fetch('/health');
+        if (!response.ok) throw new Error('indisponible');
+        const health = await response.json();
+        document.querySelector('#modelName').textContent = health.model;
+        setStatus(true, 'Moteur prêt');
+      } catch (_) {
+        setStatus(false, 'Serveur indisponible');
+        document.querySelector('#modelName').textContent = 'Aucun modèle';
+      }
+    }
+
+    function addMessage(role, content = '') {
+      conversation.querySelector('.welcome')?.remove();
+      const row = document.createElement('article');
+      row.className = `message ${role}`;
+      const label = document.createElement('div');
+      label.className = 'message-role';
+      label.textContent = role === 'user' ? 'Toi' : 'local-llm';
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = content;
+      row.append(label, bubble);
+      conversation.append(row);
+      conversation.scrollTop = conversation.scrollHeight;
+      return { row, bubble };
+    }
+
+    function setGenerating(value) {
+      generating = value;
+      sendButton.disabled = false;
+      sendButton.textContent = value ? '■' : '↑';
+      sendButton.setAttribute('aria-label', value ? 'Arrêter' : 'Envoyer');
+      promptInput.disabled = value;
+    }
+
+    function formatBytes(bytes) {
+      return `${(bytes / 1024 / 1024).toFixed(1)} Mio KV`;
+    }
+
+    async function submitMessage(text) {
+      const clean = text.trim();
+      if (!clean || generating) return;
+      messages.push({ role: 'user', content: clean });
+      addMessage('user', clean);
+      promptInput.value = '';
+      promptInput.style.height = 'auto';
+
+      const assistant = addMessage('assistant');
+      assistant.row.classList.add('pending');
+      let answer = '';
+      controller = new AbortController();
+      setGenerating(true);
+      metrics.textContent = 'Génération…';
+
+      try {
+        const response = await fetch('/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            messages,
+            max_tokens: Number(maxTokens.value),
+            temperature: Number(temperature.value),
+            top_p: Number(temperature.value) > 0 ? 0.9 : null,
+            stream: true
+          })
+        });
+        if (!response.ok || !response.body) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.error?.message || `Erreur HTTP ${response.status}`);
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let done = false;
+        while (!done) {
+          const chunk = await reader.read();
+          done = chunk.done;
+          buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !done });
+          const blocks = buffer.split('\n\n');
+          buffer = blocks.pop() || '';
+          for (const block of blocks) {
+            const line = block.split('\n').find(value => value.startsWith('data: '));
+            if (!line) continue;
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
+            const event = JSON.parse(data);
+            if (event.error) throw new Error(event.error.message);
+            const content = event.choices?.[0]?.delta?.content;
+            if (content) {
+              answer += content;
+              assistant.bubble.textContent = answer;
+              conversation.scrollTop = conversation.scrollHeight;
+            }
+            if (event.local_llm) {
+              metrics.textContent = `${event.local_llm.decode_tokens_per_second.toFixed(1)} tok/s · ${formatBytes(event.local_llm.kv_cache_bytes)}`;
+            }
+          }
+        }
+        if (answer) messages.push({ role: 'assistant', content: answer });
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          metrics.textContent = 'Génération arrêtée';
+          if (answer) messages.push({ role: 'assistant', content: answer });
+        } else {
+          assistant.bubble.textContent = `Erreur : ${error.message}`;
+          assistant.bubble.style.color = 'var(--danger)';
+          metrics.textContent = 'Erreur';
+        }
+      } finally {
+        assistant.row.classList.remove('pending');
+        controller = null;
+        setGenerating(false);
+        promptInput.focus();
+      }
+    }
+
+    composer.addEventListener('submit', event => {
+      event.preventDefault();
+      if (generating) controller?.abort();
+      else submitMessage(promptInput.value);
+    });
+    promptInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        composer.requestSubmit();
+      }
+    });
+    promptInput.addEventListener('input', () => {
+      promptInput.style.height = 'auto';
+      promptInput.style.height = `${Math.min(promptInput.scrollHeight, 150)}px`;
+    });
+    temperature.addEventListener('input', () => {
+      document.querySelector('#temperatureValue').textContent = Number(temperature.value).toFixed(1);
+    });
+    maxTokens.addEventListener('input', () => {
+      document.querySelector('#tokensValue').textContent = maxTokens.value;
+    });
+    clearButton.addEventListener('click', () => {
+      if (generating) controller?.abort();
+      messages.splice(0, messages.length, { ...defaultSystemMessage });
+      conversation.replaceChildren();
+      const reset = document.createElement('div');
+      reset.className = 'welcome';
+      reset.innerHTML = '<span class="kicker">NOUVELLE CONVERSATION</span><h2>On repart de zéro.</h2><p>Pose une question au modèle chargé dans ton moteur local.</p>';
+      conversation.append(reset);
+      metrics.textContent = 'Prêt';
+    });
+    document.querySelectorAll('.suggestion').forEach(button => {
+      button.addEventListener('click', () => submitMessage(button.textContent));
+    });
+
+    loadStatus();
+    promptInput.focus();
+  </script>
+</body>
+</html>

@@ -18,6 +18,7 @@ from .loading import load_runtime
 
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
+WEB_INDEX = Path(__file__).with_name("web") / "index.html"
 
 
 @dataclass(frozen=True)
@@ -174,7 +175,19 @@ class LocalLLMHTTPServer(ThreadingHTTPServer):
 class LocalLLMRequestHandler(BaseHTTPRequestHandler):
     server: LocalLLMHTTPServer
     protocol_version = "HTTP/1.0"
-    server_version = "local-llm/0.8"
+    server_version = "local-llm/0.9"
+
+    def _send_bytes(self, status: int, data: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "default-src 'self'; "
+                         "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; "
+                         "connect-src 'self'")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _send_json(self, status: int, payload: Dict) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -192,10 +205,20 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
         return urlsplit(self.path).path
 
     def do_GET(self) -> None:
-        if self._path() == "/health":
+        path = self._path()
+        if path in {"/", "/index.html", "/chat"}:
+            try:
+                self._send_bytes(200, WEB_INDEX.read_bytes(), "text/html; charset=utf-8")
+            except OSError as exc:
+                self._error(500, f"web interface unavailable: {exc}")
+            return
+        if path == "/favicon.ico":
+            self._send_bytes(204, b"", "image/x-icon")
+            return
+        if path == "/health":
             self._send_json(200, {"status": "ok", "model": self.server.service.model_name})
             return
-        if self._path() == "/v1/models":
+        if path == "/v1/models":
             self._send_json(200, {"object": "list", "data": [{
                 "id": self.server.service.model_name,
                 "object": "model",
@@ -316,6 +339,11 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                     "prompt_tokens": final_stats.prompt_tokens,
                     "completion_tokens": len(token_ids),
                     "total_tokens": final_stats.prompt_tokens + len(token_ids),
+                }
+                final["local_llm"] = {
+                    "prefill_tokens_per_second": final_stats.prefill_tokens_per_second,
+                    "decode_tokens_per_second": final_stats.decode_tokens_per_second,
+                    "kv_cache_bytes": final_stats.cache_bytes,
                 }
             self._write_event(final)
             self._write_event("[DONE]")

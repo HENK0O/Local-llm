@@ -101,8 +101,15 @@ python -m local_llm serve \
   --host 127.0.0.1 --port 8080
 ```
 
+Ouvre ensuite [http://127.0.0.1:8080](http://127.0.0.1:8080) dans un navigateur.
+L'interface permet de discuter avec le modèle, conserve l'historique, affiche
+les tokens en direct et permet de régler la température et la longueur maximale.
+Le bouton carré interrompt une génération et « Nouvelle conversation » efface
+l'historique envoyé au modèle.
+
 Une réponse JSON contient le texte, l'usage en tokens, le débit du prefill et du
-décodage ainsi que la taille du cache KV :
+décodage ainsi que la taille du cache KV. `curl` reste utile pour tester l'API
+directement, mais n'est pas nécessaire pour utiliser l'interface :
 
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \

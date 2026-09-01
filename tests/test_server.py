@@ -94,6 +94,11 @@ class HTTPServerTests(unittest.TestCase):
         return response.status, response.getheader("Content-Type"), data
 
     def test_health_and_models(self):
+        status, content_type, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", content_type)
+        self.assertIn(b"Discussion locale", body)
+        self.assertIn(b"/v1/chat/completions", body)
         status, _, body = self.request("GET", "/health")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["model"], "test-model")
@@ -122,6 +127,7 @@ class HTTPServerTests(unittest.TestCase):
         self.assertIn("text/event-stream", content_type)
         self.assertIn('"content": "Bon"', text)
         self.assertIn('"content": "jour"', text)
+        self.assertIn('"decode_tokens_per_second"', text)
         self.assertTrue(text.endswith("data: [DONE]\n\n"))
 
     def test_invalid_request_and_unknown_route(self):

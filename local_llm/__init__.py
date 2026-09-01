@@ -22,4 +22,4 @@ __all__ = [
     "load_runtime",
     "load_tokenizer",
 ]
-__version__ = "0.8.0"
+__version__ = "0.9.0"
