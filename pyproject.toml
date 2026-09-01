@@ -4,15 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-llm"
-version = "0.1.0"
+version = "0.2.0"
 description = "A minimal NumPy inference runtime for Llama-like language models"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["numpy>=1.24"]
+dependencies = [
+  "numpy>=1.24",
+  "regex>=2023.0.0",
+]
+
+[project.optional-dependencies]
+reference = [
+  "torch>=2.2",
+  "transformers>=4.40,<5",
+]
 
 [project.scripts]
 local-llm = "local_llm.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["local_llm*"]
-

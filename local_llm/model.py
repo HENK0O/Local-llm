@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 from .cache import KVCache
 from .config import ModelConfig
 from .ops import apply_rope, linear, rms_norm, silu, softmax
+from .safetensors import load_directory as load_safetensors_directory
 
 Array = NDArray[np.floating]
 
@@ -27,10 +28,11 @@ class LlamaModel:
         model_dir = Path(model_dir)
         config = ModelConfig.load(model_dir / "config.json")
         weights_path = model_dir / "weights.npz"
-        if not weights_path.exists():
-            raise FileNotFoundError(f"missing {weights_path}; v0.1 expects an NPZ weight archive")
-        with np.load(weights_path, allow_pickle=False) as archive:
-            weights = {name: archive[name] for name in archive.files}
+        if weights_path.exists():
+            with np.load(weights_path, allow_pickle=False) as archive:
+                weights = {name: archive[name] for name in archive.files}
+        else:
+            weights = load_safetensors_directory(model_dir, np.float32)
         return cls(config, weights)
 
     def new_cache(self, capacity: Optional[int] = None) -> KVCache:
@@ -72,6 +74,15 @@ class LlamaModel:
             raise ValueError("invalid weights:\n  " + "\n  ".join(errors))
 
     def forward(self, token_ids: NDArray[np.integer], cache: Optional[KVCache] = None) -> Array:
+        logits, _ = self._forward(token_ids, cache, capture=False)
+        return logits
+
+    def forward_with_activations(self, token_ids: NDArray[np.integer]) -> Tuple[Array, Dict[str, Array]]:
+        """Reference/debug path returning residual-stream checkpoints."""
+        return self._forward(token_ids, cache=None, capture=True)
+
+    def _forward(self, token_ids: NDArray[np.integer], cache: Optional[KVCache],
+                 capture: bool) -> Tuple[Array, Dict[str, Array]]:
         tokens = np.asarray(token_ids, dtype=np.int64)
         if tokens.ndim != 1 or tokens.size == 0:
             raise ValueError("token_ids must be a non-empty 1D array")
@@ -86,9 +97,14 @@ class LlamaModel:
             raise ValueError("sequence exceeds KV cache capacity")
 
         x = self.weights["model.embed_tokens.weight"][tokens]
+        activations: Dict[str, Array] = {}
+        if capture:
+            activations["embeddings"] = np.asarray(x, dtype=np.float32).copy()
         positions = np.arange(start, end, dtype=np.int64)
         for layer_index in range(self.config.num_hidden_layers):
             x = self._layer(x, layer_index, positions, start, end, cache)
+            if capture:
+                activations[f"layer.{layer_index}"] = np.asarray(x, dtype=np.float32).copy()
 
         if cache is not None:
             cache.length = end
@@ -98,7 +114,12 @@ class LlamaModel:
             if self.config.tie_word_embeddings
             else self.weights["lm_head.weight"]
         )
-        return linear(x, output_weight).astype(np.float32, copy=False)
+        if capture:
+            activations["norm"] = np.asarray(x, dtype=np.float32).copy()
+        logits = linear(x, output_weight).astype(np.float32, copy=False)
+        if capture:
+            activations["logits"] = logits.copy()
+        return logits, activations
 
     def _layer(
         self,
@@ -151,4 +172,3 @@ class LlamaModel:
         gate = silu(linear(hidden, self.weights[f"{prefix}.mlp.gate_proj.weight"]))
         up = linear(hidden, self.weights[f"{prefix}.mlp.up_proj.weight"])
         return residual + linear(gate * up, self.weights[f"{prefix}.mlp.down_proj.weight"])
-

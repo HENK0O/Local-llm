@@ -4,18 +4,19 @@ Un moteur d’inférence Llama minimal écrit en Python et NumPy. Le passage ava
 entièrement implémenté dans ce dépôt : aucune bibliothèque d’inférence et aucun
 appel à Transformers ne sont utilisés.
 
-La v0.1 pédagogique comprend :
+Le runtime comprend :
 
 - embeddings, RMSNorm, RoPE, attention causale multi-têtes/GQA et SwiGLU ;
 - prefill et décodage token par token avec cache KV préalloué ;
-- tokenizer UTF-8 par octets, réversible et sans dépendance ;
+- tokenizer jouet UTF-8 et tokenizer GPT-2 byte-level BPE réel ;
+- lecteur SafeTensors natif F32/F16/BF16, mono-fichier ou shardé ;
 - génération gloutonne, température, top-k, top-p et graine reproductible ;
 - streaming, mode interactif, débit prefill/décodage et taille du cache KV ;
 - tests comparant les logits et la génération avec une voie lente sans cache.
 
 ## Démarrage rapide
 
-Python 3.9 ou supérieur et NumPy sont les seules dépendances d’exécution.
+Python 3.9 ou supérieur, NumPy et `regex` sont les seules dépendances d’exécution.
 
 ```bash
 python3 -m local_llm create-toy /tmp/local-llm-toy
@@ -31,11 +32,26 @@ Pour installer la commande `local-llm` dans un environnement virtuel :
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
+python -m pip install --upgrade pip
 pip install -e .
 local-llm run /tmp/local-llm-toy --prompt "Bonjour"
 ```
 
-## Format de modèle v0.1
+## Exécuter un modèle préentraîné réel
+
+Le checkpoint de validation est
+[HuggingFaceTB/SmolLM2-135M](https://huggingface.co/HuggingFaceTB/SmolLM2-135M),
+un modèle Apache-2.0 de type Llama. Télécharge `config.json`, `tokenizer.json`,
+`tokenizer_config.json` et `model.safetensors` dans
+`models/SmolLM2-135M/`. Le dossier `models/` et les poids sont ignorés par Git.
+
+```bash
+python -m local_llm run models/SmolLM2-135M \
+  --prompt "Bonjour, comment ça va ?" \
+  --max-new-tokens 32
+```
+
+## Formats de modèles
 
 Un modèle est un dossier contenant :
 
@@ -43,7 +59,17 @@ Un modèle est un dossier contenant :
 model/
 ├── config.json
 ├── tokenizer.json
-└── weights.npz
+└── weights.npz                  # format jouet
+```
+
+ou, pour un checkpoint Hugging Face :
+
+```text
+model/
+├── config.json
+├── tokenizer.json
+├── tokenizer_config.json
+└── model.safetensors            # ou model.safetensors.index.json + shards
 ```
 
 `config.json` reprend les champs Llama usuels (`hidden_size`,
@@ -61,10 +87,11 @@ model.norm.weight
 lm_head.weight
 ```
 
-Le tokenizer v0.1 utilise `{ "type": "byte", "byte_offset": 3 }`. C’est un
+Le tokenizer jouet utilise `{ "type": "byte", "byte_offset": 3 }`. C’est un
 choix volontaire : il permet de valider le Transformer indépendamment des
 détails SentencePiece/BPE. Un modèle préentraîné doit avoir été entraîné avec ce
-vocabulaire, ou ses poids doivent être accompagnés du tokenizer correspondant.
+vocabulaire. Les checkpoints réels peuvent utiliser un `tokenizer.json` BPE
+byte-level de style GPT-2, avec tokens spéciaux et pré-tokenisation Unicode.
 
 ## Vérification
 
@@ -72,22 +99,49 @@ vocabulaire, ou ses poids doivent être accompagnés du tokenizer correspondant.
 python3 -m unittest discover -s tests -v
 ```
 
+Le test d’intégration du checkpoint, ignoré quand les poids ne sont pas présents,
+se lance avec :
+
+```bash
+LOCAL_LLM_TEST_MODEL=models/SmolLM2-135M \
+  python -m unittest tests.test_real_model -v
+```
+
 Les tests vérifient chaque primitive, la sérialisation, la mémoire du cache, la
 parité des logits entre passage complet et décodage incrémental, puis l’identité
-des tokens gloutons avec une référence recalculant toute la séquence.
+des tokens gloutons avec une référence recalculant toute la séquence. Ils testent
+aussi le lecteur SafeTensors, BF16, les shards et le BPE.
+
+Transformers reste une dépendance de développement optionnelle. Pour exporter
+une référence couche par couche puis la comparer :
+
+```bash
+pip install -e '.[reference]'
+python scripts/export_transformers_reference.py \
+  --model models/SmolLM2-135M \
+  --prompt "Bonjour, comment ça va ?" \
+  --output /tmp/smollm2-reference.npz
+python -m local_llm verify \
+  --model models/SmolLM2-135M \
+  --reference /tmp/smollm2-reference.npz
+```
+
+Transformers n’est importé que par le script d’export. `local_llm run` et
+`local_llm verify` effectuent leurs calculs avec le runtime NumPy du projet.
+
+Sur le checkpoint de validation, le tokenizer produit exactement les mêmes IDs,
+les tokens gloutons sont identiques et l’écart moyen mesuré sur les logits est
+d’environ `1.23e-5` en calcul F32.
 
 ## Limites et feuille de route
 
-Cette étape établit le socle correct et testable. Elle ne prétend pas encore
-charger directement un modèle Hugging Face ou GGUF. L’ordre conseillé pour la
-suite est :
+Le chargement direct d’un modèle Hugging Face Llama/SafeTensors est opérationnel.
+La suite est :
 
-1. ajouter un tokenizer SentencePiece/BPE et un importeur SafeTensors de référence ;
-2. comparer activations et logits couche par couche avec un petit modèle Llama ;
-3. lire GGUF F32/F16 via `mmap`, puis mapper ses noms de tenseurs ;
-4. ajouter Q8 et ses kernels matrice-vecteur, avec benchmarks et seuils d’erreur ;
-5. porter les kernels stables en C++/Accelerate, puis seulement explorer Metal.
+1. lire GGUF F32/F16 via `mmap`, puis mapper ses noms de tenseurs ;
+2. ajouter Q8 et ses kernels matrice-vecteur, avec benchmarks et seuils d’erreur ;
+3. ajouter un tokenizer SentencePiece pour les modèles qui n’utilisent pas BPE ;
+4. porter les kernels stables en C++/Accelerate, puis seulement explorer Metal.
 
 Le modèle jouet permet de développer chacune de ces étapes sans confondre les
 erreurs de format, de tokenizer, de quantification et de calcul.
-

@@ -8,8 +8,9 @@ from typing import Optional, Sequence
 
 from .generation import GenerationStats, generate_tokens
 from .model import LlamaModel
-from .tokenizer import ByteTokenizer
+from .tokenizer import Tokenizer, load_tokenizer
 from .toy import create_toy_model
+from .verification import compare_reference
 
 
 def _format_bytes(value: int) -> str:
@@ -33,7 +34,7 @@ def _print_stats(stats: GenerationStats) -> None:
 
 def _run_once(
     model: LlamaModel,
-    tokenizer: ByteTokenizer,
+    tokenizer: Tokenizer,
     prompt: str,
     max_new_tokens: int,
     temperature: float,
@@ -47,9 +48,9 @@ def _run_once(
     for token, maybe_stats in generate_tokens(
         model, prompt_tokens, max_new_tokens, temperature, top_k, top_p, seed
     ):
-        byte = token - tokenizer.byte_offset
-        if 0 <= byte <= 255:
-            text = decoder.decode(bytes([byte]), final=False)
+        token_data = tokenizer.token_bytes(token)
+        if token_data:
+            text = decoder.decode(token_data, final=False)
             print(text, end="", flush=True)
         stats = maybe_stats or stats
     print(decoder.decode(b"", final=True), end="", flush=True)
@@ -75,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
     toy = subparsers.add_parser("create-toy", help="create a deterministic tiny model")
     toy.add_argument("output", type=Path)
     toy.add_argument("--seed", type=int, default=42)
+
+    verify = subparsers.add_parser("verify", help="compare runtime activations with a reference NPZ")
+    verify.add_argument("--model", required=True, type=Path)
+    verify.add_argument("--reference", required=True, type=Path)
+    verify.add_argument("--atol", type=float, default=2e-4)
+    verify.add_argument("--rtol", type=float, default=2e-4)
     return parser
 
 
@@ -85,6 +92,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         path = create_toy_model(args.output, args.seed)
         print(f"Toy model written to {path}")
         return 0
+    if args.command == "verify":
+        comparisons = compare_reference(args.model, args.reference, args.atol, args.rtol)
+        if not comparisons:
+            print("No matching activation tensors found in the reference", file=sys.stderr)
+            return 2
+        print(f"{'tensor':<18} {'max abs':>12} {'mean abs':>12}  status")
+        for result in comparisons:
+            status = "OK" if result.within_tolerance else "FAIL"
+            print(f"{result.name:<18} {result.max_absolute_error:>12.4e} "
+                  f"{result.mean_absolute_error:>12.4e}  {status}")
+        logits = next((item for item in comparisons if item.name == "logits"), None)
+        return 0 if logits is not None and all(item.within_tolerance for item in comparisons) else 1
 
     model_path = args.model_option or args.model_positional
     if model_path is None:
@@ -92,7 +111,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.prompt is None and not args.interactive:
         parser.error("run requires --prompt or --interactive")
     model = LlamaModel.from_directory(model_path)
-    tokenizer = ByteTokenizer.load(model_path / "tokenizer.json")
+    tokenizer = load_tokenizer(model_path / "tokenizer.json")
     if tokenizer.vocab_size != model.config.vocab_size:
         parser.error("tokenizer vocabulary size does not match the model")
 
@@ -112,4 +131,3 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

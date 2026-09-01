@@ -60,7 +60,12 @@ class ModelTests(unittest.TestCase):
             logits = model.forward(np.asarray(tokenizer.encode("ok")))
             self.assertEqual(logits.shape, (3, tokenizer.vocab_size))
 
+    def test_activation_trace_contains_each_layer(self):
+        model = tiny_model()
+        logits, activations = model.forward_with_activations(np.array([1, 2, 3]))
+        self.assertEqual(set(activations), {"embeddings", "layer.0", "layer.1", "norm", "logits"})
+        np.testing.assert_array_equal(activations["logits"], logits)
+
 
 if __name__ == "__main__":
     unittest.main()
-
