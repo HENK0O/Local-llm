@@ -242,65 +242,300 @@
       #conversation { scroll-behavior: auto; }
       .assistant.pending .bubble::after { animation: none; }
     }
+
+    /* Minimal local-runtime theme. */
+    :root {
+      --bg: #0d0d0d;
+      --panel: #141414;
+      --panel-strong: #171717;
+      --line: #292929;
+      --text: #ededed;
+      --muted: #858585;
+      --accent: #78d786;
+      --danger: #e88078;
+    }
+
+    body {
+      background: var(--bg);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .shell {
+      grid-template-columns: 1fr;
+      grid-template-rows: 58px minmax(0, 1fr) auto;
+      max-width: none;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      min-width: 0;
+      min-height: 0;
+      padding: 0 22px;
+      border-bottom: 1px solid var(--line);
+      background: var(--bg);
+    }
+
+    .brand {
+      display: block;
+      flex: 0 0 auto;
+      font: 600 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: -.02em;
+    }
+
+    .model-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      margin-right: auto;
+      padding-left: 20px;
+      border-left: 1px solid var(--line);
+      color: var(--muted);
+      font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      flex: 0 0 auto;
+      background: var(--accent);
+      box-shadow: none;
+    }
+
+    #statusText { color: #666; }
+    #modelName {
+      min-width: 0;
+      margin: 0;
+      overflow: hidden;
+      color: #bdbdbd;
+      font-size: inherit;
+      line-height: normal;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .clear {
+      flex: 0 0 auto;
+      margin: 0;
+      padding: 7px 10px;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .clear:hover { color: var(--text); border-color: #404040; }
+
+    #conversation {
+      padding: 38px 20px 28px;
+      scrollbar-color: #303030 transparent;
+    }
+
+    .welcome {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      place-content: initial;
+      min-height: 100%;
+      max-width: 720px;
+      text-align: left;
+    }
+
+    .prompt-symbol {
+      margin-bottom: 20px;
+      color: var(--accent);
+      font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .welcome h1 {
+      margin: 0 0 12px;
+      font-size: clamp(28px, 5vw, 44px);
+      font-weight: 500;
+      letter-spacing: -.045em;
+    }
+
+    .welcome p { margin: 0; max-width: 560px; line-height: 1.6; }
+
+    .suggestions {
+      display: grid;
+      justify-content: stretch;
+      gap: 8px;
+      max-width: 480px;
+      margin-top: 32px;
+    }
+
+    .suggestion {
+      padding: 11px 13px;
+      border-radius: 6px;
+      background: transparent;
+      color: #b7b7b7;
+      text-align: left;
+    }
+
+    .suggestion::before {
+      content: "> ";
+      color: #5f5f5f;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .suggestion:hover { border-color: #404040; background: var(--panel); color: var(--text); }
+
+    .message,
+    .message.user {
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      justify-items: stretch;
+      gap: 18px;
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 22px 0;
+      border-bottom: 1px solid #1d1d1d;
+    }
+
+    .message-role {
+      padding-top: 2px;
+      color: #626262;
+      font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: 0;
+      text-transform: lowercase;
+    }
+
+    .bubble,
+    .user .bubble {
+      max-width: none;
+      min-width: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--text);
+      line-height: 1.65;
+    }
+
+    .user .bubble { color: #c4c4c4; }
+    .assistant.pending .bubble::after { background: var(--accent); }
+
+    .composer-wrap {
+      padding: 10px 20px 18px;
+      border-top: 1px solid var(--line);
+      background: var(--bg);
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      max-width: 820px;
+      min-height: 30px;
+      margin: 0 auto 7px;
+      color: #666;
+      font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    .control-row { display: flex; align-items: center; gap: 8px; }
+    .control-label { display: inline; color: #666; white-space: nowrap; }
+    .control-label output { color: #aaa; }
+    input[type="range"] { width: 76px; accent-color: #777; }
+    #metrics { margin-left: auto; color: #949494; white-space: nowrap; }
+
+    .composer {
+      padding: 7px 7px 7px 14px;
+      gap: 8px;
+      border-color: #383838;
+      border-radius: 8px;
+      background: var(--panel-strong);
+      box-shadow: none;
+    }
+
+    .composer:focus-within { border-color: #515151; }
+
+    textarea {
+      min-height: 42px;
+      padding: 10px 0;
+    }
+
+    textarea::placeholder { color: #5f5f5f; }
+
+    .send {
+      width: 42px;
+      height: 42px;
+      border: 1px solid #383838;
+      border-radius: 6px;
+      background: #252525;
+      color: #d8d8d8;
+      font-size: 17px;
+      font-weight: 500;
+    }
+
+    .send:hover { filter: none; background: #303030; }
+    .hint { margin-top: 8px; color: #555; text-align: left; font-size: 10px; }
+
+    @media (max-width: 680px) {
+      body { overflow: hidden; }
+      .shell { height: 100dvh; grid-template-rows: 54px minmax(0, 1fr) auto; }
+      .topbar { min-height: 0; gap: 12px; padding: 0 13px; }
+      .topbar span { display: inline; }
+      .model-line { padding-left: 12px; }
+      #statusText, .model-line > span:nth-child(3) { display: none; }
+      .clear { padding: 5px 8px; font-size: 0; }
+      .clear::after { content: "+"; font-size: 18px; }
+      #conversation { padding: 24px 15px 18px; }
+      .welcome h1 { font-size: 32px; }
+      .message, .message.user { grid-template-columns: 52px minmax(0, 1fr); gap: 10px; padding: 18px 0; }
+      .composer-wrap { padding: 8px 10px 12px; }
+      .controls { gap: 10px; overflow: hidden; }
+      .control-row input { width: 58px; }
+      #metrics { overflow: hidden; text-overflow: ellipsis; }
+    }
   </style>
 </head>
 <body>
   <div class="shell">
-    <aside>
-      <div class="brand">
-        <div class="mark">L</div>
-        <div><strong>local-llm</strong><small>Moteur d’inférence local</small></div>
+    <header class="topbar">
+      <div class="brand">local-llm</div>
+      <div class="model-line" title="Modèle chargé">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">connexion</span>
+        <span>·</span>
+        <span id="modelName">chargement…</span>
       </div>
-
-      <div class="status"><span class="status-dot" id="statusDot"></span><span id="statusText">Connexion…</span></div>
-
-      <section class="model-card">
-        <p class="eyebrow">Modèle chargé</p>
-        <p id="modelName">Chargement…</p>
-      </section>
-
-      <section class="settings">
-        <p class="eyebrow">Génération</p>
-        <label class="control-row">
-          <span class="control-label"><span>Température</span><output id="temperatureValue">0.0</output></span>
-          <input id="temperature" type="range" min="0" max="1.5" step="0.1" value="0">
-        </label>
-        <label class="control-row">
-          <span class="control-label"><span>Tokens maximum</span><output id="tokensValue">120</output></span>
-          <input id="maxTokens" type="range" min="16" max="256" step="8" value="120">
-        </label>
-      </section>
-
       <button class="clear" id="clearButton" type="button">Nouvelle conversation</button>
-    </aside>
+    </header>
 
-    <main>
-      <header>
-        <h1>Discussion locale</h1>
-        <span>Les données restent sur cet ordinateur</span>
-      </header>
-
-      <section id="conversation" aria-live="polite">
-        <div class="welcome" id="welcome">
-          <span class="kicker">100 % LOCAL</span>
-          <h2>Parle à ton moteur.</h2>
-          <p>Chaque réponse traverse ton tokenizer, ton Transformer NumPy, son cache KV et le modèle GGUF chargé en mémoire.</p>
-          <div class="suggestions">
-            <button class="suggestion" type="button">Présente-toi en français.</button>
-            <button class="suggestion" type="button">Combien font 17 × 6 ?</button>
-            <button class="suggestion" type="button">Écris une phrase positive.</button>
-          </div>
+    <section id="conversation" aria-live="polite">
+      <div class="welcome" id="welcome">
+        <div class="prompt-symbol">$ local-llm run --local</div>
+        <h1>Que veux-tu demander ?</h1>
+        <p>Le modèle tourne sur cette machine. Aucun message ne quitte le serveur local.</p>
+        <div class="suggestions">
+          <button class="suggestion" type="button">Présente-toi en français.</button>
+          <button class="suggestion" type="button">Combien font 17 × 6 ?</button>
+          <button class="suggestion" type="button">Écris une phrase positive.</button>
         </div>
-      </section>
-
-      <div class="composer-wrap">
-        <form class="composer" id="composer">
-          <textarea id="prompt" rows="1" placeholder="Écris ton message…" aria-label="Message"></textarea>
-          <button class="send" id="sendButton" type="submit" aria-label="Envoyer">↑</button>
-        </form>
-        <div class="hint"><span id="metrics">Prêt</span> · Entrée pour envoyer · Maj + Entrée pour une nouvelle ligne</div>
       </div>
-    </main>
+    </section>
+
+    <div class="composer-wrap">
+      <div class="controls">
+        <label class="control-row">
+          <span class="control-label">temp <output id="temperatureValue">0.0</output></span>
+          <input id="temperature" type="range" min="0" max="1.5" step="0.1" value="0" aria-label="Température">
+        </label>
+        <label class="control-row">
+          <span class="control-label">max <output id="tokensValue">120</output></span>
+          <input id="maxTokens" type="range" min="16" max="256" step="8" value="120" aria-label="Tokens maximum">
+        </label>
+        <span id="metrics">prêt</span>
+      </div>
+      <form class="composer" id="composer">
+        <textarea id="prompt" rows="1" placeholder="Message…" aria-label="Message"></textarea>
+        <button class="send" id="sendButton" type="submit" aria-label="Envoyer">↑</button>
+      </form>
+      <div class="hint">Entrée pour envoyer · Maj + Entrée pour une nouvelle ligne</div>
+    </div>
   </div>
 
   <script>
@@ -331,6 +566,7 @@
         if (!response.ok) throw new Error('indisponible');
         const health = await response.json();
         document.querySelector('#modelName').textContent = health.model;
+        document.title = `${health.model} · local-llm`;
         setStatus(true, 'Moteur prêt');
       } catch (_) {
         setStatus(false, 'Serveur indisponible');
@@ -472,7 +708,7 @@
       conversation.replaceChildren();
       const reset = document.createElement('div');
       reset.className = 'welcome';
-      reset.innerHTML = '<span class="kicker">NOUVELLE CONVERSATION</span><h2>On repart de zéro.</h2><p>Pose une question au modèle chargé dans ton moteur local.</p>';
+      reset.innerHTML = '<div class="prompt-symbol">$ clear --history</div><h1>Nouvelle conversation.</h1><p>Pose une question au modèle chargé sur cette machine.</p>';
       conversation.append(reset);
       metrics.textContent = 'Prêt';
     });
