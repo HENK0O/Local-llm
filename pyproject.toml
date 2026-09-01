@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-llm"
+version = "0.1.0"
+description = "A minimal NumPy inference runtime for Llama-like language models"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.24"]
+
+[project.scripts]
+local-llm = "local_llm.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["local_llm*"]
+

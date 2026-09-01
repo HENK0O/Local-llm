@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+build/
+dist/
+*.egg-info/
+.DS_Store
+models/
+*.gguf
+*.safetensors
+pytorch_model*.bin
