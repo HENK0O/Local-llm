@@ -12,7 +12,7 @@ Le runtime comprend :
 - lecteur SafeTensors natif F32/F16/BF16, mono-fichier ou shardé ;
 - lecteur GGUF v3 natif F32/F16/BF16/Q8_0 avec métadonnées, tokenizer et `mmap` ;
 - génération gloutonne, température, top-k, top-p et graine reproductible ;
-- streaming, mode interactif, débit prefill/décodage et taille du cache KV ;
+- streaming, mode chat ChatML avec historique, débit prefill/décodage et taille du cache KV ;
 - tests comparant les logits et la génération avec une voie lente sans cache.
 
 ## Démarrage rapide
@@ -39,6 +39,34 @@ local-llm run /tmp/local-llm-toy --prompt "Bonjour"
 ```
 
 ## Exécuter un modèle préentraîné réel
+
+### Poser des questions à un modèle Instruct
+
+Pour obtenir des réponses d'assistant, il faut un checkpoint **Instruct**. Le
+modèle `SmolLM2-135M` utilisé pour vérifier les calculs est un modèle **Base** :
+il complète du texte, mais n'a pas été entraîné à répondre à une conversation.
+
+Avec `SmolLM2-360M-Instruct`, le runtime applique le template ChatML attendu par
+le modèle :
+
+```bash
+python -m local_llm run models/SmolLM2-360M-Instruct \
+  --chat \
+  --prompt "Quelle est la capitale de la France ?" \
+  --max-new-tokens 80
+```
+
+Une conversation interactive conserve l'historique des messages :
+
+```bash
+python -m local_llm run models/SmolLM2-360M-Instruct.official.F16.gguf \
+  --chat --interactive --temperature 0.7 --top-p 0.9
+```
+
+Le message système est personnalisable avec
+`--system "Réponds brièvement en français."`.
+
+### Modèle Base de validation
 
 Le checkpoint de validation est
 [HuggingFaceTB/SmolLM2-135M](https://huggingface.co/HuggingFaceTB/SmolLM2-135M),
@@ -77,6 +105,30 @@ python -m local_llm run models/SmolLM2-135M.official.Q8_0.gguf \
 ```
 
 ## Formats de modèles
+
+### Qu'est-ce que GGUF ?
+
+GGUF est un **format de fichier pour distribuer et charger des modèles**. Ce
+n'est ni un LLM particulier, ni un moteur d'inférence, ni une méthode
+d'entraînement. Là où un checkpoint Hugging Face est généralement un dossier
+contenant plusieurs fichiers, un GGUF regroupe dans un seul fichier :
+
+- les métadonnées de l'architecture (dimensions, couches, RoPE, etc.) ;
+- le vocabulaire et les informations du tokenizer ;
+- tous les tenseurs de poids, avec leur type (`F32`, `F16`, `Q8_0`, etc.) ;
+- éventuellement le template de conversation du modèle.
+
+Cette disposition permet de retrouver rapidement chaque tenseur et de lire les
+poids avec un *memory mapping* (`mmap`) sans copier immédiatement tout le fichier
+en mémoire. Un fichier GGUF n'est pas forcément quantifié : le même modèle peut
+exister en F16, Q8 ou Q4. La quantification réduit sa taille et sa consommation
+mémoire, au prix d'une approximation numérique et avec une vitesse qui dépend
+de la qualité des kernels utilisés.
+
+Dans ce projet, notre propre lecteur analyse l'en-tête GGUF, reconstruit la
+configuration et le tokenizer, associe les noms `blk.N.*` aux couches Llama,
+puis fournit les tenseurs au passage avant NumPy. Aucune bibliothèque
+d'inférence externe n'exécute le modèle.
 
 Un modèle est un dossier contenant :
 
@@ -142,6 +194,9 @@ LOCAL_LLM_TEST_MODEL=models/SmolLM2-135M \
 
 LOCAL_LLM_TEST_GGUF=models/SmolLM2-135M.official.F16.gguf \
   python -m unittest tests.test_real_gguf -v
+
+LOCAL_LLM_TEST_INSTRUCT=models/SmolLM2-360M-Instruct.official.F16.gguf \
+  python -m unittest tests.test_real_instruct -v
 ```
 
 Les tests vérifient chaque primitive, la sérialisation, la mémoire du cache, la
@@ -162,6 +217,9 @@ python -m local_llm verify \
   --model models/SmolLM2-135M \
   --reference /tmp/smollm2-reference.npz
 ```
+
+Ajoute `--chat` à l'export pour comparer une invite mise en forme comme une
+conversation Instruct.
 
 Transformers n’est importé que par le script d’export. `local_llm run` et
 `local_llm verify` effectuent leurs calculs avec le runtime NumPy du projet.

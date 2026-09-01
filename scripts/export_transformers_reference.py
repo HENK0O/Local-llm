@@ -15,13 +15,25 @@ def main() -> int:
     parser.add_argument("--prompt", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--max-new-tokens", type=int, default=16)
+    parser.add_argument("--chat", action="store_true", help="apply the model chat template")
+    parser.add_argument("--system", help="optional system prompt used with --chat")
     args = parser.parse_args()
 
     tokenizer = AutoTokenizer.from_pretrained(args.model, local_files_only=True)
     model = AutoModelForCausalLM.from_pretrained(
         args.model, local_files_only=True, dtype=torch.float32
     ).eval()
-    encoded = tokenizer(args.prompt, add_special_tokens=False, return_tensors="pt")
+    if args.chat:
+        messages = []
+        if args.system is not None:
+            messages.append({"role": "system", "content": args.system})
+        messages.append({"role": "user", "content": args.prompt})
+        prompt = tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+    else:
+        prompt = args.prompt
+    encoded = tokenizer(prompt, add_special_tokens=False, return_tensors="pt")
     input_ids = encoded.input_ids
     captured = {"input_ids": input_ids[0].numpy()}
     hooks = []

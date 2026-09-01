@@ -5,8 +5,9 @@ import codecs
 import statistics
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import List, Optional, Sequence
 
+from .chat import ChatMessage, format_chatml, require_chatml
 from .generation import GenerationStats, generate, generate_tokens
 from .gguf import GGUFReader
 from .loading import load_runtime
@@ -44,13 +45,17 @@ def _run_once(
     top_k: Optional[int],
     top_p: Optional[float],
     seed: Optional[int],
-) -> None:
-    prompt_tokens = tokenizer.encode(prompt, add_bos=True)
+) -> str:
+    # ByteTokenizer adds BOS by default; pretrained BPE tokenizers generally do
+    # not. In chat mode the first ChatML token is itself the correct beginning.
+    prompt_tokens = tokenizer.encode(prompt)
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     stats = None
+    generated: List[int] = []
     for token, maybe_stats in generate_tokens(
         model, prompt_tokens, max_new_tokens, temperature, top_k, top_p, seed
     ):
+        generated.append(token)
         token_data = tokenizer.token_bytes(token)
         if token_data:
             text = decoder.decode(token_data, final=False)
@@ -59,6 +64,7 @@ def _run_once(
     print(decoder.decode(b"", final=True), end="", flush=True)
     if stats is not None:
         _print_stats(stats)
+    return tokenizer.decode(generated)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -70,6 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--model", dest="model_option", type=Path, help="model directory")
     run.add_argument("--prompt", help="input prompt; omit with --interactive")
     run.add_argument("--interactive", action="store_true", help="read prompts until EOF or /quit")
+    run.add_argument("--chat", action="store_true", help="use the SmolLM2-Instruct ChatML template")
+    run.add_argument("--system", help="system prompt (implies --chat)")
     run.add_argument("--max-new-tokens", type=int, default=64)
     run.add_argument("--temperature", type=float, default=0.0)
     run.add_argument("--top-k", type=int)
@@ -158,8 +166,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if tokenizer.vocab_size != model.config.vocab_size:
         parser.error("tokenizer vocabulary size does not match the model")
 
+    chat_mode = args.chat or args.system is not None
+    if chat_mode:
+        try:
+            require_chatml(tokenizer)
+        except ValueError as exc:
+            parser.error(str(exc))
+
+    history: List[ChatMessage] = []
+
+    def answer(prompt: str) -> None:
+        if chat_mode:
+            history.append(ChatMessage("user", prompt))
+            model_prompt = format_chatml(history, system_prompt=args.system)
+            response = _run_once(model, tokenizer, model_prompt, args.max_new_tokens,
+                                 args.temperature, args.top_k, args.top_p, args.seed)
+            history.append(ChatMessage("assistant", response))
+        else:
+            _run_once(model, tokenizer, prompt, args.max_new_tokens, args.temperature,
+                      args.top_k, args.top_p, args.seed)
+
     if args.prompt is not None:
-        _run_once(model, tokenizer, args.prompt, args.max_new_tokens, args.temperature, args.top_k, args.top_p, args.seed)
+        answer(args.prompt)
     if args.interactive:
         while True:
             try:
@@ -168,7 +196,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 break
             if prompt.strip() in {"/quit", "/exit"}:
                 break
-            _run_once(model, tokenizer, prompt, args.max_new_tokens, args.temperature, args.top_k, args.top_p, args.seed)
+            answer(prompt)
     return 0
 
 
