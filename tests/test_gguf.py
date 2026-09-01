@@ -6,7 +6,10 @@ from pathlib import Path
 import numpy as np
 
 from local_llm.config import ModelConfig
-from local_llm.gguf import ARRAY, BOOL, FLOAT32, GGUFError, GGUFReader, Q8Matrix, STRING, UINT32
+from local_llm.gguf import (
+    ARRAY, BOOL, FLOAT32, GGUFError, GGUFReader, Q8Matrix, STRING, UINT32,
+    q8_backend_name,
+)
 from local_llm.loading import load_runtime
 from local_llm.model import LlamaModel
 from local_llm.toy import make_toy_weights
@@ -149,6 +152,21 @@ class GGUFTests(unittest.TestCase):
             actual = matrix.matmul(x)
             np.testing.assert_allclose(actual, expected, rtol=0.08, atol=0.12)
             self.assertEqual(matrix[2].shape, (64,))
+
+    @unittest.skipUnless(q8_backend_name() == "native-cpp", "native Q8 extension is not built")
+    def test_native_q8_matches_numpy_kernel(self):
+        rng = np.random.default_rng(17)
+        storage = np.empty((513, 30), dtype=Q8Matrix._dtype)
+        storage["scale"] = rng.uniform(0.001, 0.05, size=(513, 30)).astype(np.float16)
+        storage["values"] = rng.integers(-127, 128, size=(513, 30, 32), dtype=np.int8)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "native-q8.bin"
+            path.write_bytes(storage.tobytes())
+            matrix = Q8Matrix(path, 0, (513, 960))
+            inputs = rng.normal(size=(4, 960)).astype(np.float32)
+            np.testing.assert_allclose(
+                matrix.matmul(inputs), matrix.matmul_numpy(inputs), rtol=2e-5, atol=1e-4
+            )
 
 
 if __name__ == "__main__":

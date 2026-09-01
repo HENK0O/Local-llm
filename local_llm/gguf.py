@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import struct
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Dict, List, Mapping, Optional, Tuple
@@ -11,6 +12,11 @@ import numpy as np
 
 from .config import ModelConfig
 from .tokenizer import BPETokenizer
+
+try:
+    from ._native import q8_matmul as _native_q8_matmul
+except ImportError:
+    _native_q8_matmul = None
 
 
 GGUF_MAGIC = b"GGUF"
@@ -74,7 +80,7 @@ class Q8Matrix:
         result = values * blocks["scale"].astype(np.float32)[..., None]
         return result.reshape((*result.shape[:-2], self.shape[-1]))
 
-    def matmul(self, x: np.ndarray, rows_per_chunk: int = 256) -> np.ndarray:
+    def matmul_numpy(self, x: np.ndarray, rows_per_chunk: int = 256) -> np.ndarray:
         values = np.asarray(x, dtype=np.float32)
         if values.shape[-1] != self.shape[-1]:
             raise ValueError(f"Q8 matmul input size {values.shape[-1]} != {self.shape[-1]}")
@@ -89,6 +95,20 @@ class Q8Matrix:
                 "tbi,obi,ob->to", flat, quantized, scales, optimize=True
             )
         return output.reshape((*values.shape[:-1], self.shape[0]))
+
+    def matmul(self, x: np.ndarray, rows_per_chunk: int = 256) -> np.ndarray:
+        values = np.asarray(x, dtype=np.float32)
+        if values.shape[-1] != self.shape[-1]:
+            raise ValueError(f"Q8 matmul input size {values.shape[-1]} != {self.shape[-1]}")
+        if _native_q8_matmul is not None and os.environ.get("LOCAL_LLM_DISABLE_NATIVE") != "1":
+            return _native_q8_matmul(self.blocks, np.ascontiguousarray(values))
+        return self.matmul_numpy(values, rows_per_chunk)
+
+
+def q8_backend_name() -> str:
+    if _native_q8_matmul is not None and os.environ.get("LOCAL_LLM_DISABLE_NATIVE") != "1":
+        return "native-cpp"
+    return "numpy"
 
 
 def _read_exact(handle: BinaryIO, size: int) -> bytes:

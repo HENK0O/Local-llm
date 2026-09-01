@@ -10,7 +10,7 @@ from typing import List, Optional, Sequence
 from .chat import ChatMessage, format_chatml, require_chatml
 from .benchmark import compare_report, load_report, run_benchmark, save_report
 from .generation import GenerationStats, generate_tokens
-from .gguf import GGUFReader
+from .gguf import GGUFReader, q8_backend_name
 from .loading import load_runtime
 from .model import LlamaModel
 from .tokenizer import Tokenizer
@@ -141,6 +141,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for info in reader.tensors.values():
             counts[info.type_name] = counts.get(info.type_name, 0) + 1
         print("tensor types: " + ", ".join(f"{name}={count}" for name, count in sorted(counts.items())))
+        if counts.get("Q8_0"):
+            print(f"Q8 backend: {q8_backend_name()}")
         if args.tensors:
             for info in reader.tensors.values():
                 print(f"{info.name:<42} {str(info.shape):<20} {info.type_name}")
@@ -163,6 +165,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         decode = report.decode_tokens_per_second
         print(f"model: {report.model_sha256[:12]} | {report.model_format} | "
               f"{_format_bytes(report.model_bytes)}")
+        print(f"backend: {report.backend}")
         print(f"runs: {report.runs} | prompt: {len(report.prompt_token_ids)} tokens | "
               f"generated: {len(report.generated_token_ids)}/{report.requested_tokens} tokens")
         print(f"prefill median: {prefill.median:.1f} tok/s "

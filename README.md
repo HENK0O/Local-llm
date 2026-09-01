@@ -11,6 +11,7 @@ Le runtime comprend :
 - tokenizer jouet UTF-8 et tokenizer GPT-2 byte-level BPE réel ;
 - lecteur SafeTensors natif F32/F16/BF16, mono-fichier ou shardé ;
 - lecteur GGUF v3 natif F32/F16/BF16/Q8_0 avec métadonnées, tokenizer et `mmap` ;
+- kernel Q8_0 C++ optionnel, vectorisé et multithread avec fallback NumPy ;
 - génération gloutonne, température, top-k, top-p et graine reproductible ;
 - streaming, mode chat ChatML avec historique, débit prefill/décodage et taille du cache KV ;
 - tests comparant les logits et la génération avec une voie lente sans cache.
@@ -37,6 +38,11 @@ python -m pip install --upgrade pip
 pip install -e .
 local-llm run /tmp/local-llm-toy --prompt "Bonjour"
 ```
+
+Sur macOS, l'installation tente également de compiler le kernel Q8 C++ avec
+Clang. Si aucun compilateur n'est disponible, le runtime reste utilisable avec
+le fallback NumPy. `python setup.py build_ext --inplace` permet de reconstruire
+explicitement l'extension pendant le développement.
 
 ## Exécuter un modèle préentraîné réel
 
@@ -103,6 +109,16 @@ python -m local_llm run models/SmolLM2-135M.official.Q8_0.gguf \
   --prompt "Bonjour, comment ça va ?" \
   --max-new-tokens 32
 ```
+
+La commande `inspect` indique le backend réellement utilisé :
+
+```text
+tensor types: F32=65, Q8_0=225
+Q8 backend: native-cpp
+```
+
+La variable `LOCAL_LLM_DISABLE_NATIVE=1` force le chemin NumPy pour établir une
+baseline ou diagnostiquer le kernel C++.
 
 ## Formats de modèles
 
@@ -260,25 +276,29 @@ d’environ `1.23e-5` en SafeTensors et `9.19e-6` avec le GGUF F16 officiel,
 en calcul CPU F32. Les 16 tokens gloutons de référence sont identiques dans les
 deux formats.
 
-Mesures indicatives sur la machine de développement pour SmolLM2‑135M :
+Mesures indicatives sur la machine de développement :
 
-| Format | Taille | Decode | Écart moyen des logits | Tokens gloutons |
+| Modèle et backend | Taille | Decode | Écart moyen des logits | Tokens gloutons |
 |---|---:|---:|---:|---|
-| GGUF F16, calcul F32 | 269 Mo | ~102 tok/s | `9.19e-6` | identiques |
-| GGUF Q8_0, kernel NumPy | 143 Mo | ~12 tok/s | `2.40e-1` | identiques |
+| SmolLM2-135M, F16/BLAS | 269 Mo | ~102 tok/s | `9.19e-6` | identiques |
+| SmolLM2-360M-Instruct, F16/BLAS | 692 Mio | ~46 tok/s | `1.06e-5` | identiques |
+| SmolLM2-360M-Instruct, Q8_0/C++ | 369 Mio | ~28 tok/s | `1.12e-1` | identiques |
+| SmolLM2-360M-Instruct, Q8_0/NumPy | 369 Mio | ~5 tok/s | `1.12e-1` | identiques |
 
-Le kernel Q8_0 actuel privilégie la lisibilité et la correction. Sa taille est
-réduite, mais il est plus lent que BLAS F32 : l’accélération Q8 nécessite le
-prochain kernel natif C++/Accelerate.
+Sur le même modèle Q8_0, le kernel C++ accélère ici le décodage d'environ `5,7×`
+par rapport au kernel NumPy. F16 reste plus rapide grâce à BLAS, tandis que Q8
+réduit presque de moitié la taille des poids. Le kernel natif libère le GIL,
+répartit les lignes avec Grand Central Dispatch sur Apple Silicon et laisse le
+compilateur vectoriser la boucle interne.
 
 ## Limites et feuille de route
 
 Le chargement direct Llama SafeTensors et GGUF F32/F16/BF16/Q8_0 est opérationnel.
 La suite est :
 
-1. porter le kernel Q8_0 en C++/Accelerate et le benchmarker ;
-2. ajouter une quantification 4 bits simple après stabilisation de Q8 ;
-3. mesurer perplexité et consommation mémoire résidente par format ;
+1. ajouter une quantification 4 bits simple après stabilisation de Q8 ;
+2. mesurer perplexité et consommation mémoire résidente par format ;
+3. affiner la vectorisation ARM/NEON et le découpage multithread ;
 4. ajouter un tokenizer SentencePiece pour les modèles qui n’utilisent pas BPE ;
 5. explorer Metal seulement après les kernels CPU natifs.
 

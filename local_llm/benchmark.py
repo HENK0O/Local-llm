@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 import numpy as np
 
 from .generation import generate
+from .gguf import Q8Matrix, q8_backend_name
 from .loading import load_runtime
 
 
@@ -27,6 +28,7 @@ class BenchmarkReport:
     model_sha256: str
     model_bytes: int
     model_format: str
+    backend: str
     architecture: Dict[str, int]
     prompt: str
     prompt_token_ids: List[int]
@@ -76,6 +78,7 @@ def run_benchmark(path: Path, prompt: str, tokens: int, runs: int) -> BenchmarkR
         raise ValueError("benchmark requires runs > 0 and tokens > 1")
     fingerprint, model_bytes = model_fingerprint(path)
     model, tokenizer = load_runtime(path)
+    uses_q8 = any(isinstance(weight, Q8Matrix) for weight in model.weights.values())
     prompt_tokens = tokenizer.encode(prompt)
     results = [generate(model, prompt_tokens, tokens) for _ in range(runs)]
     generated = results[0].token_ids
@@ -88,6 +91,7 @@ def run_benchmark(path: Path, prompt: str, tokens: int, runs: int) -> BenchmarkR
         model_sha256=fingerprint,
         model_bytes=model_bytes,
         model_format="gguf" if Path(path).is_file() else "directory",
+        backend=f"q8-{q8_backend_name()}" if uses_q8 else "numpy-blas",
         architecture={
             "vocab_size": config.vocab_size,
             "hidden_size": config.hidden_size,
