@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import argparse
 import codecs
-import statistics
+import json
 import sys
 from pathlib import Path
 from typing import List, Optional, Sequence
 
 from .chat import ChatMessage, format_chatml, require_chatml
-from .generation import GenerationStats, generate, generate_tokens
+from .benchmark import compare_report, load_report, run_benchmark, save_report
+from .generation import GenerationStats, generate_tokens
 from .gguf import GGUFReader
 from .loading import load_runtime
 from .model import LlamaModel
@@ -103,6 +104,9 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--prompt", default="Bonjour, comment ça va ?")
     benchmark.add_argument("--tokens", type=int, default=32)
     benchmark.add_argument("--runs", type=int, default=3)
+    benchmark.add_argument("--output", type=Path, help="save a reproducible JSON report")
+    benchmark.add_argument("--compare", type=Path, help="compare with a saved JSON baseline")
+    benchmark.add_argument("--json", action="store_true", help="print the report as JSON")
     return parser
 
 
@@ -142,19 +146,37 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 print(f"{info.name:<42} {str(info.shape):<20} {info.type_name}")
         return 0
     if args.command == "benchmark":
-        if args.runs <= 0 or args.tokens <= 1:
-            parser.error("benchmark requires --runs > 0 and --tokens > 1")
-        model, tokenizer = load_runtime(args.model)
-        prompt_tokens = tokenizer.encode(args.prompt)
-        results = [generate(model, prompt_tokens, args.tokens).stats for _ in range(args.runs)]
-        prefill = [item.prefill_tokens_per_second for item in results]
-        decode = [item.decode_tokens_per_second for item in results]
-        print(f"runs: {args.runs} | prompt: {len(prompt_tokens)} tokens | decode: {args.tokens} tokens")
-        print(f"prefill median: {statistics.median(prefill):.1f} tok/s "
-              f"(min {min(prefill):.1f}, max {max(prefill):.1f})")
-        print(f"decode median:  {statistics.median(decode):.1f} tok/s "
-              f"(min {min(decode):.1f}, max {max(decode):.1f})")
-        print(f"KV cache: {_format_bytes(results[0].cache_bytes)}")
+        try:
+            report = run_benchmark(args.model, args.prompt, args.tokens, args.runs)
+            comparison = compare_report(report, load_report(args.compare)) if args.compare else None
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        if args.output:
+            save_report(report, args.output)
+        if args.json:
+            output = report.to_dict()
+            if comparison is not None:
+                output["comparison"] = comparison
+            print(json.dumps(output, indent=2, ensure_ascii=False))
+            return 0
+        prefill = report.prefill_tokens_per_second
+        decode = report.decode_tokens_per_second
+        print(f"model: {report.model_sha256[:12]} | {report.model_format} | "
+              f"{_format_bytes(report.model_bytes)}")
+        print(f"runs: {report.runs} | prompt: {len(report.prompt_token_ids)} tokens | "
+              f"generated: {len(report.generated_token_ids)}/{report.requested_tokens} tokens")
+        print(f"prefill median: {prefill.median:.1f} tok/s "
+              f"(min {prefill.minimum:.1f}, max {prefill.maximum:.1f})")
+        print(f"decode median:  {decode.median:.1f} tok/s "
+              f"(min {decode.minimum:.1f}, max {decode.maximum:.1f})")
+        print(f"KV cache: {_format_bytes(report.kv_cache_bytes)}")
+        if args.output:
+            print(f"report: {args.output}")
+        if comparison is not None:
+            print("comparison: "
+                  f"prefill {comparison['prefill_percent']:+.1f}% | "
+                  f"decode {comparison['decode_percent']:+.1f}% | "
+                  f"KV cache {comparison['kv_cache_percent']:+.1f}%")
         return 0
 
     model_path = args.model_option or args.model_positional

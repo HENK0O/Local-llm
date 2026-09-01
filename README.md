@@ -179,6 +179,36 @@ détails SentencePiece/BPE. Un modèle préentraîné doit avoir été entraîn�
 vocabulaire. Les checkpoints réels peuvent utiliser un `tokenizer.json` BPE
 byte-level de style GPT-2, avec tokens spéciaux et pré-tokenisation Unicode.
 
+## Mesurer les progrès sans changer les règles
+
+La qualité du **modèle** et les performances du **moteur** sont mesurées
+séparément. Passer de 135M à 360M peut améliorer les réponses, mais ne constitue
+pas une optimisation du runtime. Pour mesurer une optimisation, la commande de
+benchmark enregistre l'empreinte SHA-256 exacte des poids, les tokens du prompt,
+les tokens générés, l'environnement, le débit et le cache KV :
+
+```bash
+python -m local_llm benchmark \
+  models/SmolLM2-360M-Instruct.official.F16.gguf \
+  --prompt "Bonjour" --tokens 32 --runs 5 \
+  --output /tmp/local-llm-baseline.json
+```
+
+Après une modification du moteur, la comparaison se lance avec exactement les
+mêmes paramètres :
+
+```bash
+python -m local_llm benchmark \
+  models/SmolLM2-360M-Instruct.official.F16.gguf \
+  --prompt "Bonjour" --tokens 32 --runs 5 \
+  --compare /tmp/local-llm-baseline.json
+```
+
+La comparaison est refusée si le modèle, le prompt ou les tokens gloutons ont
+changé. On distingue ainsi trois axes : parité des logits pour la correction,
+tokens par seconde pour le moteur, et jeux de questions séparés pour la qualité
+du modèle.
+
 ## Vérification
 
 ```bash
