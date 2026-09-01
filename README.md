@@ -10,6 +10,7 @@ Le runtime comprend :
 - prefill et décodage token par token avec cache KV préalloué ;
 - tokenizer jouet UTF-8 et tokenizer GPT-2 byte-level BPE réel ;
 - lecteur SafeTensors natif F32/F16/BF16, mono-fichier ou shardé ;
+- lecteur GGUF v3 natif F32/F16/BF16/Q8_0 avec métadonnées, tokenizer et `mmap` ;
 - génération gloutonne, température, top-k, top-p et graine reproductible ;
 - streaming, mode interactif, débit prefill/décodage et taille du cache KV ;
 - tests comparant les logits et la génération avec une voie lente sans cache.
@@ -51,6 +52,30 @@ python -m local_llm run models/SmolLM2-135M \
   --max-new-tokens 32
 ```
 
+Un GGUF Llama non quantifié se lance directement, sans dossier annexe :
+
+```bash
+python -m local_llm run models/SmolLM2-135M.official.F16.gguf \
+  --prompt "Bonjour, comment ça va ?" \
+  --max-new-tokens 32
+```
+
+Pour inspecter son contenu ou mesurer les performances :
+
+```bash
+python -m local_llm inspect models/SmolLM2-135M.official.F16.gguf
+python -m local_llm inspect models/SmolLM2-135M.official.F16.gguf --tensors
+python -m local_llm benchmark models/SmolLM2-135M.official.F16.gguf --tokens 32 --runs 3
+```
+
+Q8_0 est également exécutable sans déquantifier le modèle complet :
+
+```bash
+python -m local_llm run models/SmolLM2-135M.official.Q8_0.gguf \
+  --prompt "Bonjour, comment ça va ?" \
+  --max-new-tokens 32
+```
+
 ## Formats de modèles
 
 Un modèle est un dossier contenant :
@@ -71,6 +96,15 @@ model/
 ├── tokenizer_config.json
 └── model.safetensors            # ou model.safetensors.index.json + shards
 ```
+
+Le troisième format accepté est un fichier unique `model.gguf`. Le runtime lit
+lui-même les métadonnées, le vocabulaire BPE et les tenseurs Llama
+`token_embd`, `blk.N.*`, `output_norm` et `output`. Les vues F32/F16 du lecteur
+sont memory-mappées. Pour les calculs CPU, les matrices F16 sont promues en F32
+au chargement : sur Apple Silicon, cela évite les kernels NumPy F16 très lents.
+Les matrices Q8_0 restent compressées en blocs de 32 valeurs avec une échelle
+FP16 par bloc ; embeddings et produits matrice-vecteur sont calculés directement
+depuis ces blocs.
 
 `config.json` reprend les champs Llama usuels (`hidden_size`,
 `intermediate_size`, `num_hidden_layers`, `num_attention_heads`,
@@ -105,6 +139,9 @@ se lance avec :
 ```bash
 LOCAL_LLM_TEST_MODEL=models/SmolLM2-135M \
   python -m unittest tests.test_real_model -v
+
+LOCAL_LLM_TEST_GGUF=models/SmolLM2-135M.official.F16.gguf \
+  python -m unittest tests.test_real_gguf -v
 ```
 
 Les tests vérifient chaque primitive, la sérialisation, la mémoire du cache, la
@@ -131,17 +168,31 @@ Transformers n’est importé que par le script d’export. `local_llm run` et
 
 Sur le checkpoint de validation, le tokenizer produit exactement les mêmes IDs,
 les tokens gloutons sont identiques et l’écart moyen mesuré sur les logits est
-d’environ `1.23e-5` en calcul F32.
+d’environ `1.23e-5` en SafeTensors et `9.19e-6` avec le GGUF F16 officiel,
+en calcul CPU F32. Les 16 tokens gloutons de référence sont identiques dans les
+deux formats.
+
+Mesures indicatives sur la machine de développement pour SmolLM2‑135M :
+
+| Format | Taille | Decode | Écart moyen des logits | Tokens gloutons |
+|---|---:|---:|---:|---|
+| GGUF F16, calcul F32 | 269 Mo | ~102 tok/s | `9.19e-6` | identiques |
+| GGUF Q8_0, kernel NumPy | 143 Mo | ~12 tok/s | `2.40e-1` | identiques |
+
+Le kernel Q8_0 actuel privilégie la lisibilité et la correction. Sa taille est
+réduite, mais il est plus lent que BLAS F32 : l’accélération Q8 nécessite le
+prochain kernel natif C++/Accelerate.
 
 ## Limites et feuille de route
 
-Le chargement direct d’un modèle Hugging Face Llama/SafeTensors est opérationnel.
+Le chargement direct Llama SafeTensors et GGUF F32/F16/BF16/Q8_0 est opérationnel.
 La suite est :
 
-1. lire GGUF F32/F16 via `mmap`, puis mapper ses noms de tenseurs ;
-2. ajouter Q8 et ses kernels matrice-vecteur, avec benchmarks et seuils d’erreur ;
-3. ajouter un tokenizer SentencePiece pour les modèles qui n’utilisent pas BPE ;
-4. porter les kernels stables en C++/Accelerate, puis seulement explorer Metal.
+1. porter le kernel Q8_0 en C++/Accelerate et le benchmarker ;
+2. ajouter une quantification 4 bits simple après stabilisation de Q8 ;
+3. mesurer perplexité et consommation mémoire résidente par format ;
+4. ajouter un tokenizer SentencePiece pour les modèles qui n’utilisent pas BPE ;
+5. explorer Metal seulement après les kernels CPU natifs.
 
 Le modèle jouet permet de développer chacune de ces étapes sans confondre les
 erreurs de format, de tokenizer, de quantification et de calcul.

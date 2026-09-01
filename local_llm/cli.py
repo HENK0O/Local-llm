@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import argparse
 import codecs
+import statistics
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
-from .generation import GenerationStats, generate_tokens
+from .generation import GenerationStats, generate, generate_tokens
+from .gguf import GGUFReader
+from .loading import load_runtime
 from .model import LlamaModel
-from .tokenizer import Tokenizer, load_tokenizer
+from .tokenizer import Tokenizer
 from .toy import create_toy_model
 from .verification import compare_reference
 
@@ -82,6 +85,16 @@ def build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--reference", required=True, type=Path)
     verify.add_argument("--atol", type=float, default=2e-4)
     verify.add_argument("--rtol", type=float, default=2e-4)
+
+    inspect = subparsers.add_parser("inspect", help="display GGUF metadata and tensor inventory")
+    inspect.add_argument("model", type=Path)
+    inspect.add_argument("--tensors", action="store_true", help="list every tensor")
+
+    benchmark = subparsers.add_parser("benchmark", help="benchmark prefill and cached decoding")
+    benchmark.add_argument("model", type=Path)
+    benchmark.add_argument("--prompt", default="Bonjour, comment ça va ?")
+    benchmark.add_argument("--tokens", type=int, default=32)
+    benchmark.add_argument("--runs", type=int, default=3)
     return parser
 
 
@@ -104,14 +117,44 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   f"{result.mean_absolute_error:>12.4e}  {status}")
         logits = next((item for item in comparisons if item.name == "logits"), None)
         return 0 if logits is not None and all(item.within_tolerance for item in comparisons) else 1
+    if args.command == "inspect":
+        reader = GGUFReader(args.model)
+        print(f"GGUF v{reader.version} | {len(reader.metadata)} metadata | "
+              f"{len(reader.tensors)} tensors | alignment {reader.alignment}")
+        for key in ("general.name", "general.architecture", "general.file_type",
+                    "llama.block_count", "llama.context_length", "llama.embedding_length"):
+            if key in reader.metadata:
+                print(f"{key}: {reader.metadata[key]}")
+        counts = {}
+        for info in reader.tensors.values():
+            counts[info.type_name] = counts.get(info.type_name, 0) + 1
+        print("tensor types: " + ", ".join(f"{name}={count}" for name, count in sorted(counts.items())))
+        if args.tensors:
+            for info in reader.tensors.values():
+                print(f"{info.name:<42} {str(info.shape):<20} {info.type_name}")
+        return 0
+    if args.command == "benchmark":
+        if args.runs <= 0 or args.tokens <= 1:
+            parser.error("benchmark requires --runs > 0 and --tokens > 1")
+        model, tokenizer = load_runtime(args.model)
+        prompt_tokens = tokenizer.encode(args.prompt)
+        results = [generate(model, prompt_tokens, args.tokens).stats for _ in range(args.runs)]
+        prefill = [item.prefill_tokens_per_second for item in results]
+        decode = [item.decode_tokens_per_second for item in results]
+        print(f"runs: {args.runs} | prompt: {len(prompt_tokens)} tokens | decode: {args.tokens} tokens")
+        print(f"prefill median: {statistics.median(prefill):.1f} tok/s "
+              f"(min {min(prefill):.1f}, max {max(prefill):.1f})")
+        print(f"decode median:  {statistics.median(decode):.1f} tok/s "
+              f"(min {min(decode):.1f}, max {max(decode):.1f})")
+        print(f"KV cache: {_format_bytes(results[0].cache_bytes)}")
+        return 0
 
     model_path = args.model_option or args.model_positional
     if model_path is None:
         parser.error("run requires a model path (positional or --model)")
     if args.prompt is None and not args.interactive:
         parser.error("run requires --prompt or --interactive")
-    model = LlamaModel.from_directory(model_path)
-    tokenizer = load_tokenizer(model_path / "tokenizer.json")
+    model, tokenizer = load_runtime(model_path)
     if tokenizer.vocab_size != model.config.vocab_size:
         parser.error("tokenizer vocabulary size does not match the model")
 

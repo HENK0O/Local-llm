@@ -20,7 +20,10 @@ class LlamaModel:
     def __init__(self, config: ModelConfig, weights: Dict[str, Array]) -> None:
         config.validate()
         self.config = config
-        self.weights = {name: np.asarray(value) for name, value in weights.items()}
+        self.weights = {
+            name: value if hasattr(value, "matmul") else np.asarray(value)
+            for name, value in weights.items()
+        }
         self._validate_weights()
 
     @classmethod
@@ -140,8 +143,8 @@ class LlamaModel:
         query = query.reshape(-1, c.num_attention_heads, c.head_dim)
         key = key.reshape(-1, c.num_key_value_heads, c.head_dim)
         value = value.reshape(-1, c.num_key_value_heads, c.head_dim)
-        query = apply_rope(query, positions, c.rope_theta)
-        key = apply_rope(key, positions, c.rope_theta)
+        query = apply_rope(query, positions, c.rope_theta, c.rope_interleaved)
+        key = apply_rope(key, positions, c.rope_theta, c.rope_interleaved)
 
         if cache is None:
             all_key, all_value = key, value

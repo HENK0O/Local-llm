@@ -21,6 +21,7 @@ class ModelConfig:
     eos_token_id: Optional[int] = 2
     pad_token_id: Optional[int] = 0
     tie_word_embeddings: bool = False
+    rope_interleaved: bool = False
 
     @property
     def head_dim(self) -> int:
@@ -65,4 +66,3 @@ class ModelConfig:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(self.__dict__, handle, indent=2, ensure_ascii=False)
             handle.write("\n")
-

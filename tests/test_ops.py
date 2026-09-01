@@ -31,6 +31,18 @@ class OpsTests(unittest.TestCase):
         )
         np.testing.assert_allclose(result, expected, rtol=1e-6, atol=1e-6)
 
+    def test_rope_supports_gguf_interleaved_layout(self):
+        x = np.array([[[1.0, 2.0, 3.0, 4.0]]], dtype=np.float32)
+        result = apply_rope(x, np.array([1]), 10000.0, interleaved=True)
+        angles = np.array([1.0, 0.01], dtype=np.float32)
+        expected = np.array([[[
+            np.cos(angles[0]) - 2 * np.sin(angles[0]),
+            np.sin(angles[0]) + 2 * np.cos(angles[0]),
+            3 * np.cos(angles[1]) - 4 * np.sin(angles[1]),
+            3 * np.sin(angles[1]) + 4 * np.cos(angles[1]),
+        ]]], dtype=np.float32)
+        np.testing.assert_allclose(result, expected, rtol=1e-6, atol=1e-6)
+
     def test_softmax_is_stable(self):
         result = softmax(np.array([10000.0, 10000.0], dtype=np.float32))
         np.testing.assert_allclose(result, [0.5, 0.5])

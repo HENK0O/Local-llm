@@ -6,8 +6,8 @@ from typing import List
 
 import numpy as np
 
-from .model import LlamaModel
 from .generation import generate
+from .loading import load_runtime
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ class TensorComparison:
 
 def compare_reference(model_dir: Path, reference_path: Path,
                       atol: float = 2e-4, rtol: float = 2e-4) -> List[TensorComparison]:
-    model = LlamaModel.from_directory(model_dir)
+    model, _ = load_runtime(model_dir)
     with np.load(reference_path, allow_pickle=False) as archive:
         if "input_ids" not in archive:
             raise ValueError("reference archive is missing input_ids")
