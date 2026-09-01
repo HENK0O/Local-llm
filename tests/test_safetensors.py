@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from local_llm.safetensors import SafeTensorError, load_directory, load_file
+from local_llm.safetensors import SafeTensorError, load_directory, load_file, save_file
 
 
 def write_safetensors(path: Path, tensors):
@@ -27,6 +27,18 @@ def write_safetensors(path: Path, tensors):
 
 
 class SafeTensorTests(unittest.TestCase):
+    def test_writer_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "written.safetensors"
+            expected = {
+                "half": np.arange(6, dtype=np.float16).reshape(2, 3),
+                "float": np.array([1.25, -2.5], dtype=np.float32),
+            }
+            save_file(path, expected, {"source": "test"})
+            actual = load_file(path, np.float16)
+            for name, value in expected.items():
+                np.testing.assert_array_equal(actual[name], value)
+
     def test_f32_is_memory_mapped_and_f16_is_promoted(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "model.safetensors"

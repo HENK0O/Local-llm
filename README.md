@@ -7,6 +7,7 @@ appel à Transformers ne sont utilisés.
 Le runtime comprend :
 
 - embeddings, RMSNorm, RoPE, attention causale multi-têtes/GQA et SwiGLU ;
+- variantes QK-Norm, RoPE partiel et attention gated utilisées par Baguette ;
 - prefill et décodage token par token avec cache KV préalloué ;
 - tokenizer jouet UTF-8 et tokenizer GPT-2 byte-level BPE réel ;
 - lecteur SafeTensors natif F32/F16/BF16, mono-fichier ou shardé ;
@@ -89,6 +90,41 @@ Un modèle dépourvu de template peut toujours être exécuté en complétion sa
 `--chat`, mais le runtime refuse de deviner son format de conversation.
 Cette amélioration règle la mise en forme du dialogue ; le modèle doit toujours
 utiliser une architecture Llama et un tokenizer BPE actuellement pris en charge.
+
+### Charger Baguette
+
+Le checkpoint [HENK0O/baguette](https://github.com/HENK0O/baguette) utilise une
+architecture proche de Llama avec QK-Norm, RoPE partiel et une porte de sortie
+sur l'attention. Le runtime implémente ces opérations directement. La conversion
+emploie PyTorch uniquement pour lire le conteneur `.pt` ; l'inférence obtenue
+reste entièrement exécutée par `local-llm`.
+
+```bash
+python -m local_llm convert-baguette \
+  /Users/henko/Documents/Code/LLM/baguette-123m-sft.pt \
+  --tokenizer /Users/henko/Documents/Code/LLM/tokenizer.json \
+  --output models/baguette-123m-sft
+```
+
+Le dossier de sortie contient la configuration, le tokenizer, le template
+ChatML, les informations de provenance et environ 235 Mio de poids SafeTensors.
+Les poids RMSNorm zéro-centrés sont convertis en gains ordinaires F32 ; les
+grandes matrices restent en F16 sur disque et sont promues par le runtime au
+chargement. Le checkpoint source n'est jamais modifié et une sortie existante
+n'est jamais écrasée.
+
+Pour utiliser la version SFT en conversation :
+
+```bash
+python -m local_llm run models/baguette-123m-sft \
+  --chat --interactive --temperature 0.5 --top-k 20
+
+python -m local_llm serve models/baguette-123m-sft
+```
+
+Puis ouvre [http://127.0.0.1:8080](http://127.0.0.1:8080). Le convertisseur
+refuse volontairement les checkpoints Baguette `hybrid: true` utilisant
+DeltaNet, qui demanderaient un second type de cache et de nouvelles opérations.
 
 ### Serveur HTTP local
 
@@ -314,6 +350,9 @@ LOCAL_LLM_TEST_MODEL=models/SmolLM2-135M \
 
 LOCAL_LLM_TEST_GGUF=models/SmolLM2-135M.official.F16.gguf \
   python -m unittest tests.test_real_gguf -v
+
+LOCAL_LLM_TEST_BAGUETTE=models/baguette-123m-sft \
+  python -m unittest tests.test_real_baguette -v
 
 LOCAL_LLM_TEST_INSTRUCT=models/SmolLM2-360M-Instruct.official.F16.gguf \
   python -m unittest tests.test_real_instruct -v

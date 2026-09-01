@@ -22,6 +22,9 @@ class ModelConfig:
     pad_token_id: Optional[int] = 0
     tie_word_embeddings: bool = False
     rope_interleaved: bool = False
+    rope_dimension_count: Optional[int] = None
+    qk_norm: bool = False
+    attention_gate: bool = False
 
     @property
     def head_dim(self) -> int:
@@ -46,6 +49,9 @@ class ModelConfig:
             raise ValueError("num_attention_heads must be divisible by num_key_value_heads")
         if self.head_dim % 2:
             raise ValueError("RoPE requires an even head dimension")
+        rotary_dim = self.rope_dimension_count or self.head_dim
+        if rotary_dim <= 0 or rotary_dim > self.head_dim or rotary_dim % 2:
+            raise ValueError("rope_dimension_count must be even and within the head dimension")
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "ModelConfig":

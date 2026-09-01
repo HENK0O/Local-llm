@@ -9,6 +9,7 @@ from typing import List, Optional, Sequence
 
 from .chat import ChatMessage, format_chat, require_chat_template
 from .benchmark import compare_report, load_report, run_benchmark, save_report
+from .converters import convert_baguette
 from .generation import GenerationStats, generate_tokens
 from .gguf import GGUFReader, q8_backend_name
 from .loading import load_runtime
@@ -116,6 +117,13 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8080)
     serve.add_argument("--max-tokens", type=int, default=128,
                        help="default maximum generated tokens per request")
+
+    convert = subparsers.add_parser(
+        "convert-baguette", help="convert a Baguette .pt checkpoint for local-llm"
+    )
+    convert.add_argument("checkpoint", type=Path)
+    convert.add_argument("--tokenizer", required=True, type=Path)
+    convert.add_argument("--output", required=True, type=Path)
     return parser
 
 
@@ -125,6 +133,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "create-toy":
         path = create_toy_model(args.output, args.seed)
         print(f"Toy model written to {path}")
+        return 0
+    if args.command == "convert-baguette":
+        try:
+            path = convert_baguette(args.checkpoint, args.tokenizer, args.output)
+        except (FileExistsError, FileNotFoundError, KeyError, RuntimeError,
+                TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        print(f"Baguette model written to {path}")
         return 0
     if args.command == "verify":
         comparisons = compare_reference(args.model, args.reference, args.atol, args.rtol)

@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 
 from .cache import KVCache
 from .config import ModelConfig
-from .ops import apply_rope, linear, rms_norm, silu, softmax
+from .ops import apply_rope, linear, rms_norm, sigmoid, silu, softmax
 from .safetensors import load_directory as load_safetensors_directory
 
 Array = NDArray[np.floating]
@@ -64,6 +64,13 @@ class LlamaModel:
                     f"{prefix}.mlp.down_proj.weight": (c.hidden_size, c.intermediate_size),
                 }
             )
+            if c.qk_norm:
+                shapes[f"{prefix}.self_attn.q_norm.weight"] = (c.head_dim,)
+                shapes[f"{prefix}.self_attn.k_norm.weight"] = (c.head_dim,)
+            if c.attention_gate:
+                shapes[f"{prefix}.self_attn.gate_proj.weight"] = (
+                    c.num_attention_heads * c.head_dim, c.hidden_size
+                )
         return shapes
 
     def _validate_weights(self) -> None:
@@ -143,8 +150,15 @@ class LlamaModel:
         query = query.reshape(-1, c.num_attention_heads, c.head_dim)
         key = key.reshape(-1, c.num_key_value_heads, c.head_dim)
         value = value.reshape(-1, c.num_key_value_heads, c.head_dim)
-        query = apply_rope(query, positions, c.rope_theta, c.rope_interleaved)
-        key = apply_rope(key, positions, c.rope_theta, c.rope_interleaved)
+        if c.qk_norm:
+            query = rms_norm(query, self.weights[f"{prefix}.self_attn.q_norm.weight"],
+                             c.rms_norm_eps)
+            key = rms_norm(key, self.weights[f"{prefix}.self_attn.k_norm.weight"],
+                           c.rms_norm_eps)
+        query = apply_rope(query, positions, c.rope_theta, c.rope_interleaved,
+                           c.rope_dimension_count)
+        key = apply_rope(key, positions, c.rope_theta, c.rope_interleaved,
+                         c.rope_dimension_count)
 
         if cache is None:
             all_key, all_value = key, value
@@ -168,6 +182,10 @@ class LlamaModel:
         probabilities = softmax(scores, axis=-1)
         attention = np.einsum("hts,shd->thd", probabilities, all_value, optimize=True)
         attention = attention.reshape(-1, c.num_attention_heads * c.head_dim)
+        if c.attention_gate:
+            attention *= sigmoid(linear(
+                hidden, self.weights[f"{prefix}.self_attn.gate_proj.weight"]
+            ))
         x = residual + linear(attention, self.weights[f"{prefix}.self_attn.o_proj.weight"])
 
         residual = x

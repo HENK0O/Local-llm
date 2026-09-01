@@ -28,6 +28,16 @@ def silu(x: Array) -> Array:
     return x32 / (1.0 + np.exp(-x32))
 
 
+def sigmoid(x: Array) -> Array:
+    x32 = x.astype(np.float32)
+    positive = x32 >= 0
+    result = np.empty_like(x32)
+    result[positive] = 1.0 / (1.0 + np.exp(-x32[positive]))
+    exponential = np.exp(x32[~positive])
+    result[~positive] = exponential / (1.0 + exponential)
+    return result
+
+
 def softmax(x: Array, axis: int = -1) -> Array:
     x32 = x.astype(np.float32)
     shifted = x32 - np.max(x32, axis=axis, keepdims=True)
@@ -36,22 +46,29 @@ def softmax(x: Array, axis: int = -1) -> Array:
 
 
 def apply_rope(x: Array, positions: NDArray[np.integer], theta: float,
-               interleaved: bool = False) -> Array:
+               interleaved: bool = False, dimension_count: int | None = None) -> Array:
     """Apply split-half (HF) or adjacent-pair (GGUF) rotary embeddings."""
     head_dim = x.shape[-1]
-    if head_dim % 2:
-        raise ValueError("RoPE requires an even head dimension")
-    frequencies = 1.0 / (theta ** (np.arange(0, head_dim, 2, dtype=np.float32) / head_dim))
+    rotary_dim = dimension_count or head_dim
+    if rotary_dim <= 0 or rotary_dim > head_dim or rotary_dim % 2:
+        raise ValueError("RoPE dimension count must be even and within the head dimension")
+    rotary = x[..., :rotary_dim]
+    frequencies = 1.0 / (theta ** (np.arange(0, rotary_dim, 2, dtype=np.float32) / rotary_dim))
     angles = np.asarray(positions, dtype=np.float32)[:, None] * frequencies[None, :]
     if interleaved:
         cos = np.cos(angles)[:, None, :]
         sin = np.sin(angles)[:, None, :]
-        result = np.empty_like(x)
-        result[..., 0::2] = x[..., 0::2] * cos - x[..., 1::2] * sin
-        result[..., 1::2] = x[..., 0::2] * sin + x[..., 1::2] * cos
-        return result
-    embedding = np.concatenate((angles, angles), axis=-1)[:, None, :]
-    cos, sin = np.cos(embedding), np.sin(embedding)
-    half = head_dim // 2
-    rotated = np.concatenate((-x[..., half:], x[..., :half]), axis=-1)
-    return x * cos + rotated * sin
+        rotated = np.empty_like(rotary)
+        rotated[..., 0::2] = rotary[..., 0::2] * cos - rotary[..., 1::2] * sin
+        rotated[..., 1::2] = rotary[..., 0::2] * sin + rotary[..., 1::2] * cos
+    else:
+        embedding = np.concatenate((angles, angles), axis=-1)[:, None, :]
+        cos, sin = np.cos(embedding), np.sin(embedding)
+        half = rotary_dim // 2
+        rotated_half = np.concatenate((-rotary[..., half:], rotary[..., :half]), axis=-1)
+        rotated = rotary * cos + rotated_half * sin
+    if rotary_dim == head_dim:
+        return rotated
+    result = np.array(x, copy=True)
+    result[..., :rotary_dim] = rotated
+    return result

@@ -24,7 +24,44 @@ def tiny_model() -> LlamaModel:
     return LlamaModel(config, make_toy_weights(config, seed=7))
 
 
+def tiny_gated_model() -> LlamaModel:
+    config = ModelConfig(
+        vocab_size=32,
+        hidden_size=16,
+        intermediate_size=24,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        max_position_embeddings=32,
+        rope_dimension_count=2,
+        qk_norm=True,
+        attention_gate=True,
+    )
+    weights = make_toy_weights(config, seed=8)
+    rng = np.random.default_rng(9)
+    for layer in range(config.num_hidden_layers):
+        prefix = f"model.layers.{layer}.self_attn"
+        weights[f"{prefix}.q_norm.weight"] = np.ones(config.head_dim, dtype=np.float32)
+        weights[f"{prefix}.k_norm.weight"] = np.ones(config.head_dim, dtype=np.float32)
+        weights[f"{prefix}.gate_proj.weight"] = rng.normal(
+            0, 0.1, (config.hidden_size, config.hidden_size)
+        ).astype(np.float32)
+    return LlamaModel(config, weights)
+
+
 class ModelTests(unittest.TestCase):
+    def test_gated_qk_norm_cached_logits_match_full_forward(self):
+        model = tiny_gated_model()
+        tokens = np.array([1, 5, 7, 9, 4], dtype=np.int64)
+        expected = model.forward(tokens)
+        cache = model.new_cache(capacity=16)
+        actual = np.concatenate([
+            model.forward(tokens[:3], cache),
+            model.forward(tokens[3:4], cache),
+            model.forward(tokens[4:], cache),
+        ])
+        np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=2e-5)
+
     def test_prefill_and_incremental_logits_match_full_forward(self):
         model = tiny_model()
         tokens = np.array([1, 5, 7, 9, 4], dtype=np.int64)
