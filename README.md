@@ -14,11 +14,13 @@ Le runtime comprend :
 - kernel Q8_0 C++ optionnel, vectorisé et multithread avec fallback NumPy ;
 - génération gloutonne, température, top-k, top-p et graine reproductible ;
 - streaming, templates de chat Jinja automatiques avec historique, débit et cache KV ;
+- serveur HTTP local avec réponses JSON ou streaming SSE ;
 - tests comparant les logits et la génération avec une voie lente sans cache.
 
 ## Démarrage rapide
 
-Python 3.9 ou supérieur, NumPy et `regex` sont les seules dépendances d’exécution.
+Python 3.9 ou supérieur, NumPy, `regex` et Jinja2 sont les seules dépendances
+d’exécution.
 
 ```bash
 python3 -m local_llm create-toy /tmp/local-llm-toy
@@ -87,6 +89,54 @@ Un modèle dépourvu de template peut toujours être exécuté en complétion sa
 `--chat`, mais le runtime refuse de deviner son format de conversation.
 Cette amélioration règle la mise en forme du dialogue ; le modèle doit toujours
 utiliser une architecture Llama et un tokenizer BPE actuellement pris en charge.
+
+### Serveur HTTP local
+
+Le même runtime peut rester chargé en mémoire et recevoir plusieurs requêtes de
+chat, sans recharger le GGUF à chaque question :
+
+```bash
+python -m local_llm serve \
+  models/SmolLM2-360M-Instruct.official.Q8_0.gguf \
+  --host 127.0.0.1 --port 8080
+```
+
+Une réponse JSON contient le texte, l'usage en tokens, le débit du prefill et du
+décodage ainsi que la taille du cache KV :
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "messages": [{"role": "user", "content": "Quelle est la capitale de la France ?"}],
+    "max_tokens": 48,
+    "temperature": 0
+  }'
+```
+
+Pour recevoir le texte au fil de la génération, ajoute `"stream": true`. Le
+serveur envoie alors des événements SSE et termine par `data: [DONE]` :
+
+```bash
+curl -N http://127.0.0.1:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "messages": [{"role": "user", "content": "Explique simplement ce qu est GGUF."}],
+    "max_tokens": 80,
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "stream": true
+  }'
+```
+
+`GET /health` vérifie que le serveur répond et `GET /v1/models` indique le modèle
+chargé. L'API reprend la structure principale de Chat Completions, sans prétendre
+encore en couvrir toutes les options. Elle n'emploie aucune bibliothèque serveur
+externe et les générations sont sérialisées pour éviter de saturer le CPU.
+
+Le serveur n'a pas d'authentification. Garde l'adresse par défaut `127.0.0.1` ;
+n'utilise `0.0.0.0` que sur un réseau de confiance et après avoir ajouté une
+protection adaptée.
 
 ### Modèle Base de validation
 

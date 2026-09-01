@@ -13,6 +13,7 @@ from .generation import GenerationStats, generate_tokens
 from .gguf import GGUFReader, q8_backend_name
 from .loading import load_runtime
 from .model import LlamaModel
+from .server import serve as serve_http
 from .tokenizer import Tokenizer
 from .toy import create_toy_model
 from .verification import compare_reference
@@ -108,6 +109,13 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--output", type=Path, help="save a reproducible JSON report")
     benchmark.add_argument("--compare", type=Path, help="compare with a saved JSON baseline")
     benchmark.add_argument("--json", action="store_true", help="print the report as JSON")
+
+    serve = subparsers.add_parser("serve", help="start a local HTTP chat server")
+    serve.add_argument("model", type=Path, help="model directory or GGUF file")
+    serve.add_argument("--host", default="127.0.0.1")
+    serve.add_argument("--port", type=int, default=8080)
+    serve.add_argument("--max-tokens", type=int, default=128,
+                       help="default maximum generated tokens per request")
     return parser
 
 
@@ -187,6 +195,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   f"prefill {comparison['prefill_percent']:+.1f}% | "
                   f"decode {comparison['decode_percent']:+.1f}% | "
                   f"KV cache {comparison['kv_cache_percent']:+.1f}%")
+        return 0
+    if args.command == "serve":
+        if not 0 <= args.port <= 65535:
+            parser.error("--port must be between 0 and 65535")
+        if args.max_tokens <= 0:
+            parser.error("--max-tokens must be positive")
+        try:
+            serve_http(args.model, args.host, args.port, args.max_tokens)
+        except (FileNotFoundError, KeyError, OSError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
         return 0
 
     model_path = args.model_option or args.model_positional
