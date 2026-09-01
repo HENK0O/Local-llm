@@ -10,8 +10,9 @@ from typing import List, Optional, Sequence
 from .chat import ChatMessage, format_chat, require_chat_template
 from .benchmark import compare_report, load_report, run_benchmark, save_report
 from .converters import convert_baguette
+from .evaluation import evaluate_runtime
 from .generation import GenerationStats, generate_tokens
-from .gguf import GGUFReader, q8_backend_name
+from .gguf import GGUFReader, q4_backend_name, q8_backend_name
 from .loading import load_runtime
 from .model import LlamaModel
 from .server import serve as serve_http
@@ -111,6 +112,31 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--compare", type=Path, help="compare with a saved JSON baseline")
     benchmark.add_argument("--json", action="store_true", help="print the report as JSON")
 
+    evaluate = subparsers.add_parser(
+        "evaluate", help="check logits, greedy tokens, KV cache and runtime regressions"
+    )
+    evaluate.add_argument("model", type=Path, help="converted model directory or GGUF file")
+    evaluate.add_argument("--prompt", default="Bonjour, comment vas-tu ?")
+    evaluate.add_argument("--tokens", type=int, default=8)
+    evaluate.add_argument("--chat", action="store_true", help="apply the embedded chat template")
+    evaluate.add_argument("--system", help="system prompt (requires --chat)")
+    evaluate.add_argument(
+        "--reference", type=Path,
+        help="saved .npz trace or original Baguette .pt checkpoint",
+    )
+    evaluate.add_argument(
+        "--reference-repo", type=Path,
+        help="Baguette repository containing model.py (defaults to checkpoint directory)",
+    )
+    evaluate.add_argument(
+        "--save-reference", type=Path,
+        help="save the current known-good runtime trace as a compressed .npz",
+    )
+    evaluate.add_argument("--output", type=Path, help="save the evaluation summary as JSON")
+    evaluate.add_argument("--atol", type=float, default=2e-4)
+    evaluate.add_argument("--rtol", type=float, default=2e-4)
+    evaluate.add_argument("--json", action="store_true", help="print the summary as JSON")
+
     serve = subparsers.add_parser("serve", help="start a local HTTP chat server")
     serve.add_argument("model", type=Path, help="model directory or GGUF file")
     serve.add_argument("--host", default="127.0.0.1")
@@ -166,6 +192,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         for info in reader.tensors.values():
             counts[info.type_name] = counts.get(info.type_name, 0) + 1
         print("tensor types: " + ", ".join(f"{name}={count}" for name, count in sorted(counts.items())))
+        if counts.get("Q4_0"):
+            print(f"Q4 backend: {q4_backend_name()}")
         if counts.get("Q8_0"):
             print(f"Q8 backend: {q8_backend_name()}")
         template_names = reader.metadata.get("tokenizer.chat_templates", [])
@@ -212,6 +240,53 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                   f"decode {comparison['decode_percent']:+.1f}% | "
                   f"KV cache {comparison['kv_cache_percent']:+.1f}%")
         return 0
+    if args.command == "evaluate":
+        try:
+            report = evaluate_runtime(
+                model_path=args.model,
+                prompt=args.prompt,
+                tokens=args.tokens,
+                reference=args.reference,
+                reference_repo=args.reference_repo,
+                atol=args.atol,
+                rtol=args.rtol,
+                save_reference=args.save_reference,
+                chat=args.chat,
+                system_prompt=args.system,
+            )
+        except (FileNotFoundError, KeyError, RuntimeError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            with args.output.open("w", encoding="utf-8") as handle:
+                json.dump(report.to_dict(), handle, indent=2, ensure_ascii=False)
+                handle.write("\n")
+        if args.json:
+            print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
+        else:
+            cache = report.cached_vs_uncached
+            print(f"model: {report.model_sha256[:12]} | prompt: "
+                  f"{len(report.prompt_token_ids)} tokens | generated: "
+                  f"{len(report.generated_token_ids)} tokens")
+            print("cache KV vs recalcul complet: "
+                  f"max {cache.max_absolute_error:.4e} | "
+                  f"moyenne {cache.mean_absolute_error:.4e} | "
+                  f"tokens {'identiques' if cache.greedy_tokens_identical else 'DIFFERENTS'}")
+            if report.runtime_vs_reference is not None:
+                reference = report.runtime_vs_reference
+                print("runtime vs reference: "
+                      f"max {reference.max_absolute_error:.4e} | "
+                      f"moyenne {reference.mean_absolute_error:.4e} | "
+                      f"tokens {'identiques' if reference.greedy_tokens_identical else 'DIFFERENTS'}")
+            print(f"prefill: {report.prefill_tokens_per_second:.1f} tok/s | "
+                  f"decode: {report.decode_tokens_per_second:.1f} tok/s | "
+                  f"KV cache: {_format_bytes(report.kv_cache_bytes)}")
+            print("resultat: " + ("OK" if report.passed else "ECHEC"))
+            if args.save_reference:
+                print(f"reference sauvegardee: {args.save_reference}")
+            if args.output:
+                print(f"rapport: {args.output}")
+        return 0 if report.passed else 1
     if args.command == "serve":
         if not 0 <= args.port <= 65535:
             parser.error("--port must be between 0 and 65535")

@@ -1,4 +1,4 @@
-"""Small GGUF v3 reader for unquantized Llama checkpoints."""
+"""Small GGUF v3 reader for Llama checkpoints, including Q8_0 and Q4_0."""
 
 from __future__ import annotations
 
@@ -14,6 +14,11 @@ from .config import ModelConfig
 from .tokenizer import BPETokenizer
 
 try:
+    from ._native import q4_matmul as _native_q4_matmul
+except ImportError:
+    _native_q4_matmul = None
+
+try:
     from ._native import q8_matmul as _native_q8_matmul
 except ImportError:
     _native_q8_matmul = None
@@ -24,7 +29,7 @@ GGUF_VERSION = 3
 DEFAULT_ALIGNMENT = 32
 
 UINT8, INT8, UINT16, INT16, UINT32, INT32, FLOAT32, BOOL, STRING, ARRAY, UINT64, INT64, FLOAT64 = range(13)
-F32, F16, Q8_0, BF16 = 0, 1, 8, 30
+F32, F16, Q4_0, Q8_0, BF16 = 0, 1, 2, 8, 30
 
 _SCALARS: Mapping[int, Tuple[str, int]] = {
     UINT8: ("<B", 1), INT8: ("<b", 1), UINT16: ("<H", 2), INT16: ("<h", 2),
@@ -36,7 +41,7 @@ _TENSOR_DTYPES: Mapping[int, Tuple[np.dtype, int, str]] = {
     F16: (np.dtype("<f2"), 2, "F16"),
     BF16: (np.dtype("<u2"), 2, "BF16"),
 }
-_TYPE_NAMES = {F32: "F32", F16: "F16", Q8_0: "Q8_0", BF16: "BF16"}
+_TYPE_NAMES = {F32: "F32", F16: "F16", Q4_0: "Q4_0", Q8_0: "Q8_0", BF16: "BF16"}
 
 
 class GGUFError(ValueError):
@@ -107,6 +112,81 @@ class Q8Matrix:
 
 def q8_backend_name() -> str:
     if _native_q8_matmul is not None and os.environ.get("LOCAL_LLM_DISABLE_NATIVE") != "1":
+        return "native-cpp"
+    return "numpy"
+
+
+class Q4Matrix:
+    """GGML Q4_0 matrix: one FP16 scale and 32 values packed in 16 bytes.
+
+    For each byte, the low nibble stores a value from the first half of the
+    block and the high nibble the corresponding value from the second half.
+    Both unsigned nibbles are zero-point shifted by 8, giving [-8, 7].
+    """
+
+    block_size = 32
+    packed_values = 16
+    storage_bytes = 18
+    _dtype = np.dtype(
+        [("scale", "<f2"), ("values", "u1", (packed_values,))], align=False
+    )
+
+    def __init__(self, path: Path, offset: int, shape: Tuple[int, ...]) -> None:
+        if len(shape) != 2 or shape[-1] % self.block_size:
+            raise GGUFError(
+                "Q4_0 runtime supports 2D matrices with input size divisible by 32, "
+                f"got {shape}"
+            )
+        self.path, self.shape = Path(path), shape
+        self.blocks_per_row = shape[-1] // self.block_size
+        self.blocks = np.memmap(
+            path, mode="r", dtype=self._dtype, offset=offset,
+            shape=(shape[0], self.blocks_per_row),
+        )
+
+    @property
+    def nbytes(self) -> int:
+        return self.blocks.nbytes
+
+    @staticmethod
+    def _unpack(packed: np.ndarray) -> np.ndarray:
+        low = (packed & np.uint8(0x0F)).astype(np.float32) - np.float32(8.0)
+        high = (packed >> np.uint8(4)).astype(np.float32) - np.float32(8.0)
+        return np.concatenate((low, high), axis=-1)
+
+    def __getitem__(self, item: Any) -> np.ndarray:
+        blocks = self.blocks[item]
+        values = self._unpack(blocks["values"])
+        result = values * blocks["scale"].astype(np.float32)[..., None]
+        return result.reshape((*result.shape[:-2], self.shape[-1]))
+
+    def matmul_numpy(self, x: np.ndarray, rows_per_chunk: int = 256) -> np.ndarray:
+        values = np.asarray(x, dtype=np.float32)
+        if values.shape[-1] != self.shape[-1]:
+            raise ValueError(f"Q4 matmul input size {values.shape[-1]} != {self.shape[-1]}")
+        flat = values.reshape(-1, self.blocks_per_row, self.block_size)
+        output = np.empty((flat.shape[0], self.shape[0]), dtype=np.float32)
+        for start in range(0, self.shape[0], rows_per_chunk):
+            end = min(start + rows_per_chunk, self.shape[0])
+            blocks = self.blocks[start:end]
+            quantized = self._unpack(blocks["values"])
+            scales = blocks["scale"].astype(np.float32)
+            output[:, start:end] = np.einsum(
+                "tbi,obi,ob->to", flat, quantized, scales, optimize=True
+            )
+        return output.reshape((*values.shape[:-1], self.shape[0]))
+
+    def matmul(self, x: np.ndarray, rows_per_chunk: int = 256) -> np.ndarray:
+        values = np.asarray(x, dtype=np.float32)
+        if values.shape[-1] != self.shape[-1]:
+            raise ValueError(f"Q4 matmul input size {values.shape[-1]} != {self.shape[-1]}")
+        if _native_q4_matmul is not None and os.environ.get("LOCAL_LLM_DISABLE_NATIVE") != "1":
+            return _native_q4_matmul(self.blocks, np.ascontiguousarray(values))
+        return self.matmul_numpy(values, rows_per_chunk)
+
+
+def q4_backend_name() -> str:
+    if _native_q4_matmul is not None and os.environ.get("LOCAL_LLM_DISABLE_NATIVE") != "1":
         return "native-cpp"
     return "numpy"
 
@@ -204,12 +284,13 @@ class GGUFReader:
         if self.data_offset > file_size:
             raise GGUFError("GGUF tensor data starts beyond end of file")
         for info in self.tensors.values():
-            if info.ggml_type in _TENSOR_DTYPES or info.ggml_type == Q8_0:
+            if info.ggml_type in _TENSOR_DTYPES or info.ggml_type in (Q4_0, Q8_0):
                 elements = int(np.prod(info.shape, dtype=np.int64))
-                if info.ggml_type == Q8_0:
-                    if elements % Q8Matrix.block_size:
-                        raise GGUFError(f"Q8_0 tensor {info.name} has a partial block")
-                    size = elements // Q8Matrix.block_size * Q8Matrix.storage_bytes
+                if info.ggml_type in (Q4_0, Q8_0):
+                    matrix_type = Q4Matrix if info.ggml_type == Q4_0 else Q8Matrix
+                    if elements % matrix_type.block_size:
+                        raise GGUFError(f"{info.type_name} tensor {info.name} has a partial block")
+                    size = elements // matrix_type.block_size * matrix_type.storage_bytes
                 else:
                     size = elements * _TENSOR_DTYPES[info.ggml_type][1]
                 if info.offset % self.alignment or self.data_offset + info.offset + size > file_size:
@@ -220,6 +301,8 @@ class GGUFReader:
             info = self.tensors[name]
         except KeyError as exc:
             raise KeyError(f"GGUF tensor {name!r} not found") from exc
+        if info.ggml_type == Q4_0:
+            return Q4Matrix(self.path, self.data_offset + info.offset, info.shape)
         if info.ggml_type == Q8_0:
             return Q8Matrix(self.path, self.data_offset + info.offset, info.shape)
         if info.ggml_type not in _TENSOR_DTYPES:

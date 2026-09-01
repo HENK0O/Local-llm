@@ -7,8 +7,8 @@ import numpy as np
 
 from local_llm.config import ModelConfig
 from local_llm.gguf import (
-    ARRAY, BOOL, FLOAT32, GGUFError, GGUFReader, Q8Matrix, STRING, UINT32,
-    q8_backend_name,
+    ARRAY, BOOL, FLOAT32, GGUFError, GGUFReader, Q4Matrix, Q8Matrix, STRING, UINT32,
+    q4_backend_name, q8_backend_name,
 )
 from local_llm.loading import load_runtime
 from local_llm.model import LlamaModel
@@ -65,6 +65,18 @@ def write_gguf(path: Path, metadata, tensors):
         handle.write(data_blob)
 
 
+def write_q4_gguf(path: Path, name: str, shape, storage: np.ndarray):
+    metadata_blob = _string("general.architecture") + struct.pack("<I", STRING) + _string("llama")
+    infos = _string(name) + struct.pack("<I", len(shape))
+    infos += b"".join(struct.pack("<Q", dim) for dim in reversed(shape))
+    infos += struct.pack("<IQ", 2, 0)  # GGML_TYPE_Q4_0, offset zero.
+    prefix = b"GGUF" + struct.pack("<IQQ", 3, 1, 1) + metadata_blob + infos
+    prefix += b"\0" * ((-len(prefix)) % 32)
+    with path.open("wb") as handle:
+        handle.write(prefix)
+        handle.write(storage.tobytes())
+
+
 def gguf_name(runtime_name):
     fixed = {"model.embed_tokens.weight": "token_embd.weight", "model.norm.weight": "output_norm.weight",
              "lm_head.weight": "output.weight"}
@@ -84,6 +96,17 @@ def gguf_name(runtime_name):
 
 def permute_rope_weight(weight, heads, head_dim):
     return weight.reshape(heads, 2, head_dim // 2, -1).transpose(0, 2, 1, 3).reshape(weight.shape)
+
+
+def q4_storage(quantized: np.ndarray, scales: np.ndarray) -> np.ndarray:
+    packed = (
+        (quantized[..., :16].astype(np.int16) + 8)
+        | ((quantized[..., 16:].astype(np.int16) + 8) << 4)
+    ).astype(np.uint8)
+    storage = np.empty(quantized.shape[:-1], dtype=Q4Matrix._dtype)
+    storage["scale"] = scales
+    storage["values"] = packed
+    return storage
 
 
 class GGUFTests(unittest.TestCase):
@@ -160,6 +183,59 @@ class GGUFTests(unittest.TestCase):
             np.testing.assert_allclose(actual, expected, rtol=0.08, atol=0.12)
             self.assertEqual(matrix[2].shape, (64,))
 
+    def test_q4_matrix_unpacks_ggml_nibble_order_and_multiplies(self):
+        rng = np.random.default_rng(29)
+        quantized = rng.integers(-8, 8, size=(7, 2, 32), dtype=np.int8)
+        scales = rng.uniform(0.01, 0.2, size=(7, 2)).astype(np.float16)
+        storage = q4_storage(quantized, scales)
+        dequantized = (
+            quantized.astype(np.float32) * scales.astype(np.float32)[..., None]
+        ).reshape(7, 64)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw_path = root / "q4.bin"
+            raw_path.write_bytes(storage.tobytes())
+            matrix = Q4Matrix(raw_path, 0, dequantized.shape)
+            inputs = rng.normal(size=(4, 64)).astype(np.float32)
+            np.testing.assert_allclose(matrix.matmul(inputs), inputs @ dequantized.T,
+                                       rtol=2e-5, atol=2e-5)
+            np.testing.assert_allclose(matrix[2], dequantized[2], rtol=0, atol=0)
+            self.assertEqual(matrix.nbytes, 7 * 2 * 18)
+
+            gguf_path = root / "q4.gguf"
+            write_q4_gguf(gguf_path, "weight", dequantized.shape, storage)
+            reader = GGUFReader(gguf_path)
+            loaded = reader.tensor("weight")
+            self.assertIsInstance(loaded, Q4Matrix)
+            self.assertEqual(reader.tensors["weight"].type_name, "Q4_0")
+            np.testing.assert_allclose(loaded[1], dequantized[1], rtol=0, atol=0)
+
+    def test_q4_embedding_and_output_projection_run_inside_model(self):
+        config = ModelConfig(
+            vocab_size=32, hidden_size=32, intermediate_size=64, num_hidden_layers=1,
+            num_attention_heads=4, num_key_value_heads=2, max_position_embeddings=32,
+        )
+        weights = make_toy_weights(config, seed=37)
+        source = weights["model.embed_tokens.weight"]
+        blocks = source.reshape(32, 1, 32)
+        scales = np.maximum(np.max(np.abs(blocks), axis=-1) / 7.0, 1e-8).astype(np.float16)
+        quantized = np.rint(blocks / scales.astype(np.float32)[..., None]).clip(-8, 7).astype(np.int8)
+        storage = q4_storage(quantized, scales)
+        dequantized = (quantized.astype(np.float32) * scales.astype(np.float32)[..., None]).reshape(32, 32)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "embedding-q4.bin"
+            path.write_bytes(storage.tobytes())
+            q4_weights = dict(weights)
+            q4_weights["model.embed_tokens.weight"] = Q4Matrix(path, 0, source.shape)
+            expected_weights = dict(weights)
+            expected_weights["model.embed_tokens.weight"] = dequantized
+            tokens = np.array([1, 8, 3, 11], dtype=np.int64)
+            actual = LlamaModel(config, q4_weights).forward(tokens)
+            expected = LlamaModel(config, expected_weights).forward(tokens)
+            np.testing.assert_allclose(actual, expected, rtol=2e-5, atol=2e-5)
+
     @unittest.skipUnless(q8_backend_name() == "native-cpp", "native Q8 extension is not built")
     def test_native_q8_matches_numpy_kernel(self):
         rng = np.random.default_rng(17)
@@ -170,6 +246,21 @@ class GGUFTests(unittest.TestCase):
             path = Path(directory) / "native-q8.bin"
             path.write_bytes(storage.tobytes())
             matrix = Q8Matrix(path, 0, (513, 960))
+            inputs = rng.normal(size=(4, 960)).astype(np.float32)
+            np.testing.assert_allclose(
+                matrix.matmul(inputs), matrix.matmul_numpy(inputs), rtol=2e-5, atol=1e-4
+            )
+
+    @unittest.skipUnless(q4_backend_name() == "native-cpp", "native Q4 extension is not built")
+    def test_native_q4_matches_numpy_kernel(self):
+        rng = np.random.default_rng(31)
+        storage = np.empty((513, 30), dtype=Q4Matrix._dtype)
+        storage["scale"] = rng.uniform(0.001, 0.05, size=(513, 30)).astype(np.float16)
+        storage["values"] = rng.integers(0, 256, size=(513, 30, 16), dtype=np.uint8)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "native-q4.bin"
+            path.write_bytes(storage.tobytes())
+            matrix = Q4Matrix(path, 0, (513, 960))
             inputs = rng.normal(size=(4, 960)).astype(np.float32)
             np.testing.assert_allclose(
                 matrix.matmul(inputs), matrix.matmul_numpy(inputs), rtol=2e-5, atol=1e-4

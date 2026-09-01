@@ -11,8 +11,8 @@ Le runtime comprend :
 - prefill et décodage token par token avec cache KV préalloué ;
 - tokenizer jouet UTF-8 et tokenizer GPT-2 byte-level BPE réel ;
 - lecteur SafeTensors natif F32/F16/BF16, mono-fichier ou shardé ;
-- lecteur GGUF v3 natif F32/F16/BF16/Q8_0 avec métadonnées, tokenizer et `mmap` ;
-- kernel Q8_0 C++ optionnel, vectorisé et multithread avec fallback NumPy ;
+- lecteur GGUF v3 natif F32/F16/BF16/Q8_0/Q4_0 avec métadonnées, tokenizer et `mmap` ;
+- kernels Q8_0 et Q4_0 C++ optionnels, vectorisés et multithread avec fallback NumPy ;
 - génération gloutonne, température, top-k, top-p et graine reproductible ;
 - streaming, templates de chat Jinja automatiques avec historique, débit et cache KV ;
 - serveur HTTP local avec réponses JSON ou streaming SSE ;
@@ -42,7 +42,7 @@ pip install -e .
 local-llm run /tmp/local-llm-toy --prompt "Bonjour"
 ```
 
-Sur macOS, l'installation tente également de compiler le kernel Q8 C++ avec
+Sur macOS, l'installation tente également de compiler les kernels Q8/Q4 C++ avec
 Clang. Si aucun compilateur n'est disponible, le runtime reste utilisable avec
 le fallback NumPy. `python setup.py build_ext --inplace` permet de reconstruire
 explicitement l'extension pendant le développement.
@@ -211,7 +211,7 @@ python -m local_llm inspect models/SmolLM2-135M.official.F16.gguf --tensors
 python -m local_llm benchmark models/SmolLM2-135M.official.F16.gguf --tokens 32 --runs 3
 ```
 
-Q8_0 est également exécutable sans déquantifier le modèle complet :
+Q8_0 et Q4_0 sont également exécutables sans déquantifier le modèle complet :
 
 ```bash
 python -m local_llm run models/SmolLM2-135M.official.Q8_0.gguf \
@@ -219,11 +219,24 @@ python -m local_llm run models/SmolLM2-135M.official.Q8_0.gguf \
   --max-new-tokens 32
 ```
 
+```bash
+python -m local_llm run models/SmolLM2-135M.official.Q4_0.gguf \
+  --prompt "Bonjour, comment ça va ?" \
+  --max-new-tokens 32
+```
+
+Ce second exemple suppose qu'un fichier Q4_0 a été placé dans `models/` ; le
+projet n'en télécharge pas automatiquement afin de ne pas consommer d'espace
+disque sans confirmation.
+
 La commande `inspect` indique le backend réellement utilisé :
 
 ```text
 tensor types: F32=65, Q8_0=225
 Q8 backend: native-cpp
+
+tensor types: F32=65, Q4_0=225
+Q4 backend: native-cpp
 ```
 
 La variable `LOCAL_LLM_DISABLE_NATIVE=1` force le chemin NumPy pour établir une
@@ -280,9 +293,12 @@ lui-même les métadonnées, le vocabulaire BPE et les tenseurs Llama
 `token_embd`, `blk.N.*`, `output_norm` et `output`. Les vues F32/F16 du lecteur
 sont memory-mappées. Pour les calculs CPU, les matrices F16 sont promues en F32
 au chargement : sur Apple Silicon, cela évite les kernels NumPy F16 très lents.
-Les matrices Q8_0 restent compressées en blocs de 32 valeurs avec une échelle
-FP16 par bloc ; embeddings et produits matrice-vecteur sont calculés directement
-depuis ces blocs.
+Les matrices Q8_0 restent compressées en blocs de 32 octets signés avec une
+échelle FP16 par bloc. En Q4_0, les 32 valeurs sont stockées dans 16 octets :
+chaque demi-octet représente une valeur comprise entre -8 et 7, avec la même
+échelle FP16 par bloc. Les embeddings et produits matrice-vecteur sont calculés
+directement depuis ces blocs, sans créer une copie déquantifiée du modèle entier.
+Un bloc Q4_0 occupe 18 octets contre 34 en Q8_0.
 
 `config.json` reprend les champs Llama usuels (`hidden_size`,
 `intermediate_size`, `num_hidden_layers`, `num_attention_heads`,
@@ -334,6 +350,50 @@ La comparaison est refusée si le modèle, le prompt ou les tokens gloutons ont
 changé. On distingue ainsi trois axes : parité des logits pour la correction,
 tokens par seconde pour le moteur, et jeux de questions séparés pour la qualité
 du modèle.
+
+### Tester les corrections du moteur
+
+`evaluate` contrôle la correction numérique, indépendamment de la qualité du
+modèle. La commande compare le décodage avec cache KV à un recalcul complet,
+mesure les écarts de logits, vérifie les tokens gloutons et affiche aussi le
+débit et la mémoire du cache :
+
+```bash
+python -m local_llm evaluate models/baguette-123m-sft \
+  --chat --prompt "Bonjour, comment vas-tu ?" --tokens 8
+```
+
+Pour comparer directement le runtime NumPy au checkpoint PyTorch original de
+Baguette :
+
+```bash
+python -m local_llm evaluate models/baguette-123m-sft \
+  --chat --prompt "Bonjour, comment vas-tu ?" --tokens 8 \
+  --reference /Users/henko/Documents/Code/LLM/baguette-123m-sft.pt \
+  --reference-repo /Users/henko/Documents/Code/LLM \
+  --output /tmp/baguette-evaluation.json
+```
+
+PyTorch n'est utilisé que pour cette voie de référence. Le passage avant testé
+reste celui de `local-llm`. Pour conserver une version connue comme correcte
+avant une optimisation, il est également possible d'enregistrer une trace
+compressée puis de la rejouer :
+
+```bash
+python -m local_llm evaluate models/baguette-123m-sft \
+  --chat --prompt "Bonjour, comment vas-tu ?" --tokens 8 \
+  --save-reference /tmp/baguette-baseline.npz
+
+# Après la modification du moteur :
+python -m local_llm evaluate models/baguette-123m-sft \
+  --chat --prompt "Bonjour, comment vas-tu ?" --tokens 8 \
+  --reference /tmp/baguette-baseline.npz
+```
+
+La commande retourne le code `0` lorsque les logits respectent les tolérances
+et que tous les tokens gloutons sont identiques, sinon le code `1`. Une trace
+est refusée si les fichiers du modèle ou les tokens du prompt diffèrent : cela
+évite de présenter deux expériences différentes comme une régression du moteur.
 
 ## Vérification
 
@@ -406,11 +466,11 @@ compilateur vectoriser la boucle interne.
 
 ## Limites et feuille de route
 
-Le chargement direct Llama SafeTensors et GGUF F32/F16/BF16/Q8_0 est opérationnel.
+Le chargement direct Llama SafeTensors et GGUF F32/F16/BF16/Q8_0/Q4_0 est opérationnel.
 La suite est :
 
-1. ajouter une quantification 4 bits simple après stabilisation de Q8 ;
-2. mesurer perplexité et consommation mémoire résidente par format ;
+1. mesurer les écarts de logits, la perplexité et la mémoire résidente de Q4_0 ;
+2. ajouter un convertisseur F16 vers Q4_0 pour produire nos propres GGUF ;
 3. affiner la vectorisation ARM/NEON et le découpage multithread ;
 4. ajouter un tokenizer SentencePiece pour les modèles qui n’utilisent pas BPE ;
 5. explorer Metal seulement après les kernels CPU natifs.
