@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import statistics
 from dataclasses import asdict, dataclass
@@ -119,6 +120,7 @@ def run_benchmark(path: Path, prompt: str, tokens: int, runs: int) -> BenchmarkR
             "numpy": np.__version__,
             "platform": platform.platform(),
             "processor": platform.processor(),
+            "local_llm_threads": os.environ.get("LOCAL_LLM_THREADS", "auto"),
         },
     )
 

@@ -5,7 +5,8 @@ on:
   pull_request:
 
 jobs:
-  unit-tests:
+  linux:
+    name: Linux · Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -17,3 +18,24 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install .
       - run: python -m unittest discover -s tests -v
+
+  apple-silicon-native:
+    name: Apple Silicon · native Q8/Q4 required
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install with native extension
+        run: |
+          python -m pip install -e .
+          python setup.py build_ext --inplace
+      - name: Require ARM64 and native quantized kernels
+        run: |
+          python -c "import platform; assert platform.machine() == 'arm64', platform.machine()"
+          python -c "from local_llm.gguf import q4_backend_name, q8_backend_name; assert (q8_backend_name(), q4_backend_name()) == ('native-cpp', 'native-cpp')"
+      - name: Run full test suite
+        run: python -m unittest discover -s tests -v
+      - name: Run tiny GGUF end-to-end fixture explicitly
+        run: python -m unittest tests.test_gguf.GGUFTests.test_full_toy_model_matches_npz_layout -v

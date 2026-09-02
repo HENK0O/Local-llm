@@ -1,13 +1,29 @@
 [build-system]
-requires = ["setuptools>=68", "numpy>=1.24"]
+requires = ["setuptools>=77", "wheel", "numpy>=1.24"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "local-llm"
-version = "0.13.0"
-description = "A minimal NumPy inference runtime for Llama-like language models"
+dynamic = ["version"]
+description = "A transparent, numerically validated CPU inference runtime for Llama-like models"
 readme = "README.md"
 requires-python = ">=3.9"
+license = "MIT"
+authors = [
+  { name = "HENK0O" },
+]
+keywords = ["llm", "inference", "gguf", "numpy", "apple-silicon"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Education",
+  "Operating System :: MacOS :: MacOS X",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
   "jinja2>=3.1",
   "numpy>=1.24",
@@ -28,3 +44,11 @@ include = ["local_llm*"]
 
 [tool.setuptools.package-data]
 local_llm = ["web/*.html"]
+
+[tool.setuptools.dynamic]
+version = { attr = "local_llm.version.__version__" }
+
+[project.urls]
+Homepage = "https://github.com/HENK0O/local-llm"
+Repository = "https://github.com/HENK0O/local-llm.git"
+Issues = "https://github.com/HENK0O/local-llm/issues"

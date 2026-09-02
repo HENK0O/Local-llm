@@ -3,6 +3,7 @@ from __future__ import annotations
 import codecs
 import json
 import math
+import socket
 import threading
 import time
 import uuid
@@ -13,11 +14,16 @@ from typing import Dict, Iterator, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 from .chat import ChatMessage, format_chat, require_chat_template
+from .evaluation import capture_external_reference, capture_trace, compare_traces
 from .generation import GenerationStats, generate_tokens
 from .loading import load_runtime
+from .version import __version__
 
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_REQUEST_TOKENS = 512
+DEFAULT_MAX_CONNECTIONS = 8
+REQUEST_TIMEOUT_SECONDS = 30
 WEB_INDEX = Path(__file__).with_name("web") / "index.html"
 
 
@@ -49,7 +55,14 @@ class CompletionResult:
     finish_reason: str
 
 
-def parse_chat_request(payload: object, default_max_tokens: int = 128) -> ChatRequest:
+@dataclass(frozen=True)
+class BenchmarkRequest:
+    prompt: str
+    tokens: int
+
+
+def parse_chat_request(payload: object, default_max_tokens: int = 128,
+                       max_request_tokens: int = MAX_REQUEST_TOKENS) -> ChatRequest:
     if not isinstance(payload, dict):
         raise ValueError("request body must be a JSON object")
     raw_messages = payload.get("messages")
@@ -87,8 +100,8 @@ def parse_chat_request(payload: object, default_max_tokens: int = 128) -> ChatRe
     top_p = number("top_p", None)
     stream = payload.get("stream", False)
     template_name = payload.get("chat_template")
-    if max_tokens is None or max_tokens <= 0:
-        raise ValueError("max_tokens must be positive")
+    if max_tokens is None or not 1 <= max_tokens <= max_request_tokens:
+        raise ValueError(f"max_tokens must be between 1 and {max_request_tokens}")
     if temperature is None or temperature < 0:
         raise ValueError("temperature must be non-negative")
     if not math.isfinite(temperature):
@@ -109,17 +122,47 @@ def parse_chat_request(payload: object, default_max_tokens: int = 128) -> ChatRe
                        stream, template_name)
 
 
+def parse_benchmark_request(payload: object) -> BenchmarkRequest:
+    if not isinstance(payload, dict):
+        raise ValueError("request body must be a JSON object")
+    prompt = payload.get("prompt")
+    tokens = payload.get("tokens", 8)
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("prompt must be a non-empty string")
+    if isinstance(tokens, bool) or not isinstance(tokens, int) or not 1 <= tokens <= 32:
+        raise ValueError("tokens must be an integer between 1 and 32")
+    return BenchmarkRequest(prompt.strip(), tokens)
+
+
 class ChatService:
-    def __init__(self, model_path: Path, default_max_tokens: int = 128) -> None:
+    def __init__(self, model_path: Path, default_max_tokens: int = 128,
+                 reference: Optional[Path] = None,
+                 reference_repo: Optional[Path] = None,
+                 max_request_tokens: int = MAX_REQUEST_TOKENS) -> None:
         self.model_path = Path(model_path)
         self.model, self.tokenizer = load_runtime(self.model_path)
         require_chat_template(self.tokenizer)
         self.model_name = self.model_path.stem
         self.default_max_tokens = default_max_tokens
+        self.max_request_tokens = max_request_tokens
+        if not 1 <= self.default_max_tokens <= self.max_request_tokens:
+            raise ValueError("default max tokens must not exceed the request token limit")
+        self.reference = Path(reference) if reference is not None else None
+        self.reference_repo = Path(reference_repo) if reference_repo is not None else None
+        if self.reference is not None and not self.reference.is_file():
+            raise FileNotFoundError(f"reference not found: {self.reference}")
+        if self.reference_repo is not None and not self.reference_repo.is_dir():
+            raise FileNotFoundError(f"reference repository not found: {self.reference_repo}")
         self._generation_lock = threading.Lock()
 
+    @property
+    def reference_name(self) -> str:
+        return self.reference.name if self.reference is not None else "Recalcul complet"
+
     def parse(self, payload: object) -> ChatRequest:
-        request = parse_chat_request(payload, self.default_max_tokens)
+        request = parse_chat_request(
+            payload, self.default_max_tokens, self.max_request_tokens
+        )
         require_chat_template(self.tokenizer, request.template_name)
         return request
 
@@ -162,20 +205,117 @@ class ChatService:
         return CompletionResult("".join(text_parts), token_ids, prompt_tokens, stats,
                                 "stop" if stopped else "length")
 
+    @staticmethod
+    def _trace_speed(trace, prompt_tokens: int) -> Dict[str, float]:
+        decoded = max(0, len(trace.generated_token_ids) - 1)
+        return {
+            "prefill_tokens_per_second": (
+                prompt_tokens / trace.prefill_seconds if trace.prefill_seconds else 0.0
+            ),
+            "decode_tokens_per_second": (
+                decoded / trace.decode_seconds if trace.decode_seconds else 0.0
+            ),
+        }
+
+    def benchmark(self, payload: object) -> Dict:
+        request = parse_benchmark_request(payload)
+        prompt = format_chat([
+            ChatMessage("system", "Tu es un assistant utile. Réponds en français, sauf si "
+                        "l’utilisateur demande une autre langue."),
+            ChatMessage("user", request.prompt),
+        ], self.tokenizer)
+        prompt_ids = self.tokenizer.encode(prompt)
+        with self._generation_lock:
+            optimized = capture_trace(self.model, prompt_ids, request.tokens, use_cache=True)
+            if self.reference is None:
+                reference = capture_trace(self.model, prompt_ids, request.tokens, use_cache=False)
+                reference_kind = "full_recompute"
+                reference_label = "Même moteur · recalcul complet"
+            else:
+                reference, reference_label = capture_external_reference(
+                    self.model_path, self.reference, self.reference_repo,
+                    prompt_ids, request.tokens,
+                )
+                reference_kind = "external"
+
+        comparison = compare_traces(optimized, reference, 2e-4, 2e-4)
+        optimized_ids = optimized.generated_token_ids.tolist()
+        reference_ids = reference.generated_token_ids.tolist()
+        optimized_speed = self._trace_speed(optimized, len(prompt_ids))
+        reference_speed = self._trace_speed(reference, len(prompt_ids))
+        return {
+            "model": self.model_name,
+            "reference": {"kind": reference_kind, "name": reference_label},
+            "prompt_tokens": len(prompt_ids),
+            "requested_tokens": request.tokens,
+            "optimized": {
+                "name": "local-llm optimisé",
+                "text": self.tokenizer.decode(optimized_ids),
+                "token_ids": optimized_ids,
+                "kv_cache_bytes": optimized.kv_cache_bytes,
+                **optimized_speed,
+            },
+            "baseline": {
+                "name": reference_label,
+                "text": self.tokenizer.decode(reference_ids),
+                "token_ids": reference_ids,
+                "kv_cache_bytes": reference.kv_cache_bytes,
+                **reference_speed,
+            },
+            "comparison": {
+                "tokens_identical": comparison.greedy_tokens_identical,
+                "within_tolerance": comparison.within_tolerance,
+                "max_absolute_error": comparison.max_absolute_error,
+                "mean_absolute_error": comparison.mean_absolute_error,
+            },
+            "passed": comparison.greedy_tokens_identical and comparison.within_tolerance,
+        }
+
 
 class LocalLLMHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address: Tuple[str, int], service: ChatService) -> None:
+    def __init__(self, address: Tuple[str, int], service: ChatService,
+                 max_connections: int = DEFAULT_MAX_CONNECTIONS) -> None:
+        if not 1 <= max_connections <= 128:
+            raise ValueError("max connections must be between 1 and 128")
         self.service = service
+        self.max_connections = max_connections
+        self._connection_slots = threading.BoundedSemaphore(max_connections)
         super().__init__(address, LocalLLMRequestHandler)
+
+    def process_request(self, request: socket.socket, client_address) -> None:
+        if not self._connection_slots.acquire(blocking=False):
+            try:
+                request.sendall(
+                    b"HTTP/1.0 503 Service Unavailable\r\n"
+                    b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+            finally:
+                self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._connection_slots.release()
+            raise
+
+    def process_request_thread(self, request: socket.socket, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._connection_slots.release()
 
 
 class LocalLLMRequestHandler(BaseHTTPRequestHandler):
     server: LocalLLMHTTPServer
     protocol_version = "HTTP/1.0"
-    server_version = "local-llm/0.9"
+    server_version = f"local-llm/{__version__}"
+
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(REQUEST_TIMEOUT_SECONDS)
 
     def _send_bytes(self, status: int, data: bytes, content_type: str) -> None:
         self.send_response(status)
@@ -194,7 +334,8 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(data)
 
@@ -216,7 +357,12 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             self._send_bytes(204, b"", "image/x-icon")
             return
         if path == "/health":
-            self._send_json(200, {"status": "ok", "model": self.server.service.model_name})
+            self._send_json(200, {
+                "status": "ok",
+                "model": self.server.service.model_name,
+                "benchmark_reference": self.server.service.reference_name,
+                "external_reference": self.server.service.reference is not None,
+            })
             return
         if path == "/v1/models":
             self._send_json(200, {"object": "list", "data": [{
@@ -228,11 +374,26 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
         self._error(404, "route not found")
 
     def do_OPTIONS(self) -> None:
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        # Cross-origin browser access is intentionally disabled. The bundled UI
+        # is same-origin and therefore does not require CORS preflights.
+        self.send_response(405)
+        self.send_header("Allow", "GET, POST")
+        self.send_header("Content-Length", "0")
         self.end_headers()
+
+    def _same_origin(self) -> bool:
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True  # CLI clients such as curl do not send Origin.
+        parsed = urlsplit(origin)
+        host = self.headers.get("Host", "")
+        return (
+            parsed.scheme in {"http", "https"}
+            and parsed.netloc == host
+            and not parsed.path.strip("/")
+            and not parsed.query
+            and not parsed.fragment
+        )
 
     def _read_payload(self) -> object:
         value = self.headers.get("Content-Length")
@@ -254,11 +415,23 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
         return "chatcmpl-local-" + uuid.uuid4().hex
 
     def do_POST(self) -> None:
-        if self._path() != "/v1/chat/completions":
+        path = self._path()
+        if path not in {"/v1/chat/completions", "/v1/benchmark"}:
             self._error(404, "route not found")
             return
+        if not self._same_origin():
+            self._error(403, "cross-origin requests are disabled")
+            return
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        if content_type != "application/json":
+            self._error(415, "Content-Type must be application/json")
+            return
         try:
-            request = self.server.service.parse(self._read_payload())
+            payload = self._read_payload()
+            if path == "/v1/benchmark":
+                self._send_json(200, self.server.service.benchmark(payload))
+                return
+            request = self.server.service.parse(payload)
             if request.stream:
                 self._stream_completion(request)
             else:
@@ -305,7 +478,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self._write_event({
             "id": response_id, "object": "chat.completion.chunk", "created": created,
@@ -363,18 +536,33 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
 
 
 def create_server(model_path: Path, host: str = "127.0.0.1", port: int = 8080,
-                  default_max_tokens: int = 128) -> LocalLLMHTTPServer:
+                  default_max_tokens: int = 128, reference: Optional[Path] = None,
+                  reference_repo: Optional[Path] = None,
+                  max_request_tokens: int = MAX_REQUEST_TOKENS,
+                  max_connections: int = DEFAULT_MAX_CONNECTIONS,
+                  allow_remote: bool = False) -> LocalLLMHTTPServer:
     if not 0 <= port <= 65535:
         raise ValueError("port must be between 0 and 65535")
-    return LocalLLMHTTPServer((host, port), ChatService(model_path, default_max_tokens))
+    if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
+        raise ValueError("remote binding requires --allow-remote")
+    service = ChatService(model_path, default_max_tokens, reference, reference_repo,
+                          max_request_tokens)
+    return LocalLLMHTTPServer((host, port), service, max_connections)
 
 
 def serve(model_path: Path, host: str = "127.0.0.1", port: int = 8080,
-          default_max_tokens: int = 128) -> None:
-    server = create_server(model_path, host, port, default_max_tokens)
+          default_max_tokens: int = 128, reference: Optional[Path] = None,
+          reference_repo: Optional[Path] = None,
+          max_request_tokens: int = MAX_REQUEST_TOKENS,
+          max_connections: int = DEFAULT_MAX_CONNECTIONS,
+          allow_remote: bool = False) -> None:
+    server = create_server(model_path, host, port, default_max_tokens,
+                           reference, reference_repo, max_request_tokens,
+                           max_connections, allow_remote)
     address, actual_port = server.server_address[:2]
     print(f"local-llm server listening on http://{address}:{actual_port}")
     print(f"model: {server.service.model_name} | POST /v1/chat/completions")
+    print(f"benchmark: {server.service.reference_name} | POST /v1/benchmark")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

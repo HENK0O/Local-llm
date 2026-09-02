@@ -17,6 +17,34 @@ def linear(x: Array, weight: Array) -> Array:
         return np.matmul(x, weight.T)
 
 
+def linear_pair(x: Array, first: Array, second: Array) -> tuple[Array, Array]:
+    """Apply two projections while allowing quantized backends to share dispatch."""
+    pair = getattr(first, "matmul_pair", None)
+    if pair is not None:
+        result = pair(second, x)
+        if result is not NotImplemented:
+            return result
+    return linear(x, first), linear(x, second)
+
+
+def linear_swiglu(x: Array, gate_weight: Array, up_weight: Array) -> Array:
+    """Fuse quantized gate/up projections and SwiGLU when the backend supports it."""
+    fused = getattr(gate_weight, "matmul_swiglu", None)
+    if fused is not None:
+        result = fused(up_weight, x)
+        if result is not NotImplemented:
+            return result
+    return silu(linear(x, gate_weight)) * linear(x, up_weight)
+
+
+def linear_add(x: Array, weight: Array, residual: Array) -> Array:
+    """Fuse a quantized projection with its residual addition when possible."""
+    fused = getattr(weight, "matmul_add", None)
+    if fused is not None:
+        return fused(x, residual)
+    return residual + linear(x, weight)
+
+
 def rms_norm(x: Array, weight: Array, eps: float) -> Array:
     variance = np.mean(np.square(x.astype(np.float32)), axis=-1, keepdims=True)
     normalized = x * (1.0 / np.sqrt(variance + eps))
@@ -25,7 +53,12 @@ def rms_norm(x: Array, weight: Array, eps: float) -> Array:
 
 def silu(x: Array) -> Array:
     x32 = x.astype(np.float32)
-    return x32 / (1.0 + np.exp(-x32))
+    positive = x32 >= 0
+    result = np.empty_like(x32)
+    result[positive] = x32[positive] / (1.0 + np.exp(-x32[positive]))
+    exponential = np.exp(x32[~positive])
+    result[~positive] = x32[~positive] * exponential / (1.0 + exponential)
+    return result
 
 
 def sigmoid(x: Array) -> Array:

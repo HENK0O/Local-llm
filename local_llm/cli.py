@@ -153,6 +153,16 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8080)
     serve.add_argument("--max-tokens", type=int, default=128,
                        help="default maximum generated tokens per request")
+    serve.add_argument("--max-request-tokens", type=int, default=512,
+                       help="hard generation limit accepted by the HTTP API")
+    serve.add_argument("--max-connections", type=int, default=8,
+                       help="maximum simultaneous HTTP connections")
+    serve.add_argument("--allow-remote", action="store_true",
+                       help="allow binding to a non-loopback address (no authentication)")
+    serve.add_argument("--reference", type=Path,
+                       help="optional .pt/.pth checkpoint or .npz trace for web comparisons")
+    serve.add_argument("--reference-repo", type=Path,
+                       help="repository containing model.py for a Baguette checkpoint")
 
     convert = subparsers.add_parser(
         "convert-baguette", help="convert a Baguette .pt checkpoint for local-llm"
@@ -347,8 +357,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             parser.error("--port must be between 0 and 65535")
         if args.max_tokens <= 0:
             parser.error("--max-tokens must be positive")
+        if not 1 <= args.max_request_tokens:
+            parser.error("--max-request-tokens must be positive")
+        if args.max_tokens > args.max_request_tokens:
+            parser.error("--max-tokens must not exceed --max-request-tokens")
+        if not 1 <= args.max_connections <= 128:
+            parser.error("--max-connections must be between 1 and 128")
         try:
-            serve_http(args.model, args.host, args.port, args.max_tokens)
+            serve_http(args.model, args.host, args.port, args.max_tokens,
+                       args.reference, args.reference_repo, args.max_request_tokens,
+                       args.max_connections, args.allow_remote)
         except (FileNotFoundError, KeyError, OSError, TypeError, ValueError) as exc:
             parser.error(str(exc))
         return 0

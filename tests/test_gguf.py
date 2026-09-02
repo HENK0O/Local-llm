@@ -12,6 +12,7 @@ from local_llm.gguf import (
 )
 from local_llm.loading import load_runtime
 from local_llm.model import LlamaModel
+from local_llm.ops import silu
 from local_llm.toy import make_toy_weights
 
 
@@ -181,6 +182,9 @@ class GGUFTests(unittest.TestCase):
             expected = x @ weights.T
             actual = matrix.matmul(x)
             np.testing.assert_allclose(actual, expected, rtol=0.08, atol=0.12)
+            residual = rng.normal(size=actual.shape).astype(np.float32)
+            np.testing.assert_allclose(matrix.matmul_add(x, residual), actual + residual,
+                                       rtol=2e-5, atol=1e-4)
             self.assertEqual(matrix[2].shape, (64,))
 
     def test_q4_matrix_unpacks_ggml_nibble_order_and_multiplies(self):
@@ -250,6 +254,31 @@ class GGUFTests(unittest.TestCase):
             np.testing.assert_allclose(
                 matrix.matmul(inputs), matrix.matmul_numpy(inputs), rtol=2e-5, atol=1e-4
             )
+
+    @unittest.skipUnless(q8_backend_name() == "native-cpp", "native Q8 extension is not built")
+    def test_native_q8_pair_matches_two_numpy_kernels(self):
+        rng = np.random.default_rng(41)
+        first_storage = np.empty((513, 30), dtype=Q8Matrix._dtype)
+        second_storage = np.empty((513, 30), dtype=Q8Matrix._dtype)
+        for storage in (first_storage, second_storage):
+            storage["scale"] = rng.uniform(0.001, 0.05, size=(513, 30)).astype(np.float16)
+            storage["values"] = rng.integers(-127, 128, size=(513, 30, 32), dtype=np.int8)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first_path, second_path = root / "first.bin", root / "second.bin"
+            first_path.write_bytes(first_storage.tobytes())
+            second_path.write_bytes(second_storage.tobytes())
+            first = Q8Matrix(first_path, 0, (513, 960))
+            second = Q8Matrix(second_path, 0, (513, 960))
+            inputs = rng.normal(size=(4, 960)).astype(np.float32)
+            actual_first, actual_second = first.matmul_pair(second, inputs)
+            np.testing.assert_allclose(actual_first, first.matmul_numpy(inputs),
+                                       rtol=2e-5, atol=1e-4)
+            np.testing.assert_allclose(actual_second, second.matmul_numpy(inputs),
+                                       rtol=2e-5, atol=1e-4)
+            expected_swiglu = silu(first.matmul_numpy(inputs)) * second.matmul_numpy(inputs)
+            np.testing.assert_allclose(first.matmul_swiglu(second, inputs), expected_swiglu,
+                                       rtol=2e-4, atol=1e-3)
 
     @unittest.skipUnless(q4_backend_name() == "native-cpp", "native Q4 extension is not built")
     def test_native_q4_matches_numpy_kernel(self):

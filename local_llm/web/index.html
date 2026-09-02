@@ -329,6 +329,95 @@
 
     .clear:hover { color: var(--text); border-color: #404040; }
 
+    .topbar-actions { display: flex; align-items: center; gap: 8px; }
+    .benchmark-button { color: #bcbcbc; }
+
+    dialog {
+      width: min(880px, calc(100vw - 32px));
+      max-height: calc(100vh - 48px);
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid #343434;
+      border-radius: 10px;
+      background: #111;
+      color: var(--text);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, .65);
+    }
+
+    dialog::backdrop { background: rgba(0, 0, 0, .72); }
+    .benchmark-shell { display: grid; max-height: calc(100vh - 48px); }
+    .benchmark-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 20px 22px;
+      border-bottom: 1px solid var(--line);
+    }
+    .benchmark-head h2 { margin: 0 0 5px; font-size: 16px; font-weight: 600; }
+    .benchmark-head p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .dialog-close {
+      padding: 3px 7px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 22px;
+      cursor: pointer;
+    }
+    .benchmark-body { padding: 20px 22px 22px; overflow-y: auto; }
+    .benchmark-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+    .benchmark-form textarea {
+      min-height: 64px;
+      padding: 11px 12px;
+      border: 1px solid #343434;
+      border-radius: 7px;
+      background: #181818;
+    }
+    .benchmark-run {
+      align-self: stretch;
+      padding: 0 18px;
+      border: 1px solid #3d4d40;
+      border-radius: 7px;
+      background: #1d2920;
+      color: #b9e7c0;
+      cursor: pointer;
+    }
+    .benchmark-run:disabled { opacity: .5; cursor: wait; }
+    .benchmark-options {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+      color: #707070;
+      font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .benchmark-options input { width: 90px; accent-color: #777; }
+    .benchmark-summary {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      margin-top: 20px;
+      padding: 11px 13px;
+      border: 1px solid #2c2c2c;
+      border-radius: 7px;
+      color: #aaa;
+      font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .benchmark-summary.visible { display: flex; }
+    .benchmark-summary.pass { border-color: #29452f; color: #8bd398; }
+    .benchmark-summary.fail { border-color: #55312e; color: var(--danger); }
+    .comparison-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+    .comparison-card { min-width: 0; padding: 15px; border: 1px solid #292929; border-radius: 7px; background: #151515; }
+    .comparison-card h3 {
+      margin: 0 0 11px;
+      color: #999;
+      font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-weight: 500;
+    }
+    .comparison-output { min-height: 70px; margin: 0 0 14px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .comparison-stats { display: grid; gap: 5px; color: #777; font: 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .benchmark-error { margin: 16px 0 0; color: var(--danger); font-size: 12px; }
+
     #conversation {
       padding: 38px 20px 28px;
       scrollbar-color: #303030 transparent;
@@ -482,6 +571,11 @@
       #statusText, .model-line > span:nth-child(3) { display: none; }
       .clear { padding: 5px 8px; font-size: 0; }
       .clear::after { content: "+"; font-size: 18px; }
+      .benchmark-button { font-size: 11px; }
+      .benchmark-button::after { content: none; }
+      .comparison-grid { grid-template-columns: 1fr; }
+      .benchmark-form { grid-template-columns: 1fr; }
+      .benchmark-run { min-height: 42px; }
       #conversation { padding: 24px 15px 18px; }
       .welcome h1 { font-size: 32px; }
       .message, .message.user { grid-template-columns: 52px minmax(0, 1fr); gap: 10px; padding: 18px 0; }
@@ -502,7 +596,10 @@
         <span>·</span>
         <span id="modelName">chargement…</span>
       </div>
-      <button class="clear" id="clearButton" type="button">Nouvelle conversation</button>
+      <div class="topbar-actions">
+        <button class="clear benchmark-button" id="benchmarkButton" type="button">Comparer</button>
+        <button class="clear" id="clearButton" type="button">Nouvelle conversation</button>
+      </div>
     </header>
 
     <section id="conversation" aria-live="polite">
@@ -536,12 +633,51 @@
     </div>
   </div>
 
+  <dialog id="benchmarkDialog">
+    <div class="benchmark-shell">
+      <header class="benchmark-head">
+        <div>
+          <h2>Comparer l’inférence</h2>
+          <p id="referenceDescription">local-llm optimisé face au recalcul complet</p>
+        </div>
+        <button class="dialog-close" id="benchmarkClose" type="button" aria-label="Fermer">×</button>
+      </header>
+      <div class="benchmark-body">
+        <form class="benchmark-form" id="benchmarkForm">
+          <textarea id="benchmarkPrompt" rows="2" aria-label="Question de test">Explique simplement à quoi sert le format GGUF.</textarea>
+          <button class="benchmark-run" id="benchmarkRun" type="submit">Lancer le test</button>
+        </form>
+        <label class="benchmark-options">
+          tokens <output id="benchmarkTokensValue">8</output>
+          <input id="benchmarkTokens" type="range" min="2" max="32" step="2" value="8">
+          <span>· génération gloutonne identique</span>
+        </label>
+        <div class="benchmark-summary" id="benchmarkSummary"></div>
+        <div class="comparison-grid" id="comparisonGrid" hidden>
+          <article class="comparison-card">
+            <h3 id="optimizedName">local-llm optimisé</h3>
+            <p class="comparison-output" id="optimizedOutput"></p>
+            <div class="comparison-stats" id="optimizedStats"></div>
+          </article>
+          <article class="comparison-card">
+            <h3 id="baselineName">référence</h3>
+            <p class="comparison-output" id="baselineOutput"></p>
+            <div class="comparison-stats" id="baselineStats"></div>
+          </article>
+        </div>
+        <p class="benchmark-error" id="benchmarkError" hidden></p>
+      </div>
+    </div>
+  </dialog>
+
   <script>
     const conversation = document.querySelector('#conversation');
     const composer = document.querySelector('#composer');
     const promptInput = document.querySelector('#prompt');
     const sendButton = document.querySelector('#sendButton');
     const clearButton = document.querySelector('#clearButton');
+    const benchmarkButton = document.querySelector('#benchmarkButton');
+    const benchmarkDialog = document.querySelector('#benchmarkDialog');
     const metrics = document.querySelector('#metrics');
     const temperature = document.querySelector('#temperature');
     const maxTokens = document.querySelector('#maxTokens');
@@ -564,6 +700,9 @@
         if (!response.ok) throw new Error('indisponible');
         const health = await response.json();
         document.querySelector('#modelName').textContent = health.model;
+        document.querySelector('#referenceDescription').textContent = health.external_reference
+          ? `local-llm optimisé face à ${health.benchmark_reference}`
+          : 'local-llm optimisé face au même moteur sans cache KV';
         document.title = `${health.model} · local-llm`;
         setStatus(true, 'Moteur prêt');
       } catch (_) {
@@ -598,6 +737,70 @@
 
     function formatBytes(bytes) {
       return `${(bytes / 1024 / 1024).toFixed(1)} Mio KV`;
+    }
+
+    function speed(value) {
+      return value > 0 ? `${value.toFixed(1)} tok/s` : 'non mesuré';
+    }
+
+    function renderBenchmarkSide(stats, target) {
+      target.replaceChildren();
+      const values = [
+        `prefill  ${speed(stats.prefill_tokens_per_second)}`,
+        `decode   ${speed(stats.decode_tokens_per_second)}`,
+        `cache KV ${(stats.kv_cache_bytes / 1024 / 1024).toFixed(1)} Mio`,
+      ];
+      values.forEach(value => {
+        const line = document.createElement('span');
+        line.textContent = value;
+        target.append(line);
+      });
+    }
+
+    async function runBenchmark(event) {
+      event.preventDefault();
+      const run = document.querySelector('#benchmarkRun');
+      const summary = document.querySelector('#benchmarkSummary');
+      const error = document.querySelector('#benchmarkError');
+      const grid = document.querySelector('#comparisonGrid');
+      run.disabled = true;
+      run.textContent = 'Test en cours…';
+      summary.className = 'benchmark-summary visible';
+      summary.textContent = 'Calcul des deux passages…';
+      error.hidden = true;
+      grid.hidden = true;
+      try {
+        const response = await fetch('/v1/benchmark', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: document.querySelector('#benchmarkPrompt').value,
+            tokens: Number(document.querySelector('#benchmarkTokens').value),
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error?.message || `Erreur HTTP ${response.status}`);
+        document.querySelector('#optimizedName').textContent = result.optimized.name;
+        document.querySelector('#baselineName').textContent = result.baseline.name;
+        document.querySelector('#optimizedOutput').textContent = result.optimized.text || '∅';
+        document.querySelector('#baselineOutput').textContent = result.baseline.text || '∅';
+        renderBenchmarkSide(result.optimized, document.querySelector('#optimizedStats'));
+        renderBenchmarkSide(result.baseline, document.querySelector('#baselineStats'));
+        const comparison = result.comparison;
+        summary.className = `benchmark-summary visible ${result.passed ? 'pass' : 'fail'}`;
+        summary.textContent = result.passed
+          ? `✓ mêmes tokens · erreur logits max ${comparison.max_absolute_error.toExponential(2)}`
+          : `✕ différence détectée · erreur logits max ${comparison.max_absolute_error.toExponential(2)}`;
+        grid.hidden = false;
+      } catch (reason) {
+        summary.className = 'benchmark-summary visible fail';
+        summary.textContent = 'Le test a échoué';
+        error.textContent = reason.message;
+        error.hidden = false;
+      } finally {
+        run.disabled = false;
+        run.textContent = 'Lancer le test';
+      }
     }
 
     async function submitMessage(text) {
@@ -709,6 +912,15 @@
       reset.innerHTML = '<div class="prompt-symbol">$ clear --history</div>';
       conversation.append(reset);
       metrics.textContent = 'Prêt';
+    });
+    benchmarkButton.addEventListener('click', () => benchmarkDialog.showModal());
+    document.querySelector('#benchmarkClose').addEventListener('click', () => benchmarkDialog.close());
+    document.querySelector('#benchmarkForm').addEventListener('submit', runBenchmark);
+    document.querySelector('#benchmarkTokens').addEventListener('input', event => {
+      document.querySelector('#benchmarkTokensValue').textContent = event.target.value;
+    });
+    benchmarkDialog.addEventListener('click', event => {
+      if (event.target === benchmarkDialog) benchmarkDialog.close();
     });
     document.querySelectorAll('.suggestion').forEach(button => {
       button.addEventListener('click', () => submitMessage(button.textContent));

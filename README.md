@@ -1,22 +1,64 @@
 # local-llm
 
-Un moteur d’inférence Llama minimal écrit en Python et NumPy. Le passage avant est
-entièrement implémenté dans ce dépôt : aucune bibliothèque d’inférence et aucun
-appel à Transformers ne sont utilisés.
+[![Tests](https://github.com/HENK0O/local-llm/actions/workflows/tests.yml/badge.svg)](https://github.com/HENK0O/local-llm/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](pyproject.toml)
 
-Le runtime comprend :
+**Un runtime Llama transparent, vérifiable numériquement et accéléré sur CPU.**
 
-- embeddings, RMSNorm, RoPE, attention causale multi-têtes/GQA et SwiGLU ;
-- variantes QK-Norm, RoPE partiel et attention gated utilisées par Baguette ;
-- prefill et décodage token par token avec cache KV préalloué et GQA sans duplication ;
-- tokenizer jouet UTF-8 et tokenizer GPT-2 byte-level BPE réel ;
-- lecteur SafeTensors natif F32/F16/BF16, mono-fichier ou shardé ;
-- lecteur GGUF v3 natif F32/F16/BF16/Q8_0/Q4_0 avec métadonnées, tokenizer et `mmap` ;
-- kernels Q8_0 et Q4_0 C++ optionnels, multithread, avec SIMD NEON pour Q8 sur Apple Silicon ;
-- génération gloutonne, température, top-k, top-p et graine reproductible ;
-- streaming, templates de chat Jinja automatiques avec historique, débit et cache KV ;
-- serveur HTTP local avec réponses JSON ou streaming SSE ;
-- tests comparant les logits et la génération avec une voie lente sans cache.
+`local-llm` montre toute la chaîne d'inférence sans la cacher derrière
+Transformers ou une bibliothèque d'inférence : chargement des poids, tokenizer,
+passage avant, cache KV, génération, GGUF, quantification et kernels natifs. Le
+cœur reste lisible en Python/NumPy ; les chemins Q8/Q4 critiques sont accélérés
+en C++/NEON puis comparés aux logits et tokens du chemin de référence.
+
+Le but n'est pas de battre `llama.cpp` au nombre de modèles supportés. Le projet
+vise un moteur de référence **compréhensible, mesurable et assez rapide pour être
+utilisé localement**.
+
+## Essai rapide avec un vrai modèle
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e .
+local-llm run models/SmolLM2-360M-Instruct.official.Q8_0.gguf \
+  --chat --prompt "Explique simplement le cache KV." --max-new-tokens 80
+```
+
+Le fichier GGUF doit être placé dans `models/` ; les poids ne sont jamais ajoutés
+au dépôt. Pour une conversation avec streaming et statistiques :
+
+```bash
+local-llm serve models/SmolLM2-360M-Instruct.official.Q8_0.gguf
+```
+
+Puis ouvre [http://127.0.0.1:8080](http://127.0.0.1:8080).
+
+### Support actuel
+
+| Élément | Support |
+|---|---|
+| Architectures | Llama (MHA/GQA), Baguette non hybride |
+| Poids | SafeTensors F32/F16/BF16, GGUF v3 F32/F16/BF16/Q8_0/Q4_0 |
+| Tokenizers | UTF-8 pédagogique, GPT-2 byte-level BPE |
+| Inférence | prefill, cache KV préalloué, décodage autoregressif, sampling |
+| CPU | NumPy/BLAS ; C++ multithread ; SIMD NEON Apple Silicon |
+| Validation | logits, tokens gloutons, cache contre recalcul, traces externes |
+| Interfaces | CLI, chat interactif, streaming SSE, API HTTP locale |
+
+### Performances indicatives
+
+Mesures sur un MacBook Air Apple M5, modèle SmolLM2-360M-Instruct :
+
+| Backend | Poids | Decode | Résultat glouton |
+|---|---:|---:|---|
+| F16 / BLAS | 692 Mio | ~46 tok/s | référence |
+| Q8_0 / C++ NEON fusionné | 369 Mio | ~80 tok/s | tokens identiques |
+| Q8_0 / NumPy | 369 Mio | ~5 tok/s | tokens identiques |
+
+Les chiffres dépendent du prompt, de la longueur générée et de la machine. Les
+commandes reproductibles et la méthodologie sont détaillées plus bas.
 
 ## Démarrage rapide
 
@@ -143,6 +185,28 @@ les tokens en direct et permet de régler la température et la longueur maximal
 Le bouton carré interrompt une génération et « Nouvelle conversation » efface
 l'historique envoyé au modèle.
 
+Le bouton **Comparer** lance un test déterministe sur la même question. Sans
+configuration supplémentaire, il oppose le chemin optimisé (cache KV) au même
+moteur qui recalcule toute la séquence. Il affiche les deux sorties, l'identité
+des tokens gloutons, l'écart maximal entre les logits, les débits et la mémoire
+du cache. Le nombre de tokens est volontairement limité à 32 pour qu'un test sans
+cache ne monopolise pas la machine trop longtemps.
+
+Pour comparer directement le modèle Baguette converti avec son implémentation
+PyTorch d'origine, configure la référence au démarrage :
+
+```bash
+python -m local_llm serve models/baguette-123m-sft \
+  --port 8081 \
+  --reference /Users/henko/Documents/Code/LLM/baguette-123m-sft.pt \
+  --reference-repo /Users/henko/Documents/Code/LLM
+```
+
+La référence est chargée uniquement au lancement d'un test, pas pour chaque
+conversation. Cette comparaison mesure la **correction et les performances du
+moteur d'inférence** ; elle ne mesure pas l'intelligence du modèle, puisque les
+deux côtés utilisent exactement les mêmes poids et le même tokenizer.
+
 Une réponse JSON contient le texte, l'usage en tokens, le débit du prefill et du
 décodage ainsi que la taille du cache KV. `curl` reste utile pour tester l'API
 directement, mais n'est pas nécessaire pour utiliser l'interface :
@@ -177,9 +241,15 @@ chargé. L'API reprend la structure principale de Chat Completions, sans préten
 encore en couvrir toutes les options. Elle n'emploie aucune bibliothèque serveur
 externe et les générations sont sérialisées pour éviter de saturer le CPU.
 
-Le serveur n'a pas d'authentification. Garde l'adresse par défaut `127.0.0.1` ;
-n'utilise `0.0.0.0` que sur un réseau de confiance et après avoir ajouté une
-protection adaptée.
+Le serveur n'a pas d'authentification et reste donc local par défaut. Les appels
+provenant d'une autre origine web sont refusés, le corps doit être du JSON, une
+requête est limitée à 512 tokens générés et huit connexions peuvent être ouvertes
+simultanément. Ces bornes sont réglables avec `--max-request-tokens` et
+`--max-connections`.
+
+Une adresse non locale est refusée sans confirmation explicite. Pour écouter sur
+le réseau, il faut ajouter `--host 0.0.0.0 --allow-remote`. Ne le fais que sur un
+réseau de confiance ou derrière une couche d'authentification adaptée.
 
 ### Modèle Base de validation
 
@@ -241,6 +311,14 @@ Q4 backend: native-cpp
 
 La variable `LOCAL_LLM_DISABLE_NATIVE=1` force le chemin NumPy pour établir une
 baseline ou diagnostiquer le kernel C++.
+
+Sur Apple Silicon, le runtime utilise automatiquement les cœurs performance
+pour le décodage à un token et tous les cœurs disponibles pour le prefill. Le
+réglage peut être forcé pour mesurer une machine particulière :
+
+```bash
+LOCAL_LLM_THREADS=4 python -m local_llm benchmark model.gguf --tokens 48 --runs 5
+```
 
 ### Profiler le passage avant
 
@@ -466,23 +544,21 @@ d’environ `1.23e-5` en SafeTensors et `9.19e-6` avec le GGUF F16 officiel,
 en calcul CPU F32. Les 16 tokens gloutons de référence sont identiques dans les
 deux formats.
 
-Mesures indicatives sur la machine de développement :
-
-| Modèle et backend | Taille | Decode | Écart moyen des logits | Tokens gloutons |
-|---|---:|---:|---:|---|
-| SmolLM2-135M, F16/BLAS | 269 Mo | ~102 tok/s | `9.19e-6` | identiques |
-| SmolLM2-360M-Instruct, F16/BLAS | 692 Mio | ~46 tok/s | `1.06e-5` | identiques |
-| SmolLM2-360M-Instruct, Q8_0/C++ NEON | 369 Mio | ~59 tok/s | `1.12e-1` | identiques |
-| SmolLM2-360M-Instruct, Q8_0/NumPy | 369 Mio | ~5 tok/s | `1.12e-1` | identiques |
-
-Sur le même modèle Q8_0, le kernel C++ NEON accélère ici le décodage d'environ
-`12×` par rapport au kernel NumPy. Par rapport à l'ancien kernel C++ scalaire,
-le benchmark reproductible passe de `29,1` à `59,2 tok/s`, soit environ `+104 %`.
-Le prefill passe de `46,6` à `149,6 tok/s`. Les tokens gloutons restent
-identiques et l'écart maximal contre la trace pré-optimisation est `2,96e-5`.
+Sur le même modèle Q8_0, le chemin C++ accélère ici le décodage d'environ `16×`
+par rapport au fallback NumPy. Par rapport à l'ancien kernel C++ scalaire, le
+benchmark reproductible passe de `29,1` à `80,2 tok/s` et le prefill de `46,6`
+à `170,5 tok/s`. Le gain vient du SIMD NEON, des projections K/V et SwiGLU
+fusionnées, des résidus natifs, du choix automatique des threads et de la
+suppression d'allocations dans l'attention GQA. Les tokens gloutons restent
+identiques et l'écart maximal contre la trace pré-optimisation est `5,15e-5`.
 F16 reste rapide grâce à BLAS, tandis que Q8 réduit presque de moitié la taille
-des poids. Le kernel natif libère le GIL et répartit les lignes avec Grand
+des poids. Le kernel natif libère le GIL et distribue les lignes avec Grand
 Central Dispatch sur Apple Silicon.
+
+Un cache KV F16 a également été mesuré : il divisait bien la mémoire du cache
+par deux, mais ralentissait ce backend d'environ `7,5 %`. Le chemin rapide garde
+donc le cache F32 ; une optimisation n'est conservée que lorsqu'elle améliore
+réellement la métrique visée.
 
 ## Limites et feuille de route
 

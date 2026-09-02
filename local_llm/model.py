@@ -9,7 +9,9 @@ from numpy.typing import NDArray
 
 from .cache import KVCache
 from .config import ModelConfig
-from .ops import apply_rope, linear, rms_norm, sigmoid, silu, softmax
+from .ops import (
+    apply_rope, linear, linear_add, linear_pair, linear_swiglu, rms_norm, sigmoid, softmax,
+)
 from .profiling import OperationProfiler
 from .safetensors import load_directory as load_safetensors_directory
 
@@ -172,8 +174,11 @@ class LlamaModel:
             profiler.record("attention_norm", time.perf_counter() - started)
         started = time.perf_counter() if profiler is not None else 0.0
         query = linear(hidden, self.weights[f"{prefix}.self_attn.q_proj.weight"])
-        key = linear(hidden, self.weights[f"{prefix}.self_attn.k_proj.weight"])
-        value = linear(hidden, self.weights[f"{prefix}.self_attn.v_proj.weight"])
+        key, value = linear_pair(
+            hidden,
+            self.weights[f"{prefix}.self_attn.k_proj.weight"],
+            self.weights[f"{prefix}.self_attn.v_proj.weight"],
+        )
         if profiler is not None:
             profiler.record("qkv_projections", time.perf_counter() - started)
         query = query.reshape(-1, c.num_attention_heads, c.head_dim)
@@ -212,12 +217,16 @@ class LlamaModel:
         )
         started = time.perf_counter() if profiler is not None else 0.0
         scores = np.einsum(
-            "tkgd,skd->kgts", grouped_query, all_key, optimize=True
+            "tkgd,skd->kgts", grouped_query, all_key, optimize=False
         ) / np.sqrt(c.head_dim)
-        query_absolute = key_start + np.arange(query.shape[0])
-        key_positions = np.arange(all_key.shape[0])
-        causal_mask = key_positions[None, :] > query_absolute[:, None]
-        scores = np.where(causal_mask[None, None, :, :], -np.inf, scores)
+        # A one-token cached decode is necessarily the last position, so every
+        # key visible in the cache is causal. Avoid allocating a mask per layer.
+        if query.shape[0] > 1 or key_start == 0:
+            query_absolute = key_start + np.arange(query.shape[0])
+            key_positions = np.arange(all_key.shape[0])
+            causal_mask = key_positions[None, :] > query_absolute[:, None]
+            if np.any(causal_mask):
+                scores = np.where(causal_mask[None, None, :, :], -np.inf, scores)
         if profiler is not None:
             profiler.record("attention_scores", time.perf_counter() - started)
         started = time.perf_counter() if profiler is not None else 0.0
@@ -226,7 +235,7 @@ class LlamaModel:
             profiler.record("attention_softmax", time.perf_counter() - started)
         started = time.perf_counter() if profiler is not None else 0.0
         attention = np.einsum(
-            "kgts,skd->tkgd", probabilities, all_value, optimize=True
+            "kgts,skd->tkgd", probabilities, all_value, optimize=False
         )
         attention = attention.reshape(-1, c.num_attention_heads * c.head_dim)
         if profiler is not None:
@@ -239,7 +248,9 @@ class LlamaModel:
             if profiler is not None:
                 profiler.record("attention_gate", time.perf_counter() - started)
         started = time.perf_counter() if profiler is not None else 0.0
-        x = residual + linear(attention, self.weights[f"{prefix}.self_attn.o_proj.weight"])
+        x = linear_add(
+            attention, self.weights[f"{prefix}.self_attn.o_proj.weight"], residual
+        )
         if profiler is not None:
             profiler.record("attention_output", time.perf_counter() - started)
 
@@ -249,12 +260,17 @@ class LlamaModel:
         if profiler is not None:
             profiler.record("ffn_norm", time.perf_counter() - started)
         started = time.perf_counter() if profiler is not None else 0.0
-        gate = silu(linear(hidden, self.weights[f"{prefix}.mlp.gate_proj.weight"]))
-        up = linear(hidden, self.weights[f"{prefix}.mlp.up_proj.weight"])
+        activated = linear_swiglu(
+            hidden,
+            self.weights[f"{prefix}.mlp.gate_proj.weight"],
+            self.weights[f"{prefix}.mlp.up_proj.weight"],
+        )
         if profiler is not None:
             profiler.record("ffn_gate_up", time.perf_counter() - started)
         started = time.perf_counter() if profiler is not None else 0.0
-        result = residual + linear(gate * up, self.weights[f"{prefix}.mlp.down_proj.weight"])
+        result = linear_add(
+            activated, self.weights[f"{prefix}.mlp.down_proj.weight"], residual
+        )
         if profiler is not None:
             profiler.record("ffn_down", time.perf_counter() - started)
         return result

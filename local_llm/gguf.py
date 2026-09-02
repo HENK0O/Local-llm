@@ -23,6 +23,11 @@ try:
 except ImportError:
     _native_q8_matmul = None
 
+try:
+    from ._native import q8_matmul_pair as _native_q8_matmul_pair
+except ImportError:
+    _native_q8_matmul_pair = None
+
 
 GGUF_MAGIC = b"GGUF"
 GGUF_VERSION = 3
@@ -108,6 +113,45 @@ class Q8Matrix:
         if _native_q8_matmul is not None and os.environ.get("LOCAL_LLM_DISABLE_NATIVE") != "1":
             return _native_q8_matmul(self.blocks, np.ascontiguousarray(values))
         return self.matmul_numpy(values, rows_per_chunk)
+
+    def matmul_add(self, x: np.ndarray, residual: np.ndarray) -> np.ndarray:
+        values = np.asarray(x, dtype=np.float32)
+        add = np.asarray(residual, dtype=np.float32)
+        expected = (*values.shape[:-1], self.shape[0])
+        if add.shape != expected:
+            raise ValueError(f"Q8 residual shape {add.shape} != {expected}")
+        if _native_q8_matmul is not None and os.environ.get("LOCAL_LLM_DISABLE_NATIVE") != "1":
+            return _native_q8_matmul(
+                self.blocks, np.ascontiguousarray(values), np.ascontiguousarray(add)
+            )
+        return self.matmul_numpy(values) + add
+
+    def matmul_pair(self, other: Any, x: np.ndarray) -> Any:
+        if not isinstance(other, Q8Matrix) or other.shape != self.shape:
+            return NotImplemented
+        values = np.asarray(x, dtype=np.float32)
+        if values.shape[-1] != self.shape[-1]:
+            raise ValueError(f"Q8 matmul input size {values.shape[-1]} != {self.shape[-1]}")
+        if (_native_q8_matmul_pair is not None and
+                os.environ.get("LOCAL_LLM_DISABLE_NATIVE") != "1"):
+            return _native_q8_matmul_pair(
+                self.blocks, other.blocks, np.ascontiguousarray(values)
+            )
+        return self.matmul_numpy(values), other.matmul_numpy(values)
+
+    def matmul_swiglu(self, other: Any, x: np.ndarray) -> Any:
+        if not isinstance(other, Q8Matrix) or other.shape != self.shape:
+            return NotImplemented
+        values = np.asarray(x, dtype=np.float32)
+        if values.shape[-1] != self.shape[-1]:
+            raise ValueError(f"Q8 matmul input size {values.shape[-1]} != {self.shape[-1]}")
+        if (_native_q8_matmul_pair is not None and
+                os.environ.get("LOCAL_LLM_DISABLE_NATIVE") != "1"):
+            return _native_q8_matmul_pair(
+                self.blocks, other.blocks, np.ascontiguousarray(values), True
+            )
+        gate, up = self.matmul_numpy(values), other.matmul_numpy(values)
+        return gate / (1.0 + np.exp(-gate)) * up
 
 
 def q8_backend_name() -> str:

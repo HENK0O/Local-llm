@@ -7,6 +7,7 @@ from .gguf import GGUFReader
 from .loading import load_runtime
 from .model import LlamaModel
 from .tokenizer import BPETokenizer, ByteTokenizer, load_tokenizer
+from .version import __version__
 
 __all__ = [
     "BPETokenizer",
@@ -22,4 +23,3 @@ __all__ = [
     "load_runtime",
     "load_tokenizer",
 ]
-__version__ = "0.13.0"

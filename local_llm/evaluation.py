@@ -207,32 +207,78 @@ def capture_baguette_reference(
     reference_model.load_state_dict(data["model"])
     reference_model.eval()
 
-    sequence = list(prompt_token_ids)
     generated = []
     decisions = []
-    prefill = None
+    tensor = torch.tensor([prompt_token_ids], dtype=torch.long)
+    max_len = min(config.max_seq_len, len(prompt_token_ids) + tokens)
     with torch.inference_mode():
+        # The public forward gives us every prefill logit for layer-by-layer
+        # correctness. Generation itself uses Baguette's native KV cache so its
+        # timing remains a meaningful reference for the optimized runtime.
+        logits, _, _ = reference_model(tensor, diagnostics=False)
+        prefill = logits[0].float().cpu().numpy().copy()
+        dtype = next(reference_model.parameters()).dtype
+        caches = reference_model._alloc_caches(1, max_len, tensor.device, dtype)
+        start = time.perf_counter()
+        current = reference_model._forward_cached(tensor, caches, 0)[0, -1]
+        prefill_seconds = time.perf_counter() - start
+        decode_seconds = 0.0
+        position = len(prompt_token_ids)
         for index in range(tokens):
-            tensor = torch.tensor([sequence], dtype=torch.long)
-            logits, _, _ = reference_model(tensor, diagnostics=False)
-            array = logits[0].float().cpu().numpy()
-            if prefill is None:
-                prefill = array.copy()
-            current = array[-1]
-            decisions.append(current.copy())
-            token = int(np.argmax(current))
+            array = current.float().cpu().numpy()
+            decisions.append(array.copy())
+            token = int(np.argmax(array))
             generated.append(token)
             if token == 2 or index + 1 == tokens:
                 break
-            sequence.append(token)
+            next_id = torch.tensor([[token]], dtype=torch.long)
+            start = time.perf_counter()
+            current = reference_model._forward_cached(next_id, caches, position)[0, -1]
+            decode_seconds += time.perf_counter() - start
+            position += 1
 
-    assert prefill is not None
     return LogitTrace(
         prompt_token_ids=np.asarray(prompt_token_ids, dtype=np.int64),
         prefill_logits=np.asarray(prefill, dtype=np.float32),
         decision_logits=np.stack(decisions).astype(np.float32, copy=False),
         generated_token_ids=np.asarray(generated, dtype=np.int64),
+        prefill_seconds=prefill_seconds,
+        decode_seconds=decode_seconds,
+        kv_cache_bytes=sum(
+            value.numel() * value.element_size()
+            for cache in caches for value in cache.values()
+            if hasattr(value, "numel")
+        ),
     )
+
+
+def capture_external_reference(
+    model_path: Path,
+    reference: Path,
+    reference_repo: Optional[Path],
+    prompt_token_ids: list[int],
+    tokens: int,
+    model_sha256: Optional[str] = None,
+) -> tuple[LogitTrace, str]:
+    """Load a configured reference trace without reloading the local runtime."""
+    reference = Path(reference)
+    suffix = reference.suffix.lower()
+    if suffix == ".npz":
+        if model_sha256 is None:
+            model_sha256, _ = model_fingerprint(model_path)
+        return load_trace(reference, model_sha256), f"Trace NumPy: {reference.name}"
+    if suffix not in {".pt", ".pth"}:
+        raise ValueError("reference must be a .npz trace or Baguette .pt checkpoint")
+
+    repo = Path(reference_repo) if reference_repo is not None else reference.parent
+    conversion = Path(model_path) / "conversion.json"
+    if conversion.is_file():
+        with conversion.open("r", encoding="utf-8") as handle:
+            source_sha256 = json.load(handle).get("source_sha256")
+        if source_sha256 and source_sha256 != _sha256(reference):
+            raise ValueError("reference checkpoint differs from the converted source")
+    trace = capture_baguette_reference(reference, repo, prompt_token_ids, tokens)
+    return trace, f"Baguette PyTorch: {reference.name}"
 
 
 def evaluate_runtime(
@@ -266,24 +312,9 @@ def evaluate_runtime(
     reference_trace = None
     reference_name = "none"
     if reference is not None:
-        reference = Path(reference)
-        if reference.suffix.lower() == ".npz":
-            reference_trace = load_trace(reference, model_sha256)
-            reference_name = str(reference)
-        elif reference.suffix.lower() in {".pt", ".pth"}:
-            repo = Path(reference_repo) if reference_repo is not None else reference.parent
-            conversion = Path(model_path) / "conversion.json"
-            if conversion.is_file():
-                with conversion.open("r", encoding="utf-8") as handle:
-                    source_sha256 = json.load(handle).get("source_sha256")
-                if source_sha256 and source_sha256 != _sha256(reference):
-                    raise ValueError("reference checkpoint differs from the converted source")
-            reference_trace = capture_baguette_reference(
-                reference, repo, prompt_ids, tokens
-            )
-            reference_name = f"Baguette PyTorch: {reference}"
-        else:
-            raise ValueError("--reference must be a .npz trace or Baguette .pt checkpoint")
+        reference_trace, reference_name = capture_external_reference(
+            model_path, reference, reference_repo, prompt_ids, tokens, model_sha256
+        )
 
     external = (
         compare_traces(cached, reference_trace, atol, rtol)
