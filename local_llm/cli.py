@@ -137,6 +137,16 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--rtol", type=float, default=2e-4)
     evaluate.add_argument("--json", action="store_true", help="print the summary as JSON")
 
+    profile = subparsers.add_parser(
+        "profile", help="measure time spent in each Transformer operation"
+    )
+    profile.add_argument("model", type=Path)
+    profile.add_argument("--prompt", default="Bonjour, comment vas-tu ?")
+    profile.add_argument("--tokens", type=int, default=16)
+    profile.add_argument("--chat", action="store_true", help="apply the embedded chat template")
+    profile.add_argument("--system", help="system prompt (requires --chat)")
+    profile.add_argument("--json", action="store_true")
+
     serve = subparsers.add_parser("serve", help="start a local HTTP chat server")
     serve.add_argument("model", type=Path, help="model directory or GGUF file")
     serve.add_argument("--host", default="127.0.0.1")
@@ -287,6 +297,51 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if args.output:
                 print(f"rapport: {args.output}")
         return 0 if report.passed else 1
+    if args.command == "profile":
+        if args.tokens <= 0:
+            parser.error("--tokens must be positive")
+        if args.system is not None and not args.chat:
+            parser.error("--system requires --chat")
+        try:
+            model, tokenizer = load_runtime(args.model)
+            model_prompt = (
+                format_chat([ChatMessage("user", args.prompt)], tokenizer,
+                            system_prompt=args.system)
+                if args.chat else args.prompt
+            )
+            prompt_tokens = tokenizer.encode(model_prompt)
+            profiler = model.start_profiling()
+            generated = []
+            final_stats = None
+            for token, stats in generate_tokens(model, prompt_tokens, args.tokens):
+                generated.append(token)
+                if stats is not None:
+                    final_stats = stats
+            model.stop_profiling()
+        except (FileNotFoundError, KeyError, TypeError, ValueError) as exc:
+            parser.error(str(exc))
+        if final_stats is None:
+            parser.error("profiling produced no generation statistics")
+        output = {
+            "prompt_tokens": len(prompt_tokens),
+            "generated_tokens": len(generated),
+            "prefill_tokens_per_second": final_stats.prefill_tokens_per_second,
+            "decode_tokens_per_second": final_stats.decode_tokens_per_second,
+            "kv_cache_bytes": final_stats.cache_bytes,
+            **profiler.to_dict(),
+        }
+        if args.json:
+            print(json.dumps(output, indent=2, ensure_ascii=False))
+            return 0
+        print(f"prompt: {len(prompt_tokens)} tokens | generated: {len(generated)} tokens")
+        print(f"prefill: {final_stats.prefill_tokens_per_second:.1f} tok/s | "
+              f"decode: {final_stats.decode_tokens_per_second:.1f} tok/s | "
+              f"KV cache: {_format_bytes(final_stats.cache_bytes)}")
+        print(f"{'operation':<24} {'calls':>7} {'total ms':>11} {'ms/call':>10} {'part':>8}")
+        for entry in profiler.entries():
+            print(f"{entry.operation:<24} {entry.calls:>7} {entry.seconds * 1000:>11.2f} "
+                  f"{entry.milliseconds_per_call:>10.3f} {entry.percent:>7.1f}%")
+        return 0
     if args.command == "serve":
         if not 0 <= args.port <= 65535:
             parser.error("--port must be between 0 and 65535")

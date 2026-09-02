@@ -8,11 +8,11 @@ Le runtime comprend :
 
 - embeddings, RMSNorm, RoPE, attention causale multi-têtes/GQA et SwiGLU ;
 - variantes QK-Norm, RoPE partiel et attention gated utilisées par Baguette ;
-- prefill et décodage token par token avec cache KV préalloué ;
+- prefill et décodage token par token avec cache KV préalloué et GQA sans duplication ;
 - tokenizer jouet UTF-8 et tokenizer GPT-2 byte-level BPE réel ;
 - lecteur SafeTensors natif F32/F16/BF16, mono-fichier ou shardé ;
 - lecteur GGUF v3 natif F32/F16/BF16/Q8_0/Q4_0 avec métadonnées, tokenizer et `mmap` ;
-- kernels Q8_0 et Q4_0 C++ optionnels, vectorisés et multithread avec fallback NumPy ;
+- kernels Q8_0 et Q4_0 C++ optionnels, multithread, avec SIMD NEON pour Q8 sur Apple Silicon ;
 - génération gloutonne, température, top-k, top-p et graine reproductible ;
 - streaming, templates de chat Jinja automatiques avec historique, débit et cache KV ;
 - serveur HTTP local avec réponses JSON ou streaming SSE ;
@@ -242,6 +242,23 @@ Q4 backend: native-cpp
 La variable `LOCAL_LLM_DISABLE_NATIVE=1` force le chemin NumPy pour établir une
 baseline ou diagnostiquer le kernel C++.
 
+### Profiler le passage avant
+
+La commande `profile` chronomètre séparément les grandes opérations du
+Transformer, sans activer cette instrumentation pendant une exécution normale :
+
+```bash
+python -m local_llm profile \
+  models/SmolLM2-360M-Instruct.official.Q8_0.gguf \
+  --prompt "Bonjour, explique le cache KV." \
+  --tokens 16
+```
+
+Elle affiche le nombre d'appels, le temps total, le temps moyen par appel et la
+part de chaque opération (`qkv_projections`, `ffn_gate_up`, attention,
+projection vocabulaire, etc.). `--json` produit une sortie exploitable par un
+script ou un benchmark automatisé.
+
 ## Formats de modèles
 
 ### Qu'est-ce que GGUF ?
@@ -455,14 +472,17 @@ Mesures indicatives sur la machine de développement :
 |---|---:|---:|---:|---|
 | SmolLM2-135M, F16/BLAS | 269 Mo | ~102 tok/s | `9.19e-6` | identiques |
 | SmolLM2-360M-Instruct, F16/BLAS | 692 Mio | ~46 tok/s | `1.06e-5` | identiques |
-| SmolLM2-360M-Instruct, Q8_0/C++ | 369 Mio | ~28 tok/s | `1.12e-1` | identiques |
+| SmolLM2-360M-Instruct, Q8_0/C++ NEON | 369 Mio | ~59 tok/s | `1.12e-1` | identiques |
 | SmolLM2-360M-Instruct, Q8_0/NumPy | 369 Mio | ~5 tok/s | `1.12e-1` | identiques |
 
-Sur le même modèle Q8_0, le kernel C++ accélère ici le décodage d'environ `5,7×`
-par rapport au kernel NumPy. F16 reste plus rapide grâce à BLAS, tandis que Q8
-réduit presque de moitié la taille des poids. Le kernel natif libère le GIL,
-répartit les lignes avec Grand Central Dispatch sur Apple Silicon et laisse le
-compilateur vectoriser la boucle interne.
+Sur le même modèle Q8_0, le kernel C++ NEON accélère ici le décodage d'environ
+`12×` par rapport au kernel NumPy. Par rapport à l'ancien kernel C++ scalaire,
+le benchmark reproductible passe de `29,1` à `59,2 tok/s`, soit environ `+104 %`.
+Le prefill passe de `46,6` à `149,6 tok/s`. Les tokens gloutons restent
+identiques et l'écart maximal contre la trace pré-optimisation est `2,96e-5`.
+F16 reste rapide grâce à BLAS, tandis que Q8 réduit presque de moitié la taille
+des poids. Le kernel natif libère le GIL et répartit les lignes avec Grand
+Central Dispatch sur Apple Silicon.
 
 ## Limites et feuille de route
 
@@ -471,7 +491,7 @@ La suite est :
 
 1. mesurer les écarts de logits, la perplexité et la mémoire résidente de Q4_0 ;
 2. ajouter un convertisseur F16 vers Q4_0 pour produire nos propres GGUF ;
-3. affiner la vectorisation ARM/NEON et le découpage multithread ;
+3. explorer les activations Q8 et la fusion des projections avec validation des logits ;
 4. ajouter un tokenizer SentencePiece pour les modèles qui n’utilisent pas BPE ;
 5. explorer Metal seulement après les kernels CPU natifs.
 

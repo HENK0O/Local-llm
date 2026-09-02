@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -9,6 +10,7 @@ from numpy.typing import NDArray
 from .cache import KVCache
 from .config import ModelConfig
 from .ops import apply_rope, linear, rms_norm, sigmoid, silu, softmax
+from .profiling import OperationProfiler
 from .safetensors import load_directory as load_safetensors_directory
 
 Array = NDArray[np.floating]
@@ -24,7 +26,17 @@ class LlamaModel:
             name: value if hasattr(value, "matmul") else np.asarray(value)
             for name, value in weights.items()
         }
+        self.profiler: Optional[OperationProfiler] = None
         self._validate_weights()
+
+    def start_profiling(self) -> OperationProfiler:
+        self.profiler = OperationProfiler()
+        return self.profiler
+
+    def stop_profiling(self) -> Optional[OperationProfiler]:
+        profiler = self.profiler
+        self.profiler = None
+        return profiler
 
     @classmethod
     def from_directory(cls, model_dir: Path) -> "LlamaModel":
@@ -106,7 +118,11 @@ class LlamaModel:
         if cache is not None and end > cache.capacity:
             raise ValueError("sequence exceeds KV cache capacity")
 
+        profiler = self.profiler
+        started = time.perf_counter() if profiler is not None else 0.0
         x = self.weights["model.embed_tokens.weight"][tokens]
+        if profiler is not None:
+            profiler.record("embeddings", time.perf_counter() - started)
         activations: Dict[str, Array] = {}
         if capture:
             activations["embeddings"] = np.asarray(x, dtype=np.float32).copy()
@@ -118,7 +134,10 @@ class LlamaModel:
 
         if cache is not None:
             cache.length = end
+        started = time.perf_counter() if profiler is not None else 0.0
         x = rms_norm(x, self.weights["model.norm.weight"], self.config.rms_norm_eps)
+        if profiler is not None:
+            profiler.record("final_norm", time.perf_counter() - started)
         output_weight = (
             self.weights["model.embed_tokens.weight"]
             if self.config.tie_word_embeddings
@@ -126,7 +145,10 @@ class LlamaModel:
         )
         if capture:
             activations["norm"] = np.asarray(x, dtype=np.float32).copy()
+        started = time.perf_counter() if profiler is not None else 0.0
         logits = linear(x, output_weight).astype(np.float32, copy=False)
+        if profiler is not None:
+            profiler.record("vocab_projection", time.perf_counter() - started)
         if capture:
             activations["logits"] = logits.copy()
         return logits, activations
@@ -142,14 +164,22 @@ class LlamaModel:
     ) -> Array:
         c = self.config
         prefix = f"model.layers.{layer_index}"
+        profiler = self.profiler
         residual = x
+        started = time.perf_counter() if profiler is not None else 0.0
         hidden = rms_norm(x, self.weights[f"{prefix}.input_layernorm.weight"], c.rms_norm_eps)
+        if profiler is not None:
+            profiler.record("attention_norm", time.perf_counter() - started)
+        started = time.perf_counter() if profiler is not None else 0.0
         query = linear(hidden, self.weights[f"{prefix}.self_attn.q_proj.weight"])
         key = linear(hidden, self.weights[f"{prefix}.self_attn.k_proj.weight"])
         value = linear(hidden, self.weights[f"{prefix}.self_attn.v_proj.weight"])
+        if profiler is not None:
+            profiler.record("qkv_projections", time.perf_counter() - started)
         query = query.reshape(-1, c.num_attention_heads, c.head_dim)
         key = key.reshape(-1, c.num_key_value_heads, c.head_dim)
         value = value.reshape(-1, c.num_key_value_heads, c.head_dim)
+        started = time.perf_counter() if profiler is not None else 0.0
         if c.qk_norm:
             query = rms_norm(query, self.weights[f"{prefix}.self_attn.q_norm.weight"],
                              c.rms_norm_eps)
@@ -159,6 +189,8 @@ class LlamaModel:
                            c.rope_dimension_count)
         key = apply_rope(key, positions, c.rope_theta, c.rope_interleaved,
                          c.rope_dimension_count)
+        if profiler is not None:
+            profiler.record("qk_norm_rope", time.perf_counter() - started)
 
         if cache is None:
             all_key, all_value = key, value
@@ -172,24 +204,57 @@ class LlamaModel:
             key_start = start
 
         groups = c.num_attention_heads // c.num_key_value_heads
-        all_key = np.repeat(all_key, groups, axis=1)
-        all_value = np.repeat(all_value, groups, axis=1)
-        scores = np.einsum("thd,shd->hts", query, all_key, optimize=True) / np.sqrt(c.head_dim)
+        # Keep GQA keys/values in their compact KV-head layout. Reshaping the
+        # queries exposes each KV head's query groups without np.repeat(), which
+        # otherwise copied the complete cache twice in every layer and token.
+        grouped_query = query.reshape(
+            query.shape[0], c.num_key_value_heads, groups, c.head_dim
+        )
+        started = time.perf_counter() if profiler is not None else 0.0
+        scores = np.einsum(
+            "tkgd,skd->kgts", grouped_query, all_key, optimize=True
+        ) / np.sqrt(c.head_dim)
         query_absolute = key_start + np.arange(query.shape[0])
         key_positions = np.arange(all_key.shape[0])
         causal_mask = key_positions[None, :] > query_absolute[:, None]
-        scores = np.where(causal_mask[None, :, :], -np.inf, scores)
+        scores = np.where(causal_mask[None, None, :, :], -np.inf, scores)
+        if profiler is not None:
+            profiler.record("attention_scores", time.perf_counter() - started)
+        started = time.perf_counter() if profiler is not None else 0.0
         probabilities = softmax(scores, axis=-1)
-        attention = np.einsum("hts,shd->thd", probabilities, all_value, optimize=True)
+        if profiler is not None:
+            profiler.record("attention_softmax", time.perf_counter() - started)
+        started = time.perf_counter() if profiler is not None else 0.0
+        attention = np.einsum(
+            "kgts,skd->tkgd", probabilities, all_value, optimize=True
+        )
         attention = attention.reshape(-1, c.num_attention_heads * c.head_dim)
+        if profiler is not None:
+            profiler.record("attention_values", time.perf_counter() - started)
         if c.attention_gate:
+            started = time.perf_counter() if profiler is not None else 0.0
             attention *= sigmoid(linear(
                 hidden, self.weights[f"{prefix}.self_attn.gate_proj.weight"]
             ))
+            if profiler is not None:
+                profiler.record("attention_gate", time.perf_counter() - started)
+        started = time.perf_counter() if profiler is not None else 0.0
         x = residual + linear(attention, self.weights[f"{prefix}.self_attn.o_proj.weight"])
+        if profiler is not None:
+            profiler.record("attention_output", time.perf_counter() - started)
 
         residual = x
+        started = time.perf_counter() if profiler is not None else 0.0
         hidden = rms_norm(x, self.weights[f"{prefix}.post_attention_layernorm.weight"], c.rms_norm_eps)
+        if profiler is not None:
+            profiler.record("ffn_norm", time.perf_counter() - started)
+        started = time.perf_counter() if profiler is not None else 0.0
         gate = silu(linear(hidden, self.weights[f"{prefix}.mlp.gate_proj.weight"]))
         up = linear(hidden, self.weights[f"{prefix}.mlp.up_proj.weight"])
-        return residual + linear(gate * up, self.weights[f"{prefix}.mlp.down_proj.weight"])
+        if profiler is not None:
+            profiler.record("ffn_gate_up", time.perf_counter() - started)
+        started = time.perf_counter() if profiler is not None else 0.0
+        result = residual + linear(gate * up, self.weights[f"{prefix}.mlp.down_proj.weight"])
+        if profiler is not None:
+            profiler.record("ffn_down", time.perf_counter() - started)
+        return result

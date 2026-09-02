@@ -11,6 +11,11 @@
 #include <dispatch/dispatch.h>
 #endif
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+#define LOCAL_LLM_ARM_NEON 1
+#endif
+
 namespace {
 
 constexpr npy_intp kBlockValues = 32;
@@ -43,6 +48,33 @@ float half_to_float(std::uint16_t half) {
     float result;
     std::memcpy(&result, &bits, sizeof(result));
     return result;
+}
+
+float dot_q8_f32(const std::int8_t* quantized, const float* input) {
+#ifdef LOCAL_LLM_ARM_NEON
+    float32x4_t accumulator = vdupq_n_f32(0.0f);
+    for (npy_intp value = 0; value < kBlockValues; value += 8) {
+        const int8x8_t packed = vld1_s8(quantized + value);
+        const int16x8_t wide16 = vmovl_s8(packed);
+        const float32x4_t low = vcvtq_f32_s32(vmovl_s16(vget_low_s16(wide16)));
+        const float32x4_t high = vcvtq_f32_s32(vmovl_s16(vget_high_s16(wide16)));
+        accumulator = vmlaq_f32(accumulator, low, vld1q_f32(input + value));
+        accumulator = vmlaq_f32(accumulator, high, vld1q_f32(input + value + 4));
+    }
+#if defined(__aarch64__)
+    return vaddvq_f32(accumulator);
+#else
+    const float32x2_t halves = vadd_f32(vget_low_f32(accumulator), vget_high_f32(accumulator));
+    const float32x2_t sum = vpadd_f32(halves, halves);
+    return vget_lane_f32(sum, 0);
+#endif
+#else
+    float dot = 0.0f;
+    for (npy_intp value = 0; value < kBlockValues; ++value) {
+        dot += static_cast<float>(quantized[value]) * input[value];
+    }
+    return dot;
+#endif
 }
 
 struct MatmulContext {
@@ -78,14 +110,7 @@ void run_job(void* raw_context, std::size_t job) {
             const float scale = half_to_float(scale_bits);
             const auto* quantized = reinterpret_cast<const std::int8_t*>(packed + 2);
             const float* input_block = x + block * kBlockValues;
-            float dot = 0.0f;
-#ifdef __clang__
-#pragma clang loop vectorize(enable)
-#endif
-            for (npy_intp value = 0; value < kBlockValues; ++value) {
-                dot += static_cast<float>(quantized[value]) * input_block[value];
-            }
-            result += scale * dot;
+            result += scale * dot_q8_f32(quantized, input_block);
         }
         context->output[index] = result;
     }

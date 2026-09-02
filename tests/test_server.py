@@ -68,6 +68,14 @@ class ChatRequestTests(unittest.TestCase):
         self.assertEqual(args.command, "serve")
         self.assertEqual(args.port, 9000)
 
+    def test_cli_exposes_profile_command(self):
+        args = build_parser().parse_args([
+            "profile", "model.gguf", "--tokens", "4", "--json",
+        ])
+        self.assertEqual(args.command, "profile")
+        self.assertEqual(args.tokens, 4)
+        self.assertTrue(args.json)
+
 
 class HTTPServerTests(unittest.TestCase):
     @classmethod

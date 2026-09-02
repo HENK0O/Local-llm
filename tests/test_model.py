@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -50,6 +51,21 @@ def tiny_gated_model() -> LlamaModel:
 
 
 class ModelTests(unittest.TestCase):
+    def test_operation_profiler_is_opt_in_and_records_forward_sections(self):
+        model = tiny_model()
+        self.assertIsNone(model.profiler)
+        profiler = model.start_profiling()
+        model.forward(np.array([1, 2, 3]))
+        self.assertIs(model.stop_profiling(), profiler)
+        operations = {entry.operation for entry in profiler.entries()}
+        self.assertIn("qkv_projections", operations)
+        self.assertIn("attention_scores", operations)
+        self.assertIn("ffn_gate_up", operations)
+        self.assertIn("vocab_projection", operations)
+        self.assertGreater(profiler.total_seconds, 0.0)
+        json.dumps(profiler.to_dict())
+        self.assertIsNone(model.profiler)
+
     def test_gated_qk_norm_cached_logits_match_full_forward(self):
         model = tiny_gated_model()
         tokens = np.array([1, 5, 7, 9, 4], dtype=np.int64)
