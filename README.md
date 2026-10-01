@@ -34,6 +34,8 @@ local-llm serve models/SmolLM2-360M-Instruct.official.Q8_0.gguf
 ```
 
 Puis ouvre [http://127.0.0.1:8080](http://127.0.0.1:8080).
+Tu peux aussi lancer `local-llm serve` sans chemin : les modèles compatibles des
+bibliothèques locales sont détectés et sélectionnables dans l’interface.
 
 ### Support actuel
 
@@ -54,11 +56,15 @@ Mesures sur un MacBook Air Apple M5, modèle SmolLM2-360M-Instruct :
 | Backend | Poids | Decode | Résultat glouton |
 |---|---:|---:|---|
 | F16 / BLAS | 692 Mio | ~46 tok/s | référence |
-| Q8_0 / C++ NEON fusionné | 369 Mio | ~80 tok/s | tokens identiques |
+| Q8_0 / C++ NEON fusionné | 369 Mio | ~106 tok/s | tokens identiques sur le cas mesuré |
 | Q8_0 / NumPy | 369 Mio | ~5 tok/s | tokens identiques |
 
 Les chiffres dépendent du prompt, de la longueur générée et de la machine. Les
 commandes reproductibles et la méthodologie sont détaillées plus bas.
+La session du 1er octobre mesure **89,7 → 106,1 tok/s (+18,3 %)** par rapport à
+l’état du moteur au début de cette session, avec les mêmes 64 tokens gloutons
+sur cinq essais. Ce gain ne compare pas local-llm à un moteur tiers ; les
+[rapports bruts et limites](benchmarks/2026-10-01/README.md) sont conservés.
 
 ## Démarrage rapide
 
@@ -185,27 +191,74 @@ les tokens en direct et permet de régler la température et la longueur maximal
 Le bouton carré interrompt une génération et « Nouvelle conversation » efface
 l'historique envoyé au modèle.
 
-Le bouton **Comparer** lance un test déterministe sur la même question. Sans
-configuration supplémentaire, il oppose le chemin optimisé (cache KV) au même
-moteur qui recalcule toute la séquence. Il affiche les deux sorties, l'identité
-des tokens gloutons, l'écart maximal entre les logits, les débits et la mémoire
-du cache. Le nombre de tokens est volontairement limité à 32 pour qu'un test sans
-cache ne monopolise pas la machine trop longtemps.
+Le panneau latéral sélectionne le modèle et le témoin de performance. Sous chaque
+réponse, l’interface affiche le débit de décodage, les tokens générés, le temps de
+prefill et la mémoire du cache KV. La comparaison automatique est désactivable :
+elle lance un benchmark supplémentaire après la réponse et occupe le moteur
+pendant ses mesures.
 
-Pour comparer directement le modèle Baguette converti avec son implémentation
-PyTorch d'origine, configure la référence au démarrage :
+**Détection des modèles.** Le chemin du modèle est désormais facultatif :
 
 ```bash
-python -m local_llm serve models/baguette-123m-sft \
-  --port 8081 \
-  --reference /Users/henko/Documents/Code/LLM/baguette-123m-sft.pt \
-  --reference-repo /Users/henko/Documents/Code/LLM
+local-llm serve
+local-llm serve --model-dir /chemin/vers/mes-modeles
+local-llm serve --model-dir /premier/dossier --model-dir /second/dossier
 ```
 
-La référence est chargée uniquement au lancement d'un test, pas pour chaque
-conversation. Cette comparaison mesure la **correction et les performances du
-moteur d'inférence** ; elle ne mesure pas l'intelligence du modèle, puisque les
-deux côtés utilisent exactement les mêmes poids et le même tokenizer.
+Le serveur examine `./models`, `~/.lmstudio/models`, l’ancien dossier
+`~/.cache/lm-studio/models` et le cache Hugging Face (`HF_HUB_CACHE` ou `HF_HOME`
+s’ils sont définis). `LOCAL_LLM_MODEL_DIRS` ajoute des bibliothèques, séparées par
+le séparateur de chemins du système. Le scan est limité en profondeur et à 256
+modèles ; il ne parcourt pas tout le disque et ne télécharge aucun poids.
+Le premier modèle compatible, en privilégiant les petits GGUF Q8, est chargé.
+La bibliothèque affiche aussi les modèles incompatibles avec leur raison. Un
+changement de modèle efface l’historique de l’interface et les mesures précédentes.
+Les poids restent à leur emplacement d’origine.
+
+**Comparaison CPU.** Le témoin par défaut utilise les mêmes poids quantifiés et
+le même cache KV, avec des projections NumPy au lieu des projections natives.
+On rejoue jusqu’à 8 étapes de la réponse avec les mêmes tokens d’entrée, en
+alternant les deux chemins sur 3 essais. Le gain affiché provient des médianes
+mesurées, après contrôle des logits ; il n’est pas extrapolé au débit de la réponse
+entière. Prefill et sampling sont exclus du débit de décodage. Les normalisations,
+l’attention et les autres opérations sont partagées, afin d’isoler les projections.
+Ce témoin ne représente pas les performances de llama.cpp, de Transformers ou
+d’un GPU. Si les deux chemins utilisent déjà les mêmes projections BLAS, aucun
+gain n’est attribué aux kernels quantifiés.
+
+**LM Studio.** Le serveur détecte sa bibliothèque locale même lorsque l’application
+est arrêtée. Pour voir les modèles via son API et mesurer un écart face à son
+runtime, active son serveur local (port 1234 par défaut), puis clique sur
+« Actualiser » dans la section Comparaison. Choisis les mêmes poids et la même
+quantification dans les deux moteurs. Un port différent se configure au lancement :
+
+```bash
+local-llm serve --lm-studio http://127.0.0.1:1235
+```
+
+Si LM Studio exige une authentification, définis `LM_STUDIO_API_TOKEN` dans
+l’environnement du serveur. Le jeton n’est pas envoyé au navigateur. Le client
+utilise [la liste des modèles v1](https://lmstudio.ai/docs/developer/rest/list),
+avec repli sur v0 pour les versions antérieures, puis les
+[complétions brutes v0 et leurs statistiques de moteur](https://lmstudio.ai/docs/developer/rest/endpoints)
+pour conserver le prompt déjà rendu. La requête de référence utilise la
+température 0. Ce mode affiche un **écart indicatif**, éventuellement négatif :
+l’identité des poids, les réglages CPU/GPU et les définitions du débit ne sont
+pas vérifiés automatiquement. Aucun résultat de LM Studio n’est présenté comme
+une accélération de ses propres kernels par local-llm.
+
+La prise en charge d’une bibliothèque n’ajoute pas celle de nouvelles
+architectures. Le moteur exécute actuellement Llama et Baguette non hybride,
+avec les formats du tableau de support. Les modèles Qwen, MoE, hybrides, les
+quantifications K/IQ et les modèles MLX peuvent être détectés sans pouvoir être
+exécutés par ce runtime. Les configurations avec RoPE scaling ou biais de
+projection non implémentés sont refusées.
+
+La référence PyTorch/Transformers optionnelle reste disponible via l’API avec
+`"backend": "reference"` après un lancement avec `--reference` et, si nécessaire,
+`--reference-repo`. L’ancien endpoint `/v1/benchmark` conserve ses contrôles
+numériques ; son témoin « recalcul complet » est pédagogique et distinct de la
+comparaison CPU avec cache KV de la nouvelle interface.
 
 Une réponse JSON contient le texte, l'usage en tokens, le débit du prefill et du
 décodage ainsi que la taille du cache KV. `curl` reste utile pour tester l'API

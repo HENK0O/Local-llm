@@ -1,0 +1,201 @@
+{
+  "baseline_commit": "14994f4b8401f7efcc757587ffb7225c4a9d5452",
+  "model_sha256": "8dcc904168206ee9f3fdee1615ef2b4607026f17453fd2663be935f7c43a90ab",
+  "model_bytes": 386404928,
+  "runs": 3,
+  "environment": {
+    "python": "3.9.6",
+    "numpy": "2.0.2",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "threads": "auto"
+  },
+  "scope": "Historical model.py and generation.py; shared current loader and kernels",
+  "cases": [
+    {
+      "prompt_tokens": 25,
+      "generated_tokens": [
+        198,
+        10180,
+        1538,
+        469,
+        2988,
+        281,
+        260,
+        1695,
+        4624,
+        42,
+        198,
+        198,
+        57,
+        30,
+        6682,
+        198
+      ],
+      "measurements": {
+        "before": [
+          {
+            "prefill_seconds": 0.14534220800000003,
+            "decode_seconds": 0.18388474900000007,
+            "total_seconds": 0.3302152079999999
+          },
+          {
+            "prefill_seconds": 0.14549974999999993,
+            "decode_seconds": 0.18328470800000063,
+            "total_seconds": 0.329763083
+          },
+          {
+            "prefill_seconds": 0.14600579099999988,
+            "decode_seconds": 0.18260041599999988,
+            "total_seconds": 0.329604459
+          }
+        ],
+        "after": [
+          {
+            "prefill_seconds": 0.11802029199999997,
+            "decode_seconds": 0.17238754199999984,
+            "total_seconds": 0.2913593750000001
+          },
+          {
+            "prefill_seconds": 0.12056754199999986,
+            "decode_seconds": 0.1897541260000002,
+            "total_seconds": 0.31128837499999995
+          },
+          {
+            "prefill_seconds": 0.11711066699999995,
+            "decode_seconds": 0.17122804000000036,
+            "total_seconds": 0.2893167080000001
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "prefill_seconds": 0.14549974999999993,
+          "decode_seconds": 0.18328470800000063,
+          "total_seconds": 0.329763083
+        },
+        "after": {
+          "prefill_seconds": 0.11802029199999997,
+          "decode_seconds": 0.17238754199999984,
+          "total_seconds": 0.2913593750000001
+        }
+      },
+      "prefill_speedup": 1.2328367226883319
+    },
+    {
+      "prompt_tokens": 97,
+      "generated_tokens": [
+        198,
+        21350,
+        42,
+        2
+      ],
+      "measurements": {
+        "before": [
+          {
+            "prefill_seconds": 0.7063755,
+            "decode_seconds": 0.04197366700000016,
+            "total_seconds": 0.7486870830000001
+          },
+          {
+            "prefill_seconds": 0.7072067500000001,
+            "decode_seconds": 0.04457816700000006,
+            "total_seconds": 0.7521545840000003
+          },
+          {
+            "prefill_seconds": 0.7237410000000004,
+            "decode_seconds": 0.04271112500000118,
+            "total_seconds": 0.7668064999999995
+          }
+        ],
+        "after": [
+          {
+            "prefill_seconds": 0.4474965000000002,
+            "decode_seconds": 0.037121458999999746,
+            "total_seconds": 0.48494920799999974
+          },
+          {
+            "prefill_seconds": 0.4522227919999997,
+            "decode_seconds": 0.03703970800000089,
+            "total_seconds": 0.4895933330000002
+          },
+          {
+            "prefill_seconds": 0.4554665,
+            "decode_seconds": 0.039216624999999894,
+            "total_seconds": 0.4950203750000002
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "prefill_seconds": 0.7072067500000001,
+          "decode_seconds": 0.04271112500000118,
+          "total_seconds": 0.7521545840000003
+        },
+        "after": {
+          "prefill_seconds": 0.4522227919999997,
+          "decode_seconds": 0.037121458999999746,
+          "total_seconds": 0.4895933330000002
+        }
+      },
+      "prefill_speedup": 1.5638458797538903
+    },
+    {
+      "prompt_tokens": 193,
+      "generated_tokens": [
+        198,
+        21350,
+        42,
+        2
+      ],
+      "measurements": {
+        "before": [
+          {
+            "prefill_seconds": 1.8339282080000006,
+            "decode_seconds": 0.05160829199999917,
+            "total_seconds": 1.8858944170000003
+          },
+          {
+            "prefill_seconds": 1.8712366249999999,
+            "decode_seconds": 0.05122124999999933,
+            "total_seconds": 1.9228235829999996
+          },
+          {
+            "prefill_seconds": 1.8683445410000008,
+            "decode_seconds": 0.053320333000000275,
+            "total_seconds": 1.9220295420000006
+          }
+        ],
+        "after": [
+          {
+            "prefill_seconds": 0.9336940409999999,
+            "decode_seconds": 0.04981050000000309,
+            "total_seconds": 0.983875083
+          },
+          {
+            "prefill_seconds": 0.9699349169999998,
+            "decode_seconds": 0.039247542000000024,
+            "total_seconds": 1.0095787499999993
+          },
+          {
+            "prefill_seconds": 0.9514575000000001,
+            "decode_seconds": 0.039578458999999455,
+            "total_seconds": 0.9914020420000007
+          }
+        ]
+      },
+      "medians": {
+        "before": {
+          "prefill_seconds": 1.8683445410000008,
+          "decode_seconds": 0.05160829199999917,
+          "total_seconds": 1.9220295420000006
+        },
+        "after": {
+          "prefill_seconds": 0.9514575000000001,
+          "decode_seconds": 0.039578458999999455,
+          "total_seconds": 0.9914020420000007
+        }
+      },
+      "prefill_speedup": 1.963665787489195
+    }
+  ]
+}

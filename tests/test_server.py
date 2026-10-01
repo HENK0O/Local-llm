@@ -21,19 +21,36 @@ class StubChatService:
     model_name = "test-model"
     reference_name = "Recalcul complet"
     reference = None
+    reference_runtime = None
     model = SimpleNamespace(config=SimpleNamespace(eos_token_id=2))
+
+    @staticmethod
+    def available_models(refresh=False):
+        return {"models": [], "current_id": None, "roots": []}
+
+    @staticmethod
+    def load_model(payload):
+        if payload.get("id") != "test-model":
+            raise ValueError("unknown model")
+        return {"loaded": True, "model": "test-model"}
+
+    @staticmethod
+    def compare_completion(payload):
+        if payload.get("completion_id") != "test-completion":
+            raise ValueError("unknown completion")
+        return {"comparable": True, "delta_tokens_per_second": 10}
 
     @staticmethod
     def parse(payload):
         return parse_chat_request(payload, default_max_tokens=16)
 
     @staticmethod
-    def complete(request):
+    def complete(request, completion_id=None):
         stats = GenerationStats(3, 2, 0.1, 0.1, 128)
         return CompletionResult("Bonjour", [7, 2], 3, stats, "stop")
 
     @staticmethod
-    def iter_completion(request):
+    def iter_completion(request, completion_id=None):
         yield StreamPiece("Bon", 7, None)
         yield StreamPiece("jour", 2, GenerationStats(3, 2, 0.1, 0.1, 128))
 
@@ -64,6 +81,7 @@ class ChatRequestTests(unittest.TestCase):
         self.assertEqual(request.messages[0].content, "Bonjour")
         self.assertEqual(request.max_tokens, 12)
         self.assertTrue(request.stream)
+        self.assertEqual(request.backend, "local")
 
     def test_rejects_invalid_requests(self):
         invalid = [
@@ -76,6 +94,7 @@ class ChatRequestTests(unittest.TestCase):
             {"messages": [{"role": "user", "content": "x"}], "seed": -1},
             {"messages": [{"role": "user", "content": "x"}], "temperature": float("nan")},
             {"messages": [{"role": "user", "content": "x"}], "max_tokens": 513},
+            {"messages": [{"role": "user", "content": "x"}], "backend": "unknown"},
         ]
         for payload in invalid:
             with self.subTest(payload=payload), self.assertRaises(ValueError):
@@ -90,6 +109,12 @@ class ChatRequestTests(unittest.TestCase):
         self.assertEqual(str(args.reference), "model.pt")
         self.assertEqual(args.max_request_tokens, 512)
         self.assertEqual(args.max_connections, 8)
+
+    def test_cli_can_discover_models_without_a_positional_path(self):
+        args = build_parser().parse_args(["serve", "--model-dir", "/tmp/models",
+                                          "--lm-studio", "http://localhost:1234"])
+        self.assertIsNone(args.model)
+        self.assertEqual(str(args.model_dir[0]), "/tmp/models")
 
     def test_parses_benchmark_request(self):
         request = parse_benchmark_request({"prompt": "Bonjour", "tokens": 6})
@@ -138,7 +163,7 @@ class HTTPServerTests(unittest.TestCase):
         status, content_type, body = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("text/html", content_type)
-        self.assertIn(b"local-llm run --local", body)
+        self.assertIn(b"Playground", body)
         self.assertIn(b'id="modelName"', body)
         self.assertIn(b"/v1/chat/completions", body)
         status, _, body = self.request("GET", "/health")
@@ -148,6 +173,30 @@ class HTTPServerTests(unittest.TestCase):
         status, _, body = self.request("GET", "/v1/models")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["data"][0]["id"], "test-model")
+
+    def test_model_library_and_load_routes(self):
+        status, _, body = self.request("GET", "/v1/local-models")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["models"], [])
+        status, _, _ = self.request("POST", "/v1/local-models/refresh", {})
+        self.assertEqual(status, 200)
+        status, _, body = self.request("POST", "/v1/local-models/load", {"id": "test-model"})
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["loaded"])
+        status, _, _ = self.request("POST", "/v1/local-models/load", {"id": "unknown"})
+        self.assertEqual(status, 400)
+
+    def test_comparison_route(self):
+        status, _, body = self.request("POST", "/v1/compare", {"completion_id": "test-completion"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["delta_tokens_per_second"], 10)
+        status, _, _ = self.request("POST", "/v1/compare", {"completion_id": "missing"})
+        self.assertEqual(status, 400)
+
+    def test_model_load_and_comparison_reject_cross_origin(self):
+        for path in ("/v1/local-models/load", "/v1/local-models/refresh", "/v1/compare"):
+            status, _, _ = self.request("POST", path, {}, {"Origin": "https://example.com"})
+            self.assertEqual(status, 403)
 
     def test_server_version_uses_package_version(self):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
@@ -167,6 +216,16 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(result["choices"][0]["message"]["content"], "Bonjour")
         self.assertEqual(result["usage"]["total_tokens"], 5)
         self.assertEqual(result["local_llm"]["kv_cache_bytes"], 128)
+        self.assertEqual(result["local_llm"]["backend"], "local")
+
+    def test_backend_choice_is_exposed_in_response(self):
+        status, _, body = self.request("POST", "/v1/chat/completions", {
+            "messages": [{"role": "user", "content": "Salut"}],
+            "backend": "reference",
+        })
+        self.assertEqual(status, 200)
+        result = json.loads(body)
+        self.assertEqual(result["local_llm"]["backend"], "reference")
 
     def test_streaming_completion(self):
         status, content_type, body = self.request("POST", "/v1/chat/completions", {
@@ -179,6 +238,7 @@ class HTTPServerTests(unittest.TestCase):
         self.assertIn('"content": "Bon"', text)
         self.assertIn('"content": "jour"', text)
         self.assertIn('"decode_tokens_per_second"', text)
+        self.assertIn('"backend": "local"', text)
         self.assertTrue(text.endswith("data: [DONE]\n\n"))
 
     def test_benchmark(self):

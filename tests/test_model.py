@@ -2,11 +2,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
 from local_llm.config import ModelConfig
-from local_llm.generation import generate, greedy_generate_without_cache
+from local_llm.generation import generate, generate_tokens, greedy_generate_without_cache
 from local_llm.model import LlamaModel
 from local_llm.tokenizer import ByteTokenizer
 from local_llm.toy import create_toy_model, make_toy_weights
@@ -51,6 +52,60 @@ def tiny_gated_model() -> LlamaModel:
 
 
 class ModelTests(unittest.TestCase):
+    def test_last_logits_only_preserves_full_kv_cache(self):
+        for factory in (tiny_model, tiny_gated_model):
+            model = factory()
+            tokens = np.array([1, 5, 7, 9, 4])
+            full_cache, last_cache = model.new_cache(), model.new_cache()
+            expected = model.forward(tokens, full_cache)[-1:]
+            actual = model.forward(tokens, last_cache, last_logits_only=True)
+            self.assertEqual(actual.shape, (1, model.config.vocab_size))
+            np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
+            self.assertEqual(last_cache.length, len(tokens))
+            np.testing.assert_allclose(
+                model.forward(np.array([3]), full_cache),
+                model.forward(np.array([3]), last_cache), atol=2e-5, rtol=2e-5,
+            )
+
+    def test_stream_yields_before_computing_next_token(self):
+        model = tiny_model()
+        with patch.object(model, "forward", wraps=model.forward) as forward:
+            stream = generate_tokens(model, [1, 3], 3)
+            token, stats = next(stream)
+            self.assertIsNone(stats)
+            self.assertEqual(forward.call_count, 1)
+            stream.close()
+            self.assertEqual(forward.call_count, 1)
+
+    def test_zero_token_generation_does_not_evaluate_model(self):
+        model = tiny_model()
+        with patch.object(model, "forward", wraps=model.forward) as forward:
+            result = generate(model, [1, 3], 0)
+            self.assertEqual(result.token_ids, [])
+            forward.assert_not_called()
+
+    def test_blas_attention_matches_einsum_reference(self):
+        # Replace only the attention contractions with the original independent
+        # einsum formulation; linear layers also call matmul and pass through.
+        matmul = np.matmul
+        def reference(a, b):
+            if a.ndim == 4 and b.ndim == 4:
+                return np.einsum("kgtd,kfds->kgts", a, b, optimize=False)
+            return matmul(a, b)
+        for factory in (tiny_model, tiny_gated_model):
+            model = factory()
+            tokens = np.array([1, 5, 7, 9, 4])
+            actual = model.forward(tokens)
+            with patch("numpy.matmul", side_effect=reference):
+                expected = model.forward(tokens)
+            np.testing.assert_allclose(actual, expected, atol=2e-5, rtol=2e-5)
+
+    def test_unknown_hf_architecture_and_rope_scaling_are_rejected(self):
+        raw = dict(tiny_model().config.__dict__)
+        for unsupported in [{"model_type": "qwen2"}, {"rope_scaling": {"type": "linear", "factor": 2}}, {"attention_bias": True}]:
+            with self.subTest(unsupported=unsupported), self.assertRaises(ValueError):
+                ModelConfig.from_dict({**raw, **unsupported})
+
     def test_operation_profiler_is_opt_in_and_records_forward_sections(self):
         model = tiny_model()
         self.assertIsNone(model.profiler)

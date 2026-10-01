@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -11,6 +12,16 @@ class OpsTests(unittest.TestCase):
         result = rms_norm(x, np.ones(2, dtype=np.float32), 0.0)
         expected = x / np.sqrt((9.0 + 16.0) / 2.0)
         np.testing.assert_allclose(result, expected, rtol=1e-6)
+
+    def test_native_and_numpy_norm_agree_for_odd_and_batched_shapes(self):
+        rng = np.random.default_rng(8)
+        for shape in [(7,), (3, 65), (2, 4, 960)]:
+            x = rng.normal(size=shape).astype(np.float32)
+            w = rng.normal(size=shape[-1]).astype(np.float32)
+            actual = rms_norm(x, w, 1e-5)
+            with patch("local_llm.ops._native_rms_norm", None):
+                expected = rms_norm(x, w, 1e-5)
+            np.testing.assert_allclose(actual, expected, atol=1e-6, rtol=1e-6)
 
     def test_rope_position_zero_is_identity(self):
         x = np.arange(16, dtype=np.float32).reshape(1, 2, 8)

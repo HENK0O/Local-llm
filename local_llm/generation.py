@@ -20,12 +20,12 @@ class GenerationStats:
 
     @property
     def prefill_tokens_per_second(self) -> float:
-        return self.prompt_tokens / self.prefill_seconds if self.prefill_seconds else float("inf")
+        return self.prompt_tokens / self.prefill_seconds if self.prefill_seconds else 0.0
 
     @property
     def decode_tokens_per_second(self) -> float:
         decoded = max(0, self.generated_tokens - 1)
-        return decoded / self.decode_seconds if self.decode_seconds else float("inf")
+        return decoded / self.decode_seconds if self.decode_seconds else 0.0
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ def sample_token(
     top_p: Optional[float] = None,
     rng: Optional[np.random.Generator] = None,
 ) -> int:
-    logits = np.asarray(logits, dtype=np.float64)
+    logits = np.asarray(logits)
     if logits.ndim != 1:
         raise ValueError("logits must be one-dimensional")
     if temperature < 0:
@@ -53,7 +53,7 @@ def sample_token(
     if top_p is not None and not 0 < top_p <= 1:
         raise ValueError("top_p must be in (0, 1]")
 
-    scaled = logits / temperature
+    scaled = logits.astype(np.float64) / temperature
     keep = np.ones(logits.size, dtype=bool)
     if top_k is not None and top_k < logits.size:
         indices = np.argpartition(scaled, -top_k)[-top_k:]
@@ -98,9 +98,13 @@ def generate_tokens(
     if len(prompt_tokens) > capacity:
         raise ValueError("prompt exceeds the model context length")
 
+    if max_new_tokens == 0:
+        return
+
     cache = model.new_cache(max(capacity, 1))
     prefill_start = time.perf_counter()
-    logits = model.forward(np.asarray(prompt_tokens, dtype=np.int64), cache=cache)
+    logits = model.forward(np.asarray(prompt_tokens, dtype=np.int64), cache=cache,
+                           last_logits_only=True)
     prefill_seconds = time.perf_counter() - prefill_start
     rng = np.random.default_rng(seed)
     emitted: List[int] = []
@@ -120,10 +124,10 @@ def generate_tokens(
             )
             yield token, stats
             return
+        yield token, None
         decode_start = time.perf_counter()
         logits = model.forward(np.asarray([token], dtype=np.int64), cache=cache)
         decode_seconds += time.perf_counter() - decode_start
-        yield token, None
 
 
 def generate(

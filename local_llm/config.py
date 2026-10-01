@@ -55,6 +55,12 @@ class ModelConfig:
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "ModelConfig":
+        if raw.get("model_type", "llama") != "llama":
+            raise ValueError(f"unsupported architecture: {raw['model_type']!r}")
+        if raw.get("rope_scaling"):
+            raise ValueError("RoPE scaling is not supported by this runtime")
+        if raw.get("attention_bias") or raw.get("mlp_bias"):
+            raise ValueError("biased attention/MLP projections are not supported")
         fields = cls.__dataclass_fields__
         values = {name: raw[name] for name in fields if name in raw}
         if "num_key_value_heads" not in values and "num_attention_heads" in values:

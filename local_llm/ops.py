@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import os
 import numpy as np
 from numpy.typing import NDArray
+
+try:
+    from ._native import rms_norm as _native_rms_norm
+except ImportError:
+    _native_rms_norm = None
 
 Array = NDArray[np.floating]
 
@@ -27,6 +33,16 @@ def linear_pair(x: Array, first: Array, second: Array) -> tuple[Array, Array]:
     return linear(x, first), linear(x, second)
 
 
+def linear_qkv(x: Array, query: Array, key: Array, value: Array) -> tuple[Array, Array, Array]:
+    fused = getattr(query, "matmul_qkv", None)
+    if fused is not None:
+        result = fused(key, value, x)
+        if result is not NotImplemented:
+            return result
+    k, v = linear_pair(x, key, value)
+    return linear(x, query), k, v
+
+
 def linear_swiglu(x: Array, gate_weight: Array, up_weight: Array) -> Array:
     """Fuse quantized gate/up projections and SwiGLU when the backend supports it."""
     fused = getattr(gate_weight, "matmul_swiglu", None)
@@ -46,6 +62,9 @@ def linear_add(x: Array, weight: Array, residual: Array) -> Array:
 
 
 def rms_norm(x: Array, weight: Array, eps: float) -> Array:
+    if (_native_rms_norm is not None and os.environ.get("LOCAL_LLM_DISABLE_NATIVE") != "1"
+            and x.dtype == np.float32 and weight.dtype == np.float32):
+        return _native_rms_norm(x, weight, eps)
     variance = np.mean(np.square(x.astype(np.float32)), axis=-1, keepdims=True)
     normalized = x * (1.0 / np.sqrt(variance + eps))
     return normalized * weight
@@ -79,24 +98,22 @@ def softmax(x: Array, axis: int = -1) -> Array:
 
 
 def apply_rope(x: Array, positions: NDArray[np.integer], theta: float,
-               interleaved: bool = False, dimension_count: int | None = None) -> Array:
+               interleaved: bool = False, dimension_count: int | None = None,
+               factors: tuple[Array, Array] | None = None) -> Array:
     """Apply split-half (HF) or adjacent-pair (GGUF) rotary embeddings."""
     head_dim = x.shape[-1]
     rotary_dim = dimension_count or head_dim
     if rotary_dim <= 0 or rotary_dim > head_dim or rotary_dim % 2:
         raise ValueError("RoPE dimension count must be even and within the head dimension")
     rotary = x[..., :rotary_dim]
-    frequencies = 1.0 / (theta ** (np.arange(0, rotary_dim, 2, dtype=np.float32) / rotary_dim))
-    angles = np.asarray(positions, dtype=np.float32)[:, None] * frequencies[None, :]
+    cos, sin = factors if factors is not None else rope_factors(
+        positions, theta, rotary_dim, interleaved
+    )
     if interleaved:
-        cos = np.cos(angles)[:, None, :]
-        sin = np.sin(angles)[:, None, :]
         rotated = np.empty_like(rotary)
         rotated[..., 0::2] = rotary[..., 0::2] * cos - rotary[..., 1::2] * sin
         rotated[..., 1::2] = rotary[..., 0::2] * sin + rotary[..., 1::2] * cos
     else:
-        embedding = np.concatenate((angles, angles), axis=-1)[:, None, :]
-        cos, sin = np.cos(embedding), np.sin(embedding)
         half = rotary_dim // 2
         rotated_half = np.concatenate((-rotary[..., half:], rotary[..., :half]), axis=-1)
         rotated = rotary * cos + rotated_half * sin
@@ -105,3 +122,13 @@ def apply_rope(x: Array, positions: NDArray[np.integer], theta: float,
     result = np.array(x, copy=True)
     result[..., :rotary_dim] = rotated
     return result
+
+
+def rope_factors(positions: NDArray[np.integer], theta: float, dimension: int,
+                 interleaved: bool = False) -> tuple[Array, Array]:
+    """Compute factors once per forward, shared by Q/K in every layer."""
+    frequencies = 1.0 / (theta ** (np.arange(0, dimension, 2, dtype=np.float32) / dimension))
+    angles = np.asarray(positions, dtype=np.float32)[:, None] * frequencies[None, :]
+    if not interleaved:
+        angles = np.concatenate((angles, angles), axis=-1)
+    return np.cos(angles)[:, None, :], np.sin(angles)[:, None, :]

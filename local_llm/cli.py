@@ -148,7 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
     profile.add_argument("--json", action="store_true")
 
     serve = subparsers.add_parser("serve", help="start a local HTTP chat server")
-    serve.add_argument("model", type=Path, help="model directory or GGUF file")
+    serve.add_argument("model", nargs="?", type=Path, help="model path; omit to discover local models")
+    serve.add_argument("--model-dir", action="append", type=Path, default=[],
+                       help="additional model library to scan (repeatable)")
+    serve.add_argument("--lm-studio", default="http://127.0.0.1:1234",
+                       help="loopback LM Studio server for discovery and comparisons")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8080)
     serve.add_argument("--max-tokens", type=int, default=128,
@@ -160,7 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--allow-remote", action="store_true",
                        help="allow binding to a non-loopback address (no authentication)")
     serve.add_argument("--reference", type=Path,
-                       help="optional .pt/.pth checkpoint or .npz trace for web comparisons")
+                       help="Baguette .pt, Hugging Face directory, or .npz benchmark trace")
     serve.add_argument("--reference-repo", type=Path,
                        help="repository containing model.py for a Baguette checkpoint")
 
@@ -366,7 +370,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             serve_http(args.model, args.host, args.port, args.max_tokens,
                        args.reference, args.reference_repo, args.max_request_tokens,
-                       args.max_connections, args.allow_remote)
+                       args.max_connections, args.allow_remote, args.model_dir, args.lm_studio)
         except (FileNotFoundError, KeyError, OSError, TypeError, ValueError) as exc:
             parser.error(str(exc))
         return 0

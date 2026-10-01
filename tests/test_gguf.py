@@ -280,6 +280,38 @@ class GGUFTests(unittest.TestCase):
             np.testing.assert_allclose(first.matmul_swiglu(second, inputs), expected_swiglu,
                                        rtol=2e-4, atol=1e-3)
 
+    @unittest.skipUnless(q8_backend_name() == "native-cpp", "native Q8 extension is not built")
+    def test_native_qkv_supports_unequal_rows_and_batched_inputs(self):
+        from local_llm._native import q8_matmul_qkv
+        rng = np.random.default_rng(52)
+        storages = []
+        for rows in (65, 17, 17):
+            storage = np.empty((rows, 3), dtype=Q8Matrix._dtype)
+            storage["scale"] = rng.uniform(0.001, 0.05, size=(rows, 3)).astype(np.float16)
+            storage["values"] = rng.integers(-127, 128, size=(rows, 3, 32), dtype=np.int8)
+            storages.append(storage)
+        for shape in [(96,), (1, 96), (2, 3, 96), (0, 96)]:
+            x = rng.normal(size=shape).astype(np.float32)
+            actual = q8_matmul_qkv(*storages, x)
+            for storage, result in zip(storages, actual):
+                weight = (storage["values"].astype(np.float32) *
+                          storage["scale"].astype(np.float32)[..., None]).reshape(len(storage), 96)
+                with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+                    expected = x @ weight.T
+                np.testing.assert_allclose(result, expected, atol=2e-5, rtol=2e-5)
+        with self.assertRaises(ValueError):
+            q8_matmul_qkv(*storages, np.ones(95, dtype=np.float32))
+
+    @unittest.skipUnless(q8_backend_name() == "native-cpp", "native Q8 extension is not built")
+    def test_scale_lookup_preserves_subnormals_signs_and_extremes(self):
+        from local_llm._native import q8_matmul
+        bits = np.array([0, 0x8000, 1, 0x8001, 0x03ff, 0x0400, 0x3c00, 0xbc00, 0x7bff], dtype=np.uint16)
+        storage = np.zeros((len(bits), 1), dtype=Q8Matrix._dtype)
+        storage["scale"][:, 0] = bits.view(np.float16)
+        storage["values"][:, 0, 0] = 1
+        actual = q8_matmul(storage, np.ones(32, dtype=np.float32))
+        np.testing.assert_array_equal(actual, bits.view(np.float16).astype(np.float32))
+
     @unittest.skipUnless(q4_backend_name() == "native-cpp", "native Q4 extension is not built")
     def test_native_q4_matches_numpy_kernel(self):
         rng = np.random.default_rng(31)

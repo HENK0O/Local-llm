@@ -34,6 +34,11 @@ GGUF_VERSION = 3
 DEFAULT_ALIGNMENT = 32
 
 UINT8, INT8, UINT16, INT16, UINT32, INT32, FLOAT32, BOOL, STRING, ARRAY, UINT64, INT64, FLOAT64 = range(13)
+try:
+    from ._native import q8_matmul_qkv as _native_q8_matmul_qkv
+except ImportError:
+    _native_q8_matmul_qkv = None
+
 F32, F16, Q4_0, Q8_0, BF16 = 0, 1, 2, 8, 30
 
 _SCALARS: Mapping[int, Tuple[str, int]] = {
@@ -138,6 +143,15 @@ class Q8Matrix:
                 self.blocks, other.blocks, np.ascontiguousarray(values)
             )
         return self.matmul_numpy(values), other.matmul_numpy(values)
+
+    def matmul_qkv(self, key: Any, value: Any, x: np.ndarray) -> Any:
+        if (not isinstance(key, Q8Matrix) or not isinstance(value, Q8Matrix)
+                or key.shape[-1] != self.shape[-1] or value.shape[-1] != self.shape[-1]):
+            return NotImplemented
+        if _native_q8_matmul_qkv is None or os.environ.get("LOCAL_LLM_DISABLE_NATIVE") == "1":
+            return NotImplemented
+        return _native_q8_matmul_qkv(self.blocks, key.blocks, value.blocks,
+                                     np.ascontiguousarray(x, dtype=np.float32))
 
     def matmul_swiglu(self, other: Any, x: np.ndarray) -> Any:
         if not isinstance(other, Q8Matrix) or other.shape != self.shape:
@@ -394,6 +408,11 @@ def model_config(reader: GGUFReader) -> ModelConfig:
     architecture = metadata.get("general.architecture")
     if architecture != "llama":
         raise GGUFError(f"only GGUF architecture 'llama' is supported, got {architecture!r}")
+    if metadata.get("llama.rope.scaling.type", "none") != "none":
+        raise GGUFError("RoPE scaling is not supported by this runtime")
+    if any(name.endswith(".bias") or "attn_q_norm" in name or "attn_k_norm" in name
+           for name in reader.tensors):
+        raise GGUFError("GGUF attention biases and QK-Norm are not supported")
     tokens = metadata.get("tokenizer.ggml.tokens")
     vocab_size = len(tokens) if isinstance(tokens, list) else reader.tensors["token_embd.weight"].shape[0]
 
@@ -418,6 +437,7 @@ def model_config(reader: GGUFReader) -> ModelConfig:
         pad_token_id=metadata.get("tokenizer.ggml.padding_token_id"),
         tie_word_embeddings="output.weight" not in reader.tensors,
         rope_interleaved=True,
+        rope_dimension_count=metadata.get("llama.rope.dimension_count"),
     )
 
 

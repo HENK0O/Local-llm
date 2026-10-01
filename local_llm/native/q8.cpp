@@ -3,6 +3,7 @@
 #include <numpy/arrayobject.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -59,7 +60,7 @@ std::size_t requested_threads(npy_intp batches) {
     return detected;
 }
 
-float half_to_float(std::uint16_t half) {
+float decode_half(std::uint16_t half) {
     const std::uint32_t sign = static_cast<std::uint32_t>(half & 0x8000u) << 16;
     std::uint32_t exponent = (half >> 10) & 0x1fu;
     std::uint32_t mantissa = half & 0x03ffu;
@@ -84,6 +85,20 @@ float half_to_float(std::uint16_t half) {
     float result;
     std::memcpy(&result, &bits, sizeof(result));
     return result;
+}
+
+float half_to_float(std::uint16_t half) {
+    // Block scales repeat across millions of dot products. This bounded,
+    // immutable lookup preserves every FP16 bit pattern without conversion
+    // work in the inner loop. C++ static initialization is thread-safe.
+    static const std::array<float, 65536> table = []() {
+        std::array<float, 65536> values{};
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            values[i] = decode_half(static_cast<std::uint16_t>(i));
+        }
+        return values;
+    }();
+    return table[half];
 }
 
 float dot_q8_f32(const std::int8_t* quantized, const float* input) {
@@ -180,16 +195,9 @@ struct MatmulContext {
     const float* add;
 };
 
-void run_job(void* raw_context, std::size_t job) {
-    auto* context = static_cast<MatmulContext*>(raw_context);
-    const npy_intp total = context->batches * context->rows;
-    const npy_intp begin = total * static_cast<npy_intp>(job) /
-                           static_cast<npy_intp>(context->jobs);
-    const npy_intp end = total * static_cast<npy_intp>(job + 1) /
-                         static_cast<npy_intp>(context->jobs);
+void run_q8_range(MatmulContext* context, npy_intp begin, npy_intp end) {
     const npy_intp input_size = context->blocks_per_row * kBlockValues;
     const npy_intp row_bytes = context->blocks_per_row * kQ8BlockBytes;
-
     for (npy_intp index = begin; index < end; ++index) {
         const npy_intp batch = index / context->rows;
         const npy_intp row = index % context->rows;
@@ -207,6 +215,13 @@ void run_job(void* raw_context, std::size_t job) {
         }
         context->output[index] = result + (context->add == nullptr ? 0.0f : context->add[index]);
     }
+}
+
+void run_job(void* raw_context, std::size_t job) {
+    auto* context = static_cast<MatmulContext*>(raw_context);
+    const npy_intp total = context->batches * context->rows;
+    run_q8_range(context, total * job / context->jobs,
+                 total * (job + 1) / context->jobs);
 }
 
 PyObject* q8_matmul(PyObject*, PyObject* args) {
@@ -316,6 +331,96 @@ PyObject* q8_matmul(PyObject*, PyObject* args) {
     Py_DECREF(input);
     Py_XDECREF(add);
     return reinterpret_cast<PyObject*>(output);
+}
+
+struct QKVContext {
+    MatmulContext matrices[3];
+    npy_intp total;
+    std::size_t jobs;
+};
+
+void run_qkv_job(void* raw, std::size_t job) {
+    auto* context = static_cast<QKVContext*>(raw);
+    const npy_intp begin = context->total * job / context->jobs;
+    const npy_intp end = context->total * (job + 1) / context->jobs;
+    npy_intp offset = 0;
+    for (auto& matrix : context->matrices) {
+        const npy_intp count = matrix.rows * matrix.batches;
+        const npy_intp first = std::max<npy_intp>(0, begin - offset);
+        const npy_intp last = std::min<npy_intp>(count, end - offset);
+        if (first < last) run_q8_range(&matrix, first, last);
+        offset += count;
+    }
+}
+
+PyObject* q8_matmul_qkv(PyObject*, PyObject* args) {
+    PyObject* objects[3];
+    PyObject* input_object;
+    if (!PyArg_ParseTuple(args, "OOOO:q8_matmul_qkv", &objects[0], &objects[1],
+                          &objects[2], &input_object)) return nullptr;
+    auto* input = reinterpret_cast<PyArrayObject*>(PyArray_FROM_OTF(
+        input_object, NPY_FLOAT32, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED));
+    PyArrayObject* blocks[3] = {nullptr, nullptr, nullptr};
+    PyArrayObject* outputs[3] = {nullptr, nullptr, nullptr};
+    auto cleanup = [&]() {
+        Py_XDECREF(input);
+        for (int i = 0; i < 3; ++i) { Py_XDECREF(blocks[i]); Py_XDECREF(outputs[i]); }
+    };
+    if (input == nullptr) return nullptr;
+    const int ndim = PyArray_NDIM(input);
+    if (ndim < 1) {
+        PyErr_SetString(PyExc_ValueError, "Q8 input must have at least one dimension");
+        cleanup(); return nullptr;
+    }
+    npy_intp batches = 1;
+    npy_intp dimensions[NPY_MAXDIMS];
+    for (int d = 0; d < ndim - 1; ++d) {
+        dimensions[d] = PyArray_DIM(input, d);
+        batches *= dimensions[d];
+    }
+    QKVContext context{};
+    for (int i = 0; i < 3; ++i) {
+        blocks[i] = reinterpret_cast<PyArrayObject*>(PyArray_FromAny(
+            objects[i], nullptr, 2, 2, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED, nullptr));
+        if (blocks[i] == nullptr) { cleanup(); return nullptr; }
+        if (PyArray_ITEMSIZE(blocks[i]) != kQ8BlockBytes ||
+            PyArray_DIM(blocks[i], 1) * kBlockValues != PyArray_DIM(input, ndim - 1)) {
+            PyErr_SetString(PyExc_ValueError, "QKV packed matrices must match Q8 input size");
+            cleanup(); return nullptr;
+        }
+        dimensions[ndim - 1] = PyArray_DIM(blocks[i], 0);
+        outputs[i] = reinterpret_cast<PyArrayObject*>(PyArray_SimpleNew(ndim, dimensions, NPY_FLOAT32));
+        if (outputs[i] == nullptr) { cleanup(); return nullptr; }
+        context.matrices[i] = MatmulContext{
+            static_cast<const char*>(PyArray_DATA(blocks[i])),
+            static_cast<const float*>(PyArray_DATA(input)),
+            static_cast<float*>(PyArray_DATA(outputs[i])),
+            PyArray_DIM(blocks[i], 0), PyArray_DIM(blocks[i], 1), batches, 1, nullptr,
+        };
+        context.total += batches * PyArray_DIM(blocks[i], 0);
+    }
+#ifdef __APPLE__
+    context.jobs = std::min<std::size_t>(requested_threads(batches),
+                          static_cast<std::size_t>(std::max<npy_intp>(1, context.total)));
+#else
+    context.jobs = 1;
+#endif
+    Py_BEGIN_ALLOW_THREADS
+#ifdef __APPLE__
+    dispatch_apply_f(context.jobs, dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0),
+                     &context, run_qkv_job);
+#else
+    run_qkv_job(&context, 0);
+#endif
+    Py_END_ALLOW_THREADS
+    PyObject* result = PyTuple_New(3);
+    if (result == nullptr) { cleanup(); return nullptr; }
+    for (int i = 0; i < 3; ++i) {
+        PyTuple_SET_ITEM(result, i, reinterpret_cast<PyObject*>(outputs[i]));
+        outputs[i] = nullptr;
+    }
+    cleanup();
+    return result;
 }
 
 struct Q8PairContext {
@@ -618,7 +723,66 @@ PyObject* q4_matmul(PyObject*, PyObject* args) {
     return reinterpret_cast<PyObject*>(output);
 }
 
+PyObject* native_rms_norm(PyObject*, PyObject* args) {
+    PyObject* x_object;
+    PyObject* weight_object;
+    double eps;
+    if (!PyArg_ParseTuple(args, "OOd:rms_norm", &x_object, &weight_object, &eps)) return nullptr;
+    auto* x = reinterpret_cast<PyArrayObject*>(PyArray_FROM_OTF(
+        x_object, NPY_FLOAT32, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED));
+    auto* weight = reinterpret_cast<PyArrayObject*>(PyArray_FROM_OTF(
+        weight_object, NPY_FLOAT32, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED));
+    if (x == nullptr || weight == nullptr) {
+        Py_XDECREF(x); Py_XDECREF(weight); return nullptr;
+    }
+    const int ndim = PyArray_NDIM(x);
+    if (ndim < 1 || PyArray_NDIM(weight) != 1 ||
+        PyArray_DIM(x, ndim - 1) == 0 ||
+        PyArray_DIM(x, ndim - 1) != PyArray_DIM(weight, 0) ||
+        !std::isfinite(eps) || eps < 0) {
+        PyErr_SetString(PyExc_ValueError, "invalid RMSNorm shapes or epsilon");
+        Py_DECREF(x); Py_DECREF(weight); return nullptr;
+    }
+    auto* output = reinterpret_cast<PyArrayObject*>(
+        PyArray_SimpleNew(ndim, PyArray_DIMS(x), NPY_FLOAT32));
+    if (output == nullptr) { Py_DECREF(x); Py_DECREF(weight); return nullptr; }
+    const npy_intp width = PyArray_DIM(x, ndim - 1);
+    const npy_intp rows = PyArray_SIZE(x) / width;
+    const float* values = static_cast<const float*>(PyArray_DATA(x));
+    const float* gains = static_cast<const float*>(PyArray_DATA(weight));
+    float* result = static_cast<float*>(PyArray_DATA(output));
+    Py_BEGIN_ALLOW_THREADS
+    for (npy_intp row = 0; row < rows; ++row) {
+        const float* input = values + row * width;
+        float sum = 0;
+#ifdef LOCAL_LLM_ARM_NEON
+        float32x4_t acc = vdupq_n_f32(0);
+        npy_intp i = 0;
+        for (; i + 4 <= width; i += 4) {
+            const float32x4_t value = vld1q_f32(input + i);
+            acc = vmlaq_f32(acc, value, value);
+        }
+#if defined(__aarch64__)
+        sum = vaddvq_f32(acc);
+#else
+        float lanes[4]; vst1q_f32(lanes, acc);
+        sum = lanes[0] + lanes[1] + lanes[2] + lanes[3];
+#endif
+        for (; i < width; ++i) sum += input[i] * input[i];
+#else
+        for (npy_intp i = 0; i < width; ++i) sum += input[i] * input[i];
+#endif
+        const float scale = 1.0f / std::sqrt(sum / static_cast<float>(width) + static_cast<float>(eps));
+        for (npy_intp i = 0; i < width; ++i) result[row * width + i] = input[i] * scale * gains[i];
+    }
+    Py_END_ALLOW_THREADS
+    Py_DECREF(x); Py_DECREF(weight);
+    return reinterpret_cast<PyObject*>(output);
+}
+
 PyMethodDef methods[] = {
+    {"rms_norm", native_rms_norm, METH_VARARGS, "RMS normalization without intermediate NumPy arrays."},
+    {"q8_matmul_qkv", q8_matmul_qkv, METH_VARARGS, "Three Q8 projections with unequal rows in one dispatch."},
     {"q4_matmul", q4_matmul, METH_VARARGS, "Multiply packed GGML Q4_0 rows by float32 vectors."},
     {"q8_matmul", q8_matmul, METH_VARARGS, "Multiply packed GGML Q8_0 rows by float32 vectors."},
     {"q8_matmul_pair", q8_matmul_pair, METH_VARARGS, "Multiply two same-shaped Q8_0 matrices in one dispatch."},

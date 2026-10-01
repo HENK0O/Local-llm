@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 from .cache import KVCache
 from .config import ModelConfig
 from .ops import (
-    apply_rope, linear, linear_add, linear_pair, linear_swiglu, rms_norm, sigmoid, softmax,
+    apply_rope, linear, linear_add, linear_qkv, linear_swiglu, rms_norm, rope_factors, sigmoid, softmax,
 )
 from .profiling import OperationProfiler
 from .safetensors import load_directory as load_safetensors_directory
@@ -97,8 +97,11 @@ class LlamaModel:
         if errors:
             raise ValueError("invalid weights:\n  " + "\n  ".join(errors))
 
-    def forward(self, token_ids: NDArray[np.integer], cache: Optional[KVCache] = None) -> Array:
-        logits, _ = self._forward(token_ids, cache, capture=False)
+    def forward(self, token_ids: NDArray[np.integer], cache: Optional[KVCache] = None,
+                *, last_logits_only: bool = False) -> Array:
+        """Evaluate tokens; optionally project only the last position for generation."""
+        logits, _ = self._forward(token_ids, cache, capture=False,
+                                  last_logits_only=last_logits_only)
         return logits
 
     def forward_with_activations(self, token_ids: NDArray[np.integer]) -> Tuple[Array, Dict[str, Array]]:
@@ -106,7 +109,7 @@ class LlamaModel:
         return self._forward(token_ids, cache=None, capture=True)
 
     def _forward(self, token_ids: NDArray[np.integer], cache: Optional[KVCache],
-                 capture: bool) -> Tuple[Array, Dict[str, Array]]:
+                 capture: bool, last_logits_only: bool = False) -> Tuple[Array, Dict[str, Array]]:
         tokens = np.asarray(token_ids, dtype=np.int64)
         if tokens.ndim != 1 or tokens.size == 0:
             raise ValueError("token_ids must be a non-empty 1D array")
@@ -129,14 +132,19 @@ class LlamaModel:
         if capture:
             activations["embeddings"] = np.asarray(x, dtype=np.float32).copy()
         positions = np.arange(start, end, dtype=np.int64)
+        factors = rope_factors(positions, self.config.rope_theta,
+                               self.config.rope_dimension_count or self.config.head_dim,
+                               self.config.rope_interleaved)
         for layer_index in range(self.config.num_hidden_layers):
-            x = self._layer(x, layer_index, positions, start, end, cache)
+            x = self._layer(x, layer_index, positions, start, end, cache, factors)
             if capture:
                 activations[f"layer.{layer_index}"] = np.asarray(x, dtype=np.float32).copy()
 
         if cache is not None:
             cache.length = end
         started = time.perf_counter() if profiler is not None else 0.0
+        if last_logits_only:
+            x = x[-1:]
         x = rms_norm(x, self.weights["model.norm.weight"], self.config.rms_norm_eps)
         if profiler is not None:
             profiler.record("final_norm", time.perf_counter() - started)
@@ -163,6 +171,7 @@ class LlamaModel:
         start: int,
         end: int,
         cache: Optional[KVCache],
+        factors: Tuple[Array, Array],
     ) -> Array:
         c = self.config
         prefix = f"model.layers.{layer_index}"
@@ -173,9 +182,9 @@ class LlamaModel:
         if profiler is not None:
             profiler.record("attention_norm", time.perf_counter() - started)
         started = time.perf_counter() if profiler is not None else 0.0
-        query = linear(hidden, self.weights[f"{prefix}.self_attn.q_proj.weight"])
-        key, value = linear_pair(
+        query, key, value = linear_qkv(
             hidden,
+            self.weights[f"{prefix}.self_attn.q_proj.weight"],
             self.weights[f"{prefix}.self_attn.k_proj.weight"],
             self.weights[f"{prefix}.self_attn.v_proj.weight"],
         )
@@ -191,9 +200,9 @@ class LlamaModel:
             key = rms_norm(key, self.weights[f"{prefix}.self_attn.k_norm.weight"],
                            c.rms_norm_eps)
         query = apply_rope(query, positions, c.rope_theta, c.rope_interleaved,
-                           c.rope_dimension_count)
+                           c.rope_dimension_count, factors)
         key = apply_rope(key, positions, c.rope_theta, c.rope_interleaved,
-                         c.rope_dimension_count)
+                         c.rope_dimension_count, factors)
         if profiler is not None:
             profiler.record("qk_norm_rope", time.perf_counter() - started)
 
@@ -216,9 +225,15 @@ class LlamaModel:
             query.shape[0], c.num_key_value_heads, groups, c.head_dim
         )
         started = time.perf_counter() if profiler is not None else 0.0
-        scores = np.einsum(
-            "tkgd,skd->kgts", grouped_query, all_key, optimize=False
-        ) / np.sqrt(c.head_dim)
+        # Batched matrix products use BLAS for prefill while broadcasting KV
+        # heads across query groups without materializing repeated keys/values.
+        # Accelerate can leave spurious FP flags, as in ops.linear. Actual
+        # non-finite results still propagate and are checked by reference tests.
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            scores = np.matmul(
+                grouped_query.transpose(1, 2, 0, 3),
+                all_key.transpose(1, 2, 0)[:, None, :, :],
+            ) / np.sqrt(c.head_dim)
         # A one-token cached decode is necessarily the last position, so every
         # key visible in the cache is causal. Avoid allocating a mask per layer.
         if query.shape[0] > 1 or key_start == 0:
@@ -234,9 +249,10 @@ class LlamaModel:
         if profiler is not None:
             profiler.record("attention_softmax", time.perf_counter() - started)
         started = time.perf_counter() if profiler is not None else 0.0
-        attention = np.einsum(
-            "kgts,skd->tkgd", probabilities, all_value, optimize=False
-        )
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            attention = np.matmul(
+                probabilities, all_value.transpose(1, 0, 2)[:, None, :, :]
+            ).transpose(2, 0, 1, 3)
         attention = attention.reshape(-1, c.num_attention_heads * c.head_dim)
         if profiler is not None:
             profiler.record("attention_values", time.perf_counter() - started)
