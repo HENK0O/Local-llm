@@ -4,6 +4,7 @@ import argparse
 import codecs
 import json
 import sys
+import time
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -72,7 +73,7 @@ def _run_once(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="local-llm", description="Minimal NumPy Llama runtime")
+    parser = argparse.ArgumentParser(prog="local-llm", description="Local inference, GPU calibration and transparent native CPU runtime")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run = subparsers.add_parser("run", help="generate text from a local model directory")
@@ -111,6 +112,11 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("--output", type=Path, help="save a reproducible JSON report")
     benchmark.add_argument("--compare", type=Path, help="compare with a saved JSON baseline")
     benchmark.add_argument("--json", action="store_true", help="print the report as JSON")
+
+    calibrate = subparsers.add_parser('calibrate', help='calibrate the direct llama.cpp runtime on this computer')
+    calibrate.add_argument('model', type=Path, help='installed GGUF target model')
+    calibrate.add_argument('--draft', type=Path, help='optional smaller GGUF with exactly the same tokenizer')
+    calibrate.add_argument('--output', type=Path, help='export measured profile as JSON')
 
     evaluate = subparsers.add_parser(
         "evaluate", help="check logits, greedy tokens, KV cache and runtime regressions"
@@ -155,6 +161,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="loopback LM Studio server for discovery and comparisons")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8080)
+    serve.add_argument('--engine', choices=['auto', 'gpu', 'native'], default='auto',
+                       help='auto prefers installed llama.cpp for GGUF; native retains the CPU runtime')
     serve.add_argument("--max-tokens", type=int, default=128,
                        help="default maximum generated tokens per request")
     serve.add_argument("--max-request-tokens", type=int, default=512,
@@ -182,6 +190,35 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == 'calibrate':
+        from .accelerator import Accelerator
+        from .discovery import inspect_model
+        runtime = Accelerator()
+        try:
+            runtime.load(inspect_model(args.model))
+            runtime.optimize(args.draft)
+            last = None
+            while runtime.job['state'] == 'running':
+                status = str(runtime.job['progress']) + '% · ' + runtime.job['message']
+                if status != last:
+                    print(status, file=sys.stderr, flush=True)
+                    last = status
+                time.sleep(0.5)
+            if runtime.job['state'] != 'complete':
+                raise ValueError(runtime.job['message'])
+            report = runtime.profile
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return 0
+        except KeyboardInterrupt:
+            runtime.cancelled.set()
+            return 130
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            parser.error(str(exc))
+        finally:
+            runtime.close()
     if args.command == "create-toy":
         path = create_toy_model(args.output, args.seed)
         print(f"Toy model written to {path}")
@@ -375,7 +412,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             serve_http(args.model, args.host, args.port, args.max_tokens,
                        args.reference, args.reference_repo, args.max_request_tokens,
                        args.max_connections, args.allow_remote, args.model_dir, args.lm_studio,
-                       args.max_lmstudio_tokens)
+                       args.max_lmstudio_tokens, args.engine)
         except (FileNotFoundError, KeyError, OSError, TypeError, ValueError) as exc:
             parser.error(str(exc))
         return 0

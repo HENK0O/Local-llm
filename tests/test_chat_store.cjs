@@ -189,6 +189,52 @@ test("an unloaded or ambiguous LM selection never picks another instance", () =>
   assert.equal(selectedLMInstance(multiple, "previously-loaded"), null);
 });
 
+test("direct GGUF choices include unsupported native quantizations without duplicate CPU entries", () => {
+  const choices = modelChoices(
+    [
+      { id: "q8", name: "Q8", compatible: true, accelerator_candidate: true },
+      {
+        id: "iq3",
+        name: "IQ3",
+        compatible: false,
+        accelerator_candidate: true,
+      },
+      {
+        id: "aux",
+        name: "DFlash",
+        compatible: false,
+        accelerator_candidate: false,
+      },
+      { id: "directory", name: "Native directory", compatible: true },
+    ],
+    [],
+    true,
+  );
+  assert.equal(
+    JSON.stringify(choices.map((m) => m.key)),
+    JSON.stringify(["llamacpp:q8", "llamacpp:iq3", "directory"]),
+  );
+  assert.equal(choices[0].source, "local-llm · llama.cpp");
+});
+
+test("GPU request identity survives conversation reload without mixing other contexts", () => {
+  const disk = storage(),
+    store = new ConversationStore(disk);
+  const first = store.create("llamacpp:gguf", "GPU GGUF");
+  first.messages.push({ role: "user", content: "Context A" });
+  first.lastRequest = captureContextRequest(first, "llamacpp", "gguf");
+  store.touch(first);
+  const second = store.create("llamacpp:gguf", "GPU GGUF");
+  second.messages.push({ role: "user", content: "Context B" });
+  store.touch(second);
+  store.select(first.id);
+  const reloaded = new ConversationStore(disk);
+  assert.equal(reloaded.active.lastRequest.backend, "llamacpp");
+  assert.equal(reloaded.active.lastRequest.model, "gguf");
+  assert.equal(contextMessages(reloaded.active)[0].content, "Context A");
+  assert.notEqual(first.id, second.id);
+});
+
 test("LM Studio reasoning channels stay separate from the answer", () => {
   assert.equal(
     streamDelta({

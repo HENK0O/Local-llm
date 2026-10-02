@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "local-llm"
 dynamic = ["version"]
-description = "A transparent, numerically validated CPU inference runtime for Llama-like models"
+description = "Local GGUF inference with GPU execution, measured calibration and conversation caching"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"

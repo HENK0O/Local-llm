@@ -10,12 +10,58 @@ from tests.test_discovery import chat_toy
 from tests.test_model import tiny_model, tiny_gated_model
 
 
-def run(model, prompt, cache, count=4):
-    stream = list(generate_tokens(model, prompt, count, prefix_cache=cache))
+def run(model, prompt, cache, count=4, key='default'):
+    stream = list(generate_tokens(model, prompt, count, prefix_cache=cache, cache_key=key))
     return [token for token, _ in stream], stream[-1][1]
 
 
 class PrefixCacheTests(unittest.TestCase):
+    def test_switching_conversations_reuses_each_exact_prefix_with_identical_tokens(self):
+        model, cache = tiny_model(), PrefixCache()
+        a, _ = run(model, [1, 3, 5], cache, key='a')
+        run(model, [1, 7, 9], cache, key='b')
+        prompt = [1, 3, 5] + a + [11]
+        actual, stats = run(model, prompt, cache, key='a')
+        self.assertEqual(actual, generate(model, prompt, 4).token_ids)
+        self.assertGreater(stats.reused_prompt_tokens, 0)
+        self.assertEqual(set(cache.entries), {'a', 'b'})
+
+    def test_interrupted_conversation_does_not_destroy_other_caches(self):
+        model, cache = tiny_model(), PrefixCache()
+        run(model, [1, 3, 5], cache, key='a')
+        run(model, [1, 7, 9], cache, key='b')
+        stream = generate_tokens(model, [1, 3, 11], 4, prefix_cache=cache, cache_key='a')
+        next(stream); stream.close()
+        self.assertNotIn('a', cache.entries)
+        _, warm = run(model, [1, 7, 9], cache, key='b')
+        self.assertEqual(warm.reused_prompt_tokens, 2)
+        _, cold = run(model, [1, 3, 5], cache, key='a')
+        self.assertEqual(cold.reused_prompt_tokens, 0)
+
+    def test_lru_enforces_both_entry_and_memory_limits(self):
+        model, cache = tiny_model(), PrefixCache(max_entries=2)
+        for key in ('a', 'b', 'a', 'c'):
+            run(model, [1, 3, 5], cache, key=key)
+        self.assertEqual(list(cache.entries), ['a', 'c'])
+        budget = next(iter(cache.entries.values()))[2].nbytes
+        cache = PrefixCache(max_bytes=budget, max_entries=8)
+        for key in ('a', 'b'):
+            run(model, [1, 3, 5], cache, key=key)
+        self.assertEqual(list(cache.entries), ['b'])
+        self.assertLessEqual(cache.nbytes, budget)
+
+    def test_server_conversation_id_separates_caches_and_rejects_invalid_ids(self):
+        with tempfile.TemporaryDirectory() as directory, patch('local_llm.server.default_model_roots', return_value=[]):
+            service = ChatService(chat_toy(Path(directory) / 'toy'))
+            payload = {'messages': [{'role': 'user', 'content': 'bonjour'}], 'max_tokens': 4}
+            for key in ('a', 'b', 'a'):
+                result = service.complete(service.parse(dict(payload, conversation_id=key)))
+            self.assertGreater(result.stats.reused_prompt_tokens, 0)
+            self.assertEqual(set(service.prefix_cache.entries), {'a', 'b'})
+            for bad in (None, '', 'x' * 129, 1, []):
+                with self.assertRaises(ValueError): service.parse(dict(payload, conversation_id=bad))
+            service.telemetry.close()
+
     def test_continuation_preserves_greedy_output_and_skips_actual_prompt_work(self):
         for factory in (tiny_model, tiny_gated_model):
             model = factory()

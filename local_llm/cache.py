@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -35,36 +36,40 @@ class KVCache:
 
 
 class PrefixCache:
-    """Retain one bounded prefix between serialized requests, without saving text.
+    """Bounded LRU of exact conversation prefixes; serialized callers own leases.
 
-    Token IDs must match exactly. The last prompt token is always evaluated to
-    produce fresh logits, including when a whole prompt matches an earlier one.
-    The caller owns the returned cache until ``store``; interrupted work cannot
-    leave a partially overwritten prefix available to the next request.
+    Taking an entry removes it until a completed generation stores it again.
+    Interrupted work therefore cannot expose partially overwritten KV data.
+    Other conversations remain intact. No text or cache is written to disk.
     """
 
-    def __init__(self, max_bytes: int = 64 * 1024 * 1024) -> None:
+    def __init__(self, max_bytes: int = 64 * 1024 * 1024, max_entries: int = 8) -> None:
+        if max_bytes < 0 or max_entries < 1:
+            raise ValueError("Invalid prefix cache budget")
         self.max_bytes = max_bytes
+        self.max_entries = max_entries
         self.clear()
 
     def clear(self) -> None:
-        self.model = None
+        self.entries = OrderedDict()
+        self.model = self.cache = None
         self.tokens: List[int] = []
-        self.cache: Optional[KVCache] = None
 
     @property
     def nbytes(self) -> int:
-        return self.cache.nbytes if self.cache is not None else 0
+        return sum(entry[2].nbytes for entry in self.entries.values())
 
-    def prepare(self, model, prompt: List[int], capacity: int) -> Tuple[KVCache, int]:
-        previous = self.cache if self.model is model else None
+    def prepare(self, model, prompt: List[int], capacity: int, key: str = "default") -> Tuple[KVCache, int]:
+        entry = self.entries.pop(key, None)
+        previous = entry[2] if entry is not None and entry[0] is model else None
         reused = 0
         if previous is not None:
-            for old, new in zip(self.tokens, prompt[:-1]):
+            for old, new in zip(entry[1], prompt[:-1]):
                 if old != new:
                     break
                 reused += 1
-        self.clear()
+        self.model = self.cache = None
+        self.tokens = []
         if previous is not None and previous.capacity >= capacity:
             cache = previous
         else:
@@ -76,10 +81,11 @@ class PrefixCache:
         cache.length = reused
         return cache, reused
 
-    def store(self, model, tokens: List[int], cache: KVCache) -> None:
+    def store(self, model, tokens: List[int], cache: KVCache, key: str = "default") -> None:
+        self.entries.pop(key, None)
         if cache.nbytes <= self.max_bytes and cache.length == len(tokens):
-            self.model = model
-            self.tokens = list(tokens)
-            self.cache = cache
-        else:
-            self.clear()
+            self.entries[key] = (model, list(tokens), cache)
+        while len(self.entries) > self.max_entries or self.nbytes > self.max_bytes:
+            self.entries.popitem(last=False)
+        last = next(reversed(self.entries.values()), None) if self.entries else None
+        self.model, self.tokens, self.cache = last if last else (None, [], None)

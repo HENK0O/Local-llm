@@ -88,6 +88,7 @@ def generate_tokens(
     seed: Optional[int] = None,
     *,
     prefix_cache: Optional[PrefixCache] = None,
+    cache_key: str = "default",
 ) -> Iterator[Tuple[int, Optional[GenerationStats]]]:
     """Yield ``(token_id, stats)``; stats is populated only on the final item."""
     if not prompt_tokens:
@@ -107,7 +108,7 @@ def generate_tokens(
         return
 
     prefill_start = time.perf_counter()
-    cache, reused = (prefix_cache.prepare(model, prompt_tokens, max(capacity, 1))
+    cache, reused = (prefix_cache.prepare(model, prompt_tokens, max(capacity, 1), cache_key)
                      if prefix_cache is not None else (model.new_cache(max(capacity, 1)), 0))
     logits = model.forward(np.asarray(prompt_tokens[reused:], dtype=np.int64), cache=cache,
                            last_logits_only=True)
@@ -132,7 +133,7 @@ def generate_tokens(
             if prefix_cache is not None:
                 # The final emitted token (EOS or length limit) has not yet
                 # passed through forward; only retain positions with KV data.
-                prefix_cache.store(model, prompt_tokens + emitted[:-1], cache)
+                prefix_cache.store(model, prompt_tokens + emitted[:-1], cache, cache_key)
             yield token, stats
             return
         yield token, None

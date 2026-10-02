@@ -4,17 +4,94 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](pyproject.toml)
 
-**Un runtime Llama transparent, vérifiable numériquement et accéléré sur CPU.**
+**Une app d’inférence locale avec exécution GPU, calibration mesurée et cache des conversations.**
 
-`local-llm` montre toute la chaîne d'inférence sans la cacher derrière
-Transformers ou une bibliothèque d'inférence : chargement des poids, tokenizer,
-passage avant, cache KV, génération, GGUF, quantification et kernels natifs. Le
-cœur reste lisible en Python/NumPy ; les chemins Q8/Q4 critiques sont accélérés
-en C++/NEON puis comparés aux logits et tokens du chemin de référence.
+Le moteur direct utilise **llama.cpp** pour exécuter vos GGUF installés, avec
+Metal sur Apple Silicon ou les périphériques disponibles dans votre build.
+local-llm calibre ses réglages sur votre machine et conserve une configuration
+uniquement si le benchmark confirme un gain reproductible sans changer ses
+sorties. Les poids ne sont ni modifiés ni téléchargés automatiquement.
 
-Le but n'est pas de battre `llama.cpp` au nombre de modèles supportés. Le projet
-vise un moteur de référence **compréhensible, mesurable et assez rapide pour être
-utilisé localement**.
+Le moteur CPU Python/NumPy reste disponible avec `--engine native`. Il expose la
+chaîne d’inférence et ses kernels Q8/Q4 en C++/NEON, vérifiés face aux logits et
+tokens du chemin de référence. L’accélération GPU provient de llama.cpp ; la
+couche local-llm apporte la calibration, le choix de la spéculation, le suivi du
+contexte et des conversations. Relayer une requête à LM Studio n’accélère pas
+ses calculs.
+
+## Moteur GPU et optimisation automatique
+
+Sur macOS, installez le runtime officiel, puis démarrez l’app :
+
+```bash
+brew install llama.cpp
+.venv/bin/python -m local_llm serve
+```
+
+Sur Linux, utilisez un build officiel de [llama.cpp](https://github.com/ggml-org/llama.cpp)
+avec votre backend GPU et `llama-server` dans le PATH. La détection vérifie les
+options requises ; un build ancien affiche une erreur explicite. Le runtime
+validé localement est le build **11146 / 7fe450e19**. Le chemin de l’exécutable
+peut être défini par `LOCAL_LLM_LLAMA_SERVER`.
+
+`serve --engine auto` est le mode par défaut : il préfère un petit GGUF déjà
+compatible avec le moteur CPU quand llama.cpp est installé. Sans ce runtime,
+le moteur CPU reste utilisable. `--engine gpu` impose le moteur direct et
+`--engine native` conserve le moteur CPU. La bibliothèque permet aussi de
+charger directement un GGUF que le moteur CPU ne prend pas en charge ; sa
+compatibilité finale dépend du build llama.cpp installé. Les modèles auxiliaires
+DFlash et les modèles d’embeddings ne sont pas proposés comme modèles de chat.
+
+Dans **Performances**, choisissez **Optimiser ce modèle**. L’app compare une
+configuration standard, deux tailles de batch et la génération spéculative par
+motifs du contexte. Un GGUF auxiliaire installé, plus petit et ayant exactement
+les mêmes tokens et tokens spéciaux, peut également être testé. Les propositions
+sont validées par le modèle cible ; aucune spéculation n’est activée par défaut.
+Une variante plus lente ou dont la sortie diffère est rejetée.
+
+Les essais utilisent les mêmes poids, la même quantification F16/Q8/etc., le même
+cache KV F16, la même capacité de contexte et deux slots. Trois prompts fixes
+(dont un contexte répétitif favorable aux motifs) sont joués deux fois à
+température zéro, en ordre de configurations inversé et après échauffement.
+La configuration gagnante doit accélérer chacune des deux suites d’au moins
+5 %, sans réduire le débit de décodage, et produire exactement les mêmes tokens.
+Le temps affiché est la médiane des deux suites complètes ; le débit est pondéré
+par les tokens décodés et leur durée. Ces mesures ne prouvent ni un gain sur
+toute conversation ni une qualité générale supérieure.
+
+Le profil contient les empreintes des poids et sorties du benchmark, les temps,
+les réglages et l’identité du matériel/runtime, sans conversations personnelles.
+Il est sauvegardé dans `~/.cache/local-llm` (`LOCAL_LLM_STATE_DIR` pour changer ce
+dossier), vérifié puis rechargé avec le modèle. Un changement de poids, de build,
+de matériel ou de contexte invalide le profil. L’annulation restaure les réglages
+précédents avant de rendre le modèle disponible.
+
+Le worker d’inférence écoute sur une adresse loopback et un port privé avec
+une clé temporaire. local-llm ferme uniquement les processus qu’il a créés.
+Les poids restent chargés entre les réponses jusqu’au déchargement/changement
+de moteur ou à la fermeture de l’app. Deux conversations disposent chacune
+d’un slot de cache GPU, avec éviction de la moins récente ; les interruptions
+invalident le slot avant réutilisation. Le contexte n’est pas tronqué ou compressé
+silencieusement. Le moteur CPU conserve jusqu’à huit préfixes exacts dans 64 Mio.
+La RAM système inclut les processus externes comme LM Studio ; charger la même
+copie dans les deux moteurs peut donc nécessiter de la décharger dans LM Studio.
+
+La même calibration est disponible sans serveur HTTP :
+
+```bash
+local-llm calibrate /chemin/modele.gguf --output /tmp/profil.json
+# Facultatif : --draft /chemin/auxiliaire-compatible.gguf
+```
+
+L’API expose `GET /v1/accelerator`, `GET /v1/accelerator/drafts` et les POST
+`/v1/accelerator/load` (`{"id":"id-du-catalogue"}`), `/optimize` (facultatif
+`{"draft_id":"id-du-catalogue"}`), `/cancel` et `/unload`. L’optimisation retourne
+202 ; son état et ses mesures sont accessibles dans `GET /v1/accelerator`.
+Pour le chat direct, envoyez `backend: "llamacpp"`, `model` correspondant à
+l’identifiant chargé, `conversation_id` propre au fil et `stream: true` à
+`/v1/chat/completions`. La capacité de réponse est bornée à 4096 tokens et par le
+contexte chargé. Le débit moteur et les tokens d’entrée effectivement réutilisés
+sont rapportés séparément des gains mesurés pendant la calibration.
 
 ## Essai rapide avec un vrai modèle
 
@@ -210,7 +287,7 @@ Le bouton **Contexte** ouvre une vue séparée des échanges conservés pour la
 prochaine réponse et des messages envoyés à la dernière requête. Elle s’actualise
 à la fin de chaque requête, y compris après un arrêt ou une erreur ; les
 brouillons et les échanges échoués sans réponse sont exclus du contexte futur.
-Pour le moteur natif, le détail affiche les instructions système, les balises du
+Pour les moteurs natif et direct, le détail affiche les instructions système, les balises du
 modèle et le nombre exact de tokens. Le texte de la dernière requête provient
 de la trace réellement utilisée, conservée parmi les huit dernières traces
 pendant quinze minutes et effacée au changement de modèle. L’aperçu du contexte
@@ -295,7 +372,7 @@ Le serveur examine `./models`, `~/.lmstudio/models`, l’ancien dossier
 s’ils sont définis). `LOCAL_LLM_MODEL_DIRS` ajoute des bibliothèques, séparées par
 le séparateur de chemins du système. Le scan est limité en profondeur et à 256
 modèles ; il ne parcourt pas tout le disque et ne télécharge aucun poids.
-Le premier modèle compatible, en privilégiant les petits GGUF Q8, est chargé.
+Le moteur direct privilégie un petit GGUF compatible ; le mode natif privilégie les petits GGUF Q8.
 La bibliothèque affiche aussi les modèles incompatibles avec leur raison. Un
 changement de modèle invalide les traces comparatives du serveur et le cache de
 préfixe. L’historique et les statistiques des conversations du navigateur restent.
@@ -464,7 +541,7 @@ curl -N http://127.0.0.1:8080/v1/chat/completions \
 `GET /health` vérifie que le serveur répond et `GET /v1/models` indique le modèle
 chargé. L'API reprend la structure principale de Chat Completions, sans prétendre
 encore en couvrir toutes les options. Elle n'emploie aucune bibliothèque serveur
-externe et les générations sont sérialisées pour éviter de saturer le CPU.
+externe pour sa façade HTTP ; les générations sont sérialisées pour borner les ressources. Sans `backend`, les appels visent le moteur CPU ; utilisez `backend: "llamacpp"` pour le moteur direct et son identifiant chargé.
 
 Le serveur n'a pas d'authentification et reste donc local par défaut. Les appels
 provenant d'une autre origine web sont refusés, le corps doit être du JSON, une

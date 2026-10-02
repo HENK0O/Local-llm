@@ -23,6 +23,7 @@ from .lmstudio import LMStudioClient
 from .recommendations import recommend_models
 from .telemetry import SystemTelemetry
 from .cache import PrefixCache
+from .accelerator import Accelerator, draft_compatible
 from .gguf import Q4Matrix, Q8Matrix, q4_backend_name, q8_backend_name
 from .loading import load_runtime
 from .reference_runtime import ReferenceRuntime
@@ -32,6 +33,7 @@ from .version import __version__
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_TOKENS = 512
 MAX_LMSTUDIO_TOKENS = 8192
+MAX_ACCELERATOR_TOKENS = 4096
 DEFAULT_MAX_CONNECTIONS = 8
 REQUEST_TIMEOUT_SECONDS = 30
 WEB_INDEX = Path(__file__).with_name("web") / "index.html"
@@ -51,6 +53,7 @@ class ChatRequest:
     model_id: Optional[str] = None
     model_key: Optional[str] = None
     model_name: Optional[str] = None
+    conversation_id: str = "default"
 
 
 @dataclass(frozen=True)
@@ -133,10 +136,13 @@ def parse_chat_request(payload: object, default_max_tokens: int = 128,
         raise ValueError("stream must be a boolean")
     if template_name is not None and not isinstance(template_name, str):
         raise ValueError("chat_template must be a string")
-    if not isinstance(backend, str) or backend not in {"local", "reference", "lmstudio"}:
-        raise ValueError("backend must be local, reference or lmstudio")
+    if not isinstance(backend, str) or backend not in {"local", "reference", "lmstudio", "llamacpp"}:
+        raise ValueError("backend must be local, reference, lmstudio or llamacpp")
+    conversation_id = payload.get("conversation_id", "default")
+    if not isinstance(conversation_id, str) or not 1 <= len(conversation_id) <= 128:
+        raise ValueError("conversation_id must contain 1 to 128 characters")
     return ChatRequest(messages, max_tokens, temperature, top_k, top_p, seed,
-                       stream, template_name, backend)
+                       stream, template_name, backend, conversation_id=conversation_id)
 
 
 def parse_benchmark_request(payload: object) -> BenchmarkRequest:
@@ -157,11 +163,15 @@ class ChatService:
                  reference_repo: Optional[Path] = None,
                  max_request_tokens: int = MAX_REQUEST_TOKENS,
                  model_dirs=None, lm_studio_url: str = "http://127.0.0.1:1234",
-                 max_lmstudio_tokens: int = MAX_LMSTUDIO_TOKENS) -> None:
+                 max_lmstudio_tokens: int = MAX_LMSTUDIO_TOKENS, engine: str = 'native') -> None:
+        if engine not in {'auto', 'native', 'gpu'}:
+            raise ValueError('engine must be auto, native or gpu')
         self.telemetry = SystemTelemetry()
         self._generation_lock = threading.RLock()
         self._records = OrderedDict()
         self.prefix_cache = PrefixCache()
+        self.accelerator = Accelerator()
+        self._accelerator_records = OrderedDict()
         self.extra_model_roots = list(model_dirs or [])
         self.model_roots = default_model_roots() + self.extra_model_roots
         self.catalog = {m.id: m for m in discover_models(self.model_roots)}
@@ -189,6 +199,21 @@ class ChatService:
         if self.reference_repo is not None and not self.reference_repo.is_dir():
             raise FileNotFoundError(f"reference repository not found: {self.reference_repo}")
         self.reference_runtime = None
+        candidates = [m for m in self.catalog.values() if Path(m.path).suffix.lower() == '.gguf'
+                      and m.architecture not in {None, 'dflash', 'bert', 'nomic-bert'}]
+        candidate = explicit if model_path is not None else min(
+            (m for m in candidates if m.compatible), key=lambda m: m.size_bytes, default=None)
+        if engine != 'native' and candidate is not None and self.accelerator.available()['available']:
+            try:
+                self.load_accelerator({'id': candidate.id})
+                return
+            except (OSError, ValueError) as exc:
+                if engine == 'gpu':
+                    self.accelerator.close()
+                    raise
+                print('Moteur direct indisponible, repli CPU : ' + str(exc))
+        elif engine == 'gpu':
+            raise ValueError(self.accelerator.available().get('error', 'Un modèle GGUF de discussion est requis.'))
         if model_path is not None:
             self.load_model({"id": explicit.id})
         else:
@@ -203,8 +228,15 @@ class ChatService:
                 items = {m.id: m for m in discover_models(self.model_roots)}
                 if self.current_id and self.current_id in self.catalog:
                     items[self.current_id] = self.catalog[self.current_id]
+                if self.accelerator.model_id in self.catalog:
+                    items[self.accelerator.model_id] = self.catalog[self.accelerator.model_id]
                 self.catalog = items
-            return {"models": [m.to_dict() for m in self.catalog.values()],
+            models = []
+            for m in self.catalog.values():
+                data = m.to_dict()
+                data["accelerator_candidate"] = Path(m.path).suffix.lower() == ".gguf" and m.architecture not in {None, "dflash", "bert", "nomic-bert"}
+                models.append(data)
+            return {"models": models, "accelerator": self.accelerator.describe(),
                     "current_id": self.current_id,
                     "roots": [str(Path(p).expanduser()) for p in self.model_roots]}
 
@@ -217,6 +249,9 @@ class ChatService:
                 raise ValueError("Modèle absent des bibliothèques configurées")
             if not item.compatible:
                 raise ValueError(item.reason)
+            if self.accelerator.describe()['loaded']:
+                self.accelerator.unload()
+                self._accelerator_records.clear()
             if item.id != self.current_id:
                 model, tokenizer = load_runtime(Path(item.path))
                 require_chat_template(tokenizer)
@@ -250,9 +285,73 @@ class ChatService:
                 "reference_chat_available": self.reference_runtime is not None,
                 "max_request_tokens": self.max_request_tokens,
                 "max_lmstudio_tokens": self.max_lmstudio_tokens,
-                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances"],
+                "max_accelerator_tokens": MAX_ACCELERATOR_TOKENS,
+                "accelerator": self.accelerator.describe(),
+                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding"],
                 "retained_cache_bytes": self.prefix_cache.nbytes,
                 "retained_cache_limit_bytes": self.prefix_cache.max_bytes}
+
+    def system_snapshot(self):
+        snapshot = self.telemetry.snapshot()
+        runtime = self.accelerator.describe()
+        child = self.accelerator._rss() if runtime['loaded'] else 0
+        parent = snapshot.get('process_rss_bytes')
+        snapshot['inference_process_rss_bytes'] = child
+        snapshot['process_rss_bytes'] = parent + child if parent is not None and child is not None else None
+        snapshot['process_note'] = ('RSS cumulés du serveur Python et de son worker d’inférence. '
+            'Les pages partagées peuvent être comptées plusieurs fois ; ce n’est pas une mesure de RAM physique exclusive. '
+            'LM Studio est inclus dans la RAM système, pas dans ces processus.')
+        return snapshot
+
+    def load_accelerator(self, payload):
+        if not isinstance(payload, dict) or not isinstance(payload.get("id"), str):
+            raise ValueError("model id is required")
+        item = self.catalog.get(payload["id"])
+        if item is None:
+            raise ValueError("Modèle absent des bibliothèques configurées")
+        with self._generation_lock:
+            memory = self.telemetry.snapshot()
+            available = memory.get("memory_total_bytes")
+            if available and memory.get("memory_used_bytes") is not None:
+                available -= memory["memory_used_bytes"]
+                available += self.accelerator._rss() or 0
+            result = self.accelerator.load(item, available)
+            self.unload_model()
+            self._accelerator_records.clear()
+            return result
+
+    def accelerator_drafts(self):
+        target = self.accelerator.path
+        models = []
+        if target is not None:
+            for item in self.catalog.values():
+                if Path(item.path).suffix.lower() != '.gguf':
+                    continue
+                try:
+                    if draft_compatible(target, Path(item.path)):
+                        models.append({'id': item.id, 'name': item.name, 'size_bytes': item.size_bytes})
+                except (OSError, ValueError, KeyError, TypeError):
+                    continue
+        return {'models': models}
+
+    def optimize_accelerator(self, payload):
+        if not isinstance(payload, dict):
+            raise ValueError("JSON object required")
+        draft_id = payload.get("draft_id")
+        draft = None
+        if draft_id is not None:
+            if not isinstance(draft_id, str) or draft_id not in self.catalog:
+                raise ValueError("Modèle auxiliaire absent de la bibliothèque")
+            draft = self.catalog[draft_id].path
+            if Path(draft).suffix.lower() != ".gguf":
+                raise ValueError("Modèle auxiliaire GGUF requis")
+            memory = self.telemetry.snapshot()
+            total, used = memory.get("memory_total_bytes"), memory.get("memory_used_bytes")
+            if total and used is not None and Path(draft).stat().st_size * 1.2 + 512 * 1024 ** 2 > total - used:
+                raise ValueError("Mémoire insuffisante pour tester ce modèle auxiliaire.")
+        result = self.accelerator.optimize(draft)
+        self._accelerator_records.clear()
+        return result
 
     def unload_model(self) -> Dict:
         with self._generation_lock:
@@ -309,8 +408,20 @@ class ChatService:
 
     def parse(self, payload: object) -> ChatRequest:
         lm = isinstance(payload, dict) and payload.get("backend") == "lmstudio"
-        limit = self.max_lmstudio_tokens if lm else self.max_request_tokens
+        accelerated = isinstance(payload, dict) and payload.get("backend") == "llamacpp"
+        limit = MAX_ACCELERATOR_TOKENS if accelerated else self.max_lmstudio_tokens if lm else self.max_request_tokens
         request = parse_chat_request(payload, min(self.default_max_tokens, limit), limit)
+        if request.backend == "llamacpp":
+            if request.template_name is not None:
+                raise ValueError('Le moteur direct utilise le template embarqué du GGUF ; chat_template n’est pas disponible.')
+            runtime = self.accelerator.describe()
+            if runtime.get("job") and runtime["job"].get("state") == "running":
+                raise ValueError("Calibration en cours")
+            if not runtime["loaded"] or payload.get("model") != runtime["model_id"]:
+                raise ValueError("Le modèle demandé n’est pas chargé dans le moteur GPU")
+            if not request.stream:
+                raise ValueError("Le moteur GPU nécessite stream=true")
+            return replace(request, model_id=runtime["model_id"], model_name=runtime["model_name"])
         if request.backend == "lmstudio":
             model_id = payload.get("model")
             listing = self.lmstudio.models()
@@ -363,14 +474,18 @@ class ChatService:
                 completion_id = payload["completion_id"]
                 if not isinstance(completion_id, str):
                     raise ValueError("completion_id must be a string")
-                record = self._records.get(completion_id)
+                record = self._records.get(completion_id) or self._accelerator_records.get(completion_id)
                 if record is None or time.monotonic() - record["created"] > 900:
                     raise ValueError("Texte exact indisponible : requête expirée ou modèle changé")
                 return {"kind": "request", "prompt": record["prompt"],
-                        "prompt_tokens": len(record["prompt_ids"]),
-                        "model": self.model_name, "compression": "none"}
+                        "prompt_tokens": record.get("prompt_tokens", len(record.get("prompt_ids", []))),
+                        "model": record.get("model", self.model_name), "compression": "none"}
             if payload.get("backend", "local") == "lmstudio":
                 raise ValueError("Le contexte interne de LM Studio n’est pas accessible")
+            if payload.get("backend") == "llamacpp":
+                request = self.parse(dict(payload, stream=True, max_tokens=1))
+                messages = [{"role": m.role, "content": m.content} for m in request.messages]
+                return self.accelerator.context(messages)
             request = self.parse(payload)
             prompt, token_ids = self._prepare_context(request)
             return {"kind": "preview", "prompt": prompt, "prompt_tokens": len(token_ids),
@@ -396,6 +511,7 @@ class ChatService:
                     self.model, prompt_tokens, request.max_tokens, request.temperature,
                     request.top_k, request.top_p, request.seed,
                     prefix_cache=self.prefix_cache if request.backend == "local" else None,
+                    cache_key=request.conversation_id,
                 )
             )
             for token, stats in generator:
@@ -517,6 +633,9 @@ class LocalLLMHTTPServer(ThreadingHTTPServer):
         telemetry = getattr(self.service, "telemetry", None)
         if telemetry is not None:
             telemetry.close()
+        accelerator = getattr(self.service, "accelerator", None)
+        if accelerator is not None:
+            accelerator.close()
 
     def process_request(self, request: socket.socket, client_address) -> None:
         if not self._connection_slots.acquire(blocking=False):
@@ -593,10 +712,18 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, self.server.service.available_models())
             return
         if path == "/v1/system":
-            self._send_json(200, self.server.service.telemetry.snapshot())
+            service = self.server.service
+            self._send_json(200, service.system_snapshot() if hasattr(service, 'system_snapshot') else service.telemetry.snapshot())
             return
         if path == "/v1/recommendations":
             self._send_json(200, recommend_models(installed=self.server.service.catalog.values()))
+            return
+        if path == "/v1/accelerator":
+            self.server.service.accelerator.available()
+            self._send_json(200, self.server.service.accelerator.describe())
+            return
+        if path == "/v1/accelerator/drafts":
+            self._send_json(200, self.server.service.accelerator_drafts())
             return
         if path == "/v1/lmstudio/models":
             self._send_json(200, self.server.service.lmstudio.models())
@@ -614,6 +741,11 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             })
             return
         if path == "/v1/models":
+            runtime = getattr(self.server.service, 'accelerator', None)
+            if runtime is not None and runtime.describe()['loaded']:
+                self._send_json(200, {'object': 'list', 'data': [{
+                    'id': runtime.model_id, 'object': 'model', 'owned_by': 'local-llm'}]})
+                return
             if getattr(self.server.service, "model", True) is None:
                 self._send_json(200, {"object": "list", "data": []})
                 return
@@ -668,7 +800,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self._path()
-        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/lmstudio/load", "/v1/compare"}:
+        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/lmstudio/load", "/v1/accelerator/load", "/v1/accelerator/unload", "/v1/accelerator/optimize", "/v1/accelerator/cancel", "/v1/compare"}:
             self._error(404, "route not found")
             return
         if not self._same_origin():
@@ -680,6 +812,20 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_payload()
+            if path == "/v1/accelerator/load":
+                self._send_json(200, self.server.service.load_accelerator(payload))
+                return
+            if path == "/v1/accelerator/unload":
+                self.server.service.accelerator.unload()
+                self._send_json(200, self.server.service.accelerator.describe())
+                return
+            if path == "/v1/accelerator/optimize":
+                self._send_json(202, self.server.service.optimize_accelerator(payload))
+                return
+            if path == "/v1/accelerator/cancel":
+                self.server.service.accelerator.cancelled.set()
+                self._send_json(200, self.server.service.accelerator.describe())
+                return
             if path == "/v1/lmstudio/load":
                 if not isinstance(payload, dict) or not isinstance(payload.get("model"), str):
                     raise ValueError("model must be a string")
@@ -704,7 +850,9 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(200, self.server.service.benchmark(payload))
                 return
             request = self.server.service.parse(payload)
-            if request.backend == "lmstudio":
+            if request.backend == "llamacpp":
+                self._stream_accelerator(request)
+            elif request.backend == "lmstudio":
                 self._stream_lmstudio(request)
             elif request.stream:
                 self._stream_completion(request)
@@ -750,6 +898,62 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
         value = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
         self.wfile.write(f"data: {value}\n\n".encode("utf-8"))
         self.wfile.flush()
+
+    def _stream_accelerator(self, request):
+        runtime = self.server.service.accelerator
+        response_id = self._response_id()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        payload = {"model": request.model_id, "messages": [dict(role=m.role, content=m.content) for m in request.messages],
+                   "max_tokens": request.max_tokens, "temperature": request.temperature}
+        for key in ("top_k", "top_p", "seed"):
+            if getattr(request, key) is not None:
+                payload[key] = getattr(request, key)
+        runtime.lock.acquire()
+        upstream = runtime.iter_chat(payload, request.conversation_id)
+        usage, timings = {}, {}
+        finish = "stop"
+        try:
+            for chunk in upstream:
+                if chunk.get("model") is not None and chunk["model"] != request.model_id:
+                    raise ValueError("Identité du modèle GPU incorrecte")
+                usage = chunk.get("usage") or usage
+                timings = chunk.get("timings") or timings
+                choices = chunk.get("choices") or []
+                if choices and choices[0].get("finish_reason"):
+                    finish = choices[0]["finish_reason"]
+                chunk.update(id=response_id, backend="llamacpp")
+                self._write_event(chunk)
+            preview = runtime.context(payload["messages"])
+            self.server.service._accelerator_records[response_id] = {**preview, "created": time.monotonic()}
+            while len(self.server.service._accelerator_records) > 8:
+                self.server.service._accelerator_records.popitem(last=False)
+            profile = runtime.profile
+            self._write_event({"id": response_id, "model": request.model_id,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": finish}], "usage": usage,
+                "local_llm": {"backend": "llamacpp", "completion_id": response_id,
+                    "model_name": request.model_name, "decode_tokens_per_second": timings.get("predicted_per_second"),
+                    "prefill_seconds": timings.get("prompt_ms", 0) / 1000 if timings else None,
+                    "decode_seconds": timings.get("predicted_ms", 0) / 1000 if timings else None,
+                    "kv_cache_bytes": None, "reused_prompt_tokens": timings.get("cache_n"),
+                    "optimized": bool(profile and profile["winner"] != "standard"), "timing_kind": "engine",
+                    "calibration_gain_percent": profile["gain_percent"] if profile else None,
+                    "speculative": runtime.config.speculative, "cached_conversations": len(runtime.slots.entries)}})
+            self._write_event("[DONE]")
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as exc:
+            try:
+                self._write_event({"error": {"message": str(exc)}})
+                self._write_event("[DONE]")
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        finally:
+            upstream.close()
+            runtime.lock.release()
 
     def _stream_lmstudio(self, request: ChatRequest) -> None:
         response_id = self._response_id()
@@ -898,14 +1102,19 @@ def create_server(model_path: Optional[Path] = None, host: str = "127.0.0.1", po
                   max_connections: int = DEFAULT_MAX_CONNECTIONS,
                   allow_remote: bool = False, model_dirs=None,
                   lm_studio_url: str = "http://127.0.0.1:1234",
-                  max_lmstudio_tokens: int = MAX_LMSTUDIO_TOKENS) -> LocalLLMHTTPServer:
+                  max_lmstudio_tokens: int = MAX_LMSTUDIO_TOKENS, engine: str = 'native') -> LocalLLMHTTPServer:
     if not 0 <= port <= 65535:
         raise ValueError("port must be between 0 and 65535")
     if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
         raise ValueError("remote binding requires --allow-remote")
     service = ChatService(model_path, default_max_tokens, reference, reference_repo,
-                          max_request_tokens, model_dirs, lm_studio_url, max_lmstudio_tokens)
-    return LocalLLMHTTPServer((host, port), service, max_connections)
+                          max_request_tokens, model_dirs, lm_studio_url, max_lmstudio_tokens, engine)
+    try:
+        return LocalLLMHTTPServer((host, port), service, max_connections)
+    except Exception:
+        service.accelerator.close()
+        service.telemetry.close()
+        raise
 
 
 def serve(model_path: Optional[Path] = None, host: str = "127.0.0.1", port: int = 8080,
@@ -915,13 +1124,14 @@ def serve(model_path: Optional[Path] = None, host: str = "127.0.0.1", port: int 
           max_connections: int = DEFAULT_MAX_CONNECTIONS,
           allow_remote: bool = False, model_dirs=None,
           lm_studio_url: str = "http://127.0.0.1:1234",
-          max_lmstudio_tokens: int = MAX_LMSTUDIO_TOKENS) -> None:
+          max_lmstudio_tokens: int = MAX_LMSTUDIO_TOKENS, engine: str = 'auto') -> None:
     server = create_server(model_path, host, port, default_max_tokens,
                            reference, reference_repo, max_request_tokens,
-                           max_connections, allow_remote, model_dirs, lm_studio_url, max_lmstudio_tokens)
+                           max_connections, allow_remote, model_dirs, lm_studio_url, max_lmstudio_tokens, engine)
     address, actual_port = server.server_address[:2]
     print(f"local-llm server listening on http://{address}:{actual_port}")
-    print(f"model: {server.service.model_name} | POST /v1/chat/completions")
+    direct = server.service.accelerator.describe()
+    print(f"model: {direct['model_name'] if direct['loaded'] else server.service.model_name} | POST /v1/chat/completions")
     print(f"benchmark: {server.service.reference_name} | POST /v1/benchmark")
     if server.service.reference_runtime is not None:
         print(f"reference chat backend: {server.service.reference_runtime.name}")
