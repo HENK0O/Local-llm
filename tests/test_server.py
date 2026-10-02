@@ -22,6 +22,7 @@ class StubChatService:
     reference_name = "Recalcul complet"
     reference = None
     reference_runtime = None
+    telemetry = SimpleNamespace(snapshot=lambda: {"cpu_temperature_celsius": None, "memory_used_bytes": 123}, close=lambda: None)
     model = SimpleNamespace(config=SimpleNamespace(eos_token_id=2))
 
     @staticmethod
@@ -158,6 +159,12 @@ class HTTPServerTests(unittest.TestCase):
         data = response.read()
         connection.close()
         return response.status, response.getheader("Content-Type"), data
+
+    def test_system_readings_are_available_and_do_not_use_the_chat_pipeline(self):
+        status, _, body = self.request("GET", "/v1/system")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["memory_used_bytes"], 123)
+        self.assertIsNone(json.loads(body)["cpu_temperature_celsius"])
 
     def test_health_and_models(self):
         status, content_type, body = self.request("GET", "/")

@@ -21,6 +21,7 @@ from .comparison import compare_cached
 from .discovery import default_model_roots, discover_models, inspect_model
 from .lmstudio import LMStudioClient
 from .recommendations import recommend_models
+from .telemetry import SystemTelemetry
 from .gguf import Q4Matrix, Q8Matrix, q4_backend_name, q8_backend_name
 from .loading import load_runtime
 from .reference_runtime import ReferenceRuntime
@@ -152,6 +153,7 @@ class ChatService:
                  reference_repo: Optional[Path] = None,
                  max_request_tokens: int = MAX_REQUEST_TOKENS,
                  model_dirs=None, lm_studio_url: str = "http://127.0.0.1:1234") -> None:
+        self.telemetry = SystemTelemetry()
         self._generation_lock = threading.RLock()
         self._records = OrderedDict()
         self.extra_model_roots = list(model_dirs or [])
@@ -268,6 +270,8 @@ class ChatService:
                         "delta_tokens_per_second": local - baseline if local > 0 else None,
                         "speedup": local / baseline if local > 0 else None,
                         "comparable": False, "same_weights": None,
+                        "scope": "cross_engine_observation", "validated_engine_gain": False,
+                        "reference_is_standard_engine": True,
                         "text_identical": text == local_text,
                         "baseline_text": text, "runtime": reference.get("runtime"),
                         "baseline_usage": reference.get("usage"),
@@ -448,6 +452,12 @@ class LocalLLMHTTPServer(ThreadingHTTPServer):
         self._connection_slots = threading.BoundedSemaphore(max_connections)
         super().__init__(address, LocalLLMRequestHandler)
 
+    def server_close(self) -> None:
+        super().server_close()
+        telemetry = getattr(self.service, "telemetry", None)
+        if telemetry is not None:
+            telemetry.close()
+
     def process_request(self, request: socket.socket, client_address) -> None:
         if not self._connection_slots.acquire(blocking=False):
             try:
@@ -521,6 +531,9 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/v1/local-models":
             self._send_json(200, self.server.service.available_models())
+            return
+        if path == "/v1/system":
+            self._send_json(200, self.server.service.telemetry.snapshot())
             return
         if path == "/v1/recommendations":
             self._send_json(200, recommend_models(installed=self.server.service.catalog.values()))

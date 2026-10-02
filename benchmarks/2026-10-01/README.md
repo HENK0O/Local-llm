@@ -57,3 +57,7 @@ un écart indicatif, car l’identité des poids et le placement CPU/GPU n’ont
 été vérifiés. Le serveur LM Studio n’était pas lancé sur la machine lors de
 cette session ; la découverte de fichiers a été vérifiée en réel, et le client
 API v1/v0 a été testé avec des réponses simulées.
+
+Mise à jour du 2 octobre : le diagnostic NumPy est désormais manuel, dans
+l’onglet Performances. Aucun pourcentage de gain face à un moteur standard
+n’en est déduit. Voir [l’audit](../2026-10-02/README.md).

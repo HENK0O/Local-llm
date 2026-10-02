@@ -191,11 +191,24 @@ les tokens en direct et permet de régler la température et la longueur maximal
 Le bouton carré interrompt une génération et « Nouvelle conversation » efface
 l'historique envoyé au modèle.
 
-Le panneau latéral sélectionne le modèle et le témoin de performance. Sous chaque
-réponse, l’interface affiche le débit de décodage, les tokens générés, le temps de
-prefill et la mémoire du cache KV. La comparaison automatique est désactivable :
-elle lance un benchmark supplémentaire après la réponse et occupe le moteur
-pendant ses mesures.
+La discussion conserve uniquement les messages, un débit discret et le bouton
+Copier. L’onglet **Performances** rassemble les statistiques des huit dernières
+réponses de la session, les comparaisons manuelles et les mesures de la machine.
+Aucune comparaison ne démarre automatiquement après une réponse.
+
+Le débit visible est **global et observé dans le navigateur** : tokens générés
+/ durée de la requête entière. Il inclut préparation, génération et transport.
+Les détails du moteur indiquent séparément le débit de décodage natif :
+`(tokens générés - 1) / temps des passages de décodage`, hors prefill, sampling
+et transport. Les deux nombres ne mesurent donc pas la même durée.
+
+Les réglages se trouvent dans « Réglages de la discussion ». **Longueur de
+réponse** propose Courte (128 tokens), Standard (256) et Détaillée (512), plus
+un plafond personnalisé borné par la configuration du serveur. Il s’agit d’un
+maximum ; EOS peut arrêter la réponse plus tôt. Même en local, la génération
+consomme du calcul et doit tenir dans le contexte. Une explication est intégrée
+à la fenêtre ; si le plafond est atteint, le chat propose de demander la suite
+ou de choisir une réponse plus détaillée.
 
 **Détection des modèles.** Le chemin du modèle est désormais facultatif :
 
@@ -215,16 +228,21 @@ La bibliothèque affiche aussi les modèles incompatibles avec leur raison. Un
 changement de modèle efface l’historique de l’interface et les mesures précédentes.
 Les poids restent à leur emplacement d’origine.
 
-**Comparaison CPU.** Le témoin par défaut utilise les mêmes poids quantifiés et
-le même cache KV, avec des projections NumPy au lieu des projections natives.
-On rejoue jusqu’à 8 étapes de la réponse avec les mêmes tokens d’entrée, en
-alternant les deux chemins sur 3 essais. Le gain affiché provient des médianes
-mesurées, après contrôle des logits ; il n’est pas extrapolé au débit de la réponse
-entière. Prefill et sampling sont exclus du débit de décodage. Les normalisations,
-l’attention et les autres opérations sont partagées, afin d’isoler les projections.
-Ce témoin ne représente pas les performances de llama.cpp, de Transformers ou
-d’un GPU. Si les deux chemins utilisent déjà les mêmes projections BLAS, aucun
-gain n’est attribué aux kernels quantifiés.
+**Diagnostic CPU.** Le témoin NumPy utilise les mêmes poids quantifiés et le
+même cache KV, avec des projections NumPy au lieu des projections natives.
+On rejoue jusqu’à huit étapes de la réponse avec les mêmes tokens d’entrée,
+en alternant les deux chemins sur trois essais. Les logits sont contrôlés et
+les temps bruts restent accessibles. Ce chemin NumPy convertit les blocs de
+poids pendant chaque projection : il peut être beaucoup plus lent que le code
+natif. Il ne représente pas llama.cpp, LM Studio ou un GPU. Le présenter comme
+un gain face à un moteur standard serait trompeur.
+
+L’interface n’affiche donc aucun pourcentage d’accélération pour ce diagnostic.
+L’API précise `scope: "projection_diagnostic"` et
+`validated_engine_gain: false`. `delta_tokens_per_second` et `speedup` restent
+nuls ; les valeurs techniques sont conservées sous
+`diagnostic_delta_tokens_per_second` et `diagnostic_ratio` pour l’audit.
+Voir [l’audit des mesures du 2 octobre](benchmarks/2026-10-02/README.md).
 
 **Bibliothèque et apparence.** Tous les fichiers détectés sont visibles dans le
 sélecteur et la bibliothèque, y compris les architectures que local-llm ne sait
@@ -235,12 +253,25 @@ personnalisé `downloadsFolder` de LM Studio est également recherché et relu l
 d’une actualisation. Le thème sombre est activé par défaut ; le bouton Clair /
 Sombre conserve le choix dans le navigateur.
 
-Le gain apparaît dans une carte dédiée : **tok/s supplémentaires et pourcentage
-de débit**, avec la référence utilisée et la méthode. Un gain absent, négatif ou
-non validé n’est pas transformé en accélération positive. Les « tokens générés »
-indiquent uniquement la longueur de la réponse.
+**Suivi de la machine.** `GET /v1/system` fournit un relevé local mis en cache
+pendant trois secondes, sans verrouiller l’inférence. La RAM du système et la
+mémoire résidente du processus local-llm sont distinctes ; la mémoire de LM
+Studio apparaît dans le total système, pas dans le processus de cette app.
+Sur macOS, la RAM utilisée exclut les pages de fichiers et les pages purgeables
+pour rester proche de l’affichage du Moniteur d’activité. Linux utilise
+`MemTotal - MemAvailable` ; Windows utilise la RAM physique disponible.
 
-**Suggestions pour la machine.** Le panneau « Pour votre machine » détecte le
+Sur les Mac qui l’exposent, la température est lue directement dans les capteurs
+SMC, sans helper ni droits administrateur, puis moyennée sur les capteurs CPU
+identifiés. Ces noms de capteurs ne constituent pas une API publique Apple ;
+une valeur absente reste indisponible. Linux lit les capteurs CPU hwmon, en
+millidegrés Celsius ; Windows affiche indisponible sans fournisseur de capteurs.
+Aucune température n’est estimée à partir de la charge. Les sources, la méthode,
+l’heure et le périmètre figurent dans Performances. Le polling se suspend lorsque
+la page est masquée ; si le serveur est hors ligne, les anciennes valeurs sont
+effacées de l’affichage en direct.
+
+**Suggestions pour la machine.** Le bouton « Modèles conseillés » détecte le
 processeur, les cœurs logiques et la mémoire physique du serveur local sur macOS,
 Linux et Windows, sans envoyer ces informations sur Internet. Une sélection
 hors ligne de modèles ouverts Apache 2.0, vérifiée le 2 octobre 2026, est filtrée
@@ -262,8 +293,9 @@ le budget et les suggestions avec leurs limites.
 **LM Studio.** Le serveur détecte sa bibliothèque locale même lorsque l’application
 est arrêtée. Pour voir les modèles via son API et mesurer un écart face à son
 runtime, active son serveur local (port 1234 par défaut), puis clique sur
-« Actualiser » dans la section Comparaison. Choisis les mêmes poids et la même
-quantification dans les deux moteurs. Un port différent se configure au lancement :
+« Actualiser » sous LM Studio. Le tutoriel juste sous son statut explique les
+étapes. Choisis les mêmes poids et la même quantification dans les deux moteurs.
+Un port différent se configure au lancement :
 
 ```bash
 local-llm serve --lm-studio http://127.0.0.1:1235

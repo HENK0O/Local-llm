@@ -42,37 +42,6 @@
         --soft: #23392e;
         --red: #f39a9a;
       }
-      .gain-hero {
-        margin: 18px 0 8px;
-        padding: 22px;
-        border-radius: 12px;
-        background: var(--soft);
-        border: 1px solid var(--accent);
-      }
-      .gain-hero strong {
-        display: block;
-        font-size: clamp(28px, 4vw, 42px);
-        letter-spacing: -1.5px;
-        color: var(--accent);
-      }
-      .gain-hero.negative {
-        border-color: var(--red);
-      }
-      .gain-hero.negative strong {
-        color: var(--red);
-      }
-      .gain-hero p {
-        margin: 8px 0 0;
-        color: var(--ink);
-        font-size: 13px;
-        line-height: 1.6;
-      }
-      .gain-percent {
-        font: 14px var(--mono);
-      }
-      .metric-speed {
-        font-size: 16px;
-      }
       .rec-preview {
         background: var(--paper);
         border: 1px solid var(--line);
@@ -136,9 +105,6 @@
         .header-right {
           flex-wrap: wrap;
           justify-content: flex-end;
-        }
-        .gain-hero {
-          padding: 16px;
         }
       }
       * {
@@ -823,6 +789,189 @@
           font-size: 11px;
         }
       }
+      .workspace-tabs {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        margin: 16px 0 20px;
+      }
+      .workspace-tabs button {
+        border: 0;
+        background: transparent;
+        font-size: 13px;
+        padding: 10px 8px;
+      }
+      .workspace-tabs button[aria-selected="true"] {
+        background: var(--soft);
+        color: var(--accent);
+      }
+      .workspace-pane {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .workspace-pane.hidden {
+        display: none;
+      }
+      .performance-layout {
+        width: min(820px, 100%);
+        margin: 0 auto;
+        padding: 32px;
+      }
+      #performanceView {
+        overflow-y: auto;
+      }
+      .performance-layout h1 {
+        font-size: 28px;
+        margin: 0 0 12px;
+      }
+      .performance-layout h2 {
+        font-size: 17px;
+        margin: 0 0 12px;
+        font-weight: 550;
+      }
+      .performance-card {
+        padding: 22px;
+        margin-top: 20px;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+      }
+      .performance-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 15px;
+        margin: 20px 0;
+      }
+      .performance-metrics span {
+        display: block;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+      .performance-metrics strong {
+        overflow-wrap: anywhere;
+        font: 21px var(--mono);
+        font-weight: 550;
+      }
+      .performance-layout label,
+      .setting-label {
+        display: block;
+        margin: 20px 0 8px;
+        font-size: 13px;
+      }
+      .settings-link {
+        text-align: left;
+        background: transparent;
+        border: 0;
+        font-size: 12px;
+        padding: 0 0 20px;
+        color: var(--muted);
+      }
+      .connection-guide {
+        margin-top: 12px;
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      .connection-guide summary {
+        color: var(--accent);
+        font-size: 12px;
+      }
+      .connection-guide ol {
+        padding-left: 18px;
+      }
+      .connection-guide li {
+        margin-bottom: 10px;
+      }
+      .connection-guide p {
+        overflow-wrap: anywhere;
+      }
+      .connection-guide a {
+        color: var(--accent);
+      }
+      .machine-reading {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 11px;
+        margin: 16px 0 8px;
+      }
+      .machine-reading strong {
+        font-weight: 550;
+      }
+      progress {
+        width: 100%;
+        height: 4px;
+        accent-color: var(--accent);
+      }
+      .recommendation-link {
+        margin-top: 20px;
+      }
+      .reply-footer {
+        display: flex;
+        gap: 15px;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 14px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+      .reply-footer button {
+        padding: 4px 8px;
+        background: none;
+        font-size: 11px;
+      }
+      #comparisonResult .compare {
+        margin-top: 22px;
+        background: var(--bg);
+      }
+      .metric-speed {
+        font-size: 11px;
+        color: var(--muted);
+        font-weight: 400;
+      }
+      #settings input[type="number"] {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        padding: 10px;
+        width: 100%;
+        border-radius: 7px;
+      }
+      #responsePerformance details p {
+        line-height: 1.6;
+      }
+      @media (max-width: 760px) {
+        .workspace-tabs {
+          margin: 10px 0;
+        }
+        .settings-link {
+          padding: 10px 0 0;
+        }
+        .lm-section,
+        .machine-section {
+          display: none;
+        }
+        .main {
+          height: calc(100dvh - 200px);
+        }
+        .performance-layout {
+          padding: 22px 18px;
+        }
+        .performance-card {
+          padding: 16px;
+        }
+        .performance-metrics {
+          gap: 10px;
+        }
+        .performance-metrics strong {
+          overflow-wrap: anywhere;
+          font-size: 16px;
+        }
+        .header-model {
+          max-width: 180px;
+        }
+      }
     </style>
   </head>
   <body>
@@ -832,17 +981,28 @@
           <span class="mark" aria-hidden="true">↗</span>local<span>/ llm</span>
         </div>
         <p class="brand-note">Un moteur. Vos modèles.</p>
-        <div class="nav">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            aria-hidden="true"
+        <nav
+          class="workspace-tabs"
+          role="tablist"
+          aria-label="Espace de travail"
+        >
+          <button
+            id="chatTab"
+            role="tab"
+            aria-selected="true"
+            aria-controls="chatView"
           >
-            <path d="M4 5h16v12H8l-4 3z" /></svg
-          >Playground
-        </div>
+            Discussion
+          </button>
+          <button
+            id="performanceTab"
+            role="tab"
+            aria-selected="false"
+            aria-controls="performanceView"
+          >
+            Performances
+          </button>
+        </nav>
         <section class="side-section library-section">
           <div class="side-heading">
             <span class="eyebrow">Vos modèles</span
@@ -862,76 +1022,67 @@
             ><span id="engineStatus">Connexion au moteur…</span>
           </div>
         </section>
-        <section class="side-section parameters">
-          <div class="eyebrow">Génération</div>
-          <label class="control" for="maxTokens"
-            ><span class="control-label"
-              >Limite de tokens
-              <output id="maxTokensValue" class="value">128</output></span
-            ><input
-              id="maxTokens"
-              type="range"
-              min="16"
-              max="512"
-              step="16"
-              value="128"
-          /></label>
-          <label class="control" for="temperature"
-            ><span class="control-label"
-              >Température
-              <output id="temperatureValue" class="value">0.0</output></span
-            ><input
-              id="temperature"
-              type="range"
-              min="0"
-              max="1.5"
-              step="0.1"
-              value="0"
-          /></label>
-          <p class="hint">À 0, la génération est déterministe.</p>
-        </section>
-        <section class="side-section compare-section">
+        <button id="settingsButton" class="settings-link">
+          Réglages de la discussion ↗
+        </button>
+        <section class="side-section lm-section">
           <div class="side-heading">
-            <span class="eyebrow">Comparaison</span
+            <span class="eyebrow">LM Studio</span
             ><button id="lmRefresh" class="link-button">Actualiser</button>
           </div>
-          <label for="baseline" class="hidden">Moteur de comparaison</label
-          ><select id="baseline">
-            <option value="numpy">CPU NumPy · cache KV</option>
-            <option value="lmstudio" id="lmOption" disabled>LM Studio</option>
-            <option value="none">Sans comparaison</option>
-          </select>
-          <label for="lmModel" class="hidden"
-            >Modèle LM Studio de référence</label
-          ><select id="lmModel" class="hidden" style="margin-top: 8px"></select>
-          <label class="switch"
-            ><input type="checkbox" id="autoCompare" checked /><span
-              >Mesurer après chaque réponse</span
-            ></label
-          >
-          <p class="hint" id="baselineHint">
-            Même modèle, mêmes tokens. Comparaison CPU sur 8 étapes, cache
-            activé des deux côtés.
-          </p>
           <div class="source-status">
             <span id="lmDot" class="dot off"></span
-            ><span id="lmStatus">LM Studio : vérification…</span>
+            ><span id="lmStatus">Vérification…</span>
           </div>
+          <details id="lmGuide" class="connection-guide">
+            <summary>Comment connecter LM Studio ?</summary>
+            <ol>
+              <li>Ouvrez LM Studio sur ce PC.</li>
+              <li>
+                Ouvrez l’onglet <strong>Developer</strong> (icône terminal).
+              </li>
+              <li>
+                Activez <strong>Start server</strong>, avec l’adresse indiquée
+                ci-dessous. Le serveur doit rester sur
+                <strong>localhost</strong>.
+              </li>
+              <li>
+                Cliquez sur <strong>Actualiser</strong> ici. Les modèles
+                apparaîtront dans la bibliothèque, même s’ils ne sont pas encore
+                chargés.
+              </li>
+            </ol>
+            <p id="lmAddress">http://127.0.0.1:1234</p>
+            <p>
+              Si LM Studio exige un jeton, configurez
+              <code>LM_STUDIO_API_TOKEN</code> au lancement de l’application.
+            </p>
+            <a
+              href="https://lmstudio.ai/docs/developer/core/server"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Guide officiel ↗</a
+            >
+          </details>
         </section>
         <section class="side-section machine-section">
-          <div class="side-heading">
-            <span class="eyebrow">Pour votre machine</span
-            ><button class="link-button" id="recommendButton">
-              Découvrir ↗
-            </button>
+          <span class="eyebrow">Cette machine · en direct</span>
+          <div class="machine-reading">
+            <span>RAM utilisée</span><strong id="ramLive">—</strong>
           </div>
-          <p class="hint" id="hardwareHint">Analyse du matériel…</p>
-          <div class="rec-preview" id="recPreview">
-            <strong>Un modèle adapté à votre PC</strong>
-            <p class="hint">
-              Suggestions locales, sans téléchargement automatique.
-            </p>
+          <progress
+            id="ramBar"
+            max="100"
+            value="0"
+            aria-label="Mémoire utilisée"
+          ></progress>
+          <div class="machine-reading">
+            <span>Température CPU</span><strong id="tempLive">—</strong>
           </div>
+          <p class="hint hidden" id="sensorNote"></p>
+          <button id="recommendButton" class="link-button recommendation-link">
+            Modèles conseillés ↗
+          </button>
         </section>
         <div class="side-bottom">
           100 % local · aucun téléchargement<br /><a
@@ -955,60 +1106,139 @@
             ><button class="new" id="newChat">Nouvelle conversation +</button>
           </div>
         </header>
-        <div class="scroll" id="scroll">
-          <div class="conversation" id="conversation">
-            <div class="empty" id="empty">
-              <div class="eyebrow">L’inférence, chez vous</div>
-              <h1>Vos modèles.<br /><span>Plus vite.</span></h1>
-              <p class="intro">
-                Un espace simple pour parler à vos modèles locaux et mesurer ce
-                que le moteur apporte, réponse après réponse.
-              </p>
-              <div class="suggestions">
-                <button
-                  data-prompt="Explique simplement comment fonctionne un modèle de langage."
-                >
-                  Comprendre les modèles ↗</button
-                ><button
-                  data-prompt="Écris une courte histoire qui commence dans une gare déserte."
-                >
-                  Écrire une histoire ↗</button
-                ><button
-                  data-prompt="Donne-moi trois idées pour apprendre Python."
-                >
-                  Trouver des idées ↗
+        <section
+          id="chatView"
+          class="workspace-pane"
+          role="tabpanel"
+          aria-labelledby="chatTab"
+        >
+          <div class="scroll" id="scroll">
+            <div class="conversation" id="conversation">
+              <div class="empty" id="empty">
+                <div class="eyebrow">L’inférence, chez vous</div>
+                <h1>Une conversation.<br /><span>Tout simplement.</span></h1>
+                <p class="intro">
+                  Un espace simple pour parler à vos modèles et faire tourner
+                  votre IA sur cette machine.
+                </p>
+                <div class="suggestions">
+                  <button
+                    data-prompt="Explique simplement comment fonctionne un modèle de langage."
+                  >
+                    Comprendre les modèles ↗</button
+                  ><button
+                    data-prompt="Écris une courte histoire qui commence dans une gare déserte."
+                  >
+                    Écrire une histoire ↗</button
+                  ><button
+                    data-prompt="Donne-moi trois idées pour apprendre Python."
+                  >
+                    Trouver des idées ↗
+                  </button>
+                </div>
+                <div class="empty-note">
+                  <span class="dot"></span>Poids locaux · CPU · mesures réelles
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="bottom">
+            <p class="notice" id="notice" role="status" aria-live="polite"></p>
+            <form class="composer" id="chatForm">
+              <label class="hidden" for="prompt">Votre message</label
+              ><textarea
+                id="prompt"
+                rows="2"
+                placeholder="Posez une question à votre modèle…"
+                required
+              ></textarea>
+              <div class="composer-bar">
+                <span class="composer-info" id="composerInfo"
+                  >Tout reste sur cette machine</span
+                ><button id="send" class="send" disabled type="submit">
+                  Envoyer ↑
                 </button>
               </div>
-              <div class="empty-note">
-                <span class="dot"></span>Poids locaux · CPU · mesures réelles
-              </div>
+            </form>
+            <div class="footer">
+              <span>Mesures disponibles dans Performances.</span
+              ><span>Entrée pour envoyer · ⇧ Entrée pour une ligne</span>
             </div>
           </div>
-        </div>
-        <div class="bottom">
-          <p class="notice" id="notice" role="status" aria-live="polite"></p>
-          <form class="composer" id="chatForm">
-            <label class="hidden" for="prompt">Votre message</label
-            ><textarea
-              id="prompt"
-              rows="2"
-              placeholder="Posez une question à votre modèle…"
-              required
-            ></textarea>
-            <div class="composer-bar">
-              <span class="composer-info" id="composerInfo"
-                >Tout reste sur cette machine</span
-              ><button id="send" class="send" disabled type="submit">
-                Envoyer ↑
+        </section>
+        <section
+          id="performanceView"
+          class="workspace-pane hidden"
+          role="tabpanel"
+          aria-labelledby="performanceTab"
+        >
+          <div class="performance-layout">
+            <h1>Performances</h1>
+            <p class="intro">
+              Les mesures de vos réponses et de votre machine, à part de la
+              discussion.
+            </p>
+            <label for="completionSelect">Réponse mesurée</label>
+            <select id="completionSelect" disabled>
+              <option>Envoyez un message pour commencer</option>
+            </select>
+            <div id="responsePerformance" class="performance-card">
+              <p class="hint">
+                Les statistiques de la prochaine réponse apparaîtront ici.
+              </p>
+            </div>
+            <div class="performance-card">
+              <h2>Comparer avec un autre moteur</h2>
+              <p class="hint">
+                La comparaison démarre uniquement à votre demande et peut
+                prendre quelques secondes. Le moteur est occupé pendant cette
+                mesure.
+              </p>
+              <label for="baseline">Référence</label>
+              <select id="baseline">
+                <option value="lmstudio" id="lmOption" disabled selected>
+                  LM Studio · serveur non connecté
+                </option>
+                <option value="numpy">Diagnostic interne NumPy · avancé</option>
+              </select>
+              <label for="lmModel" id="lmModelLabel"
+                >Modèle LM Studio de référence</label
+              >
+              <select id="lmModel"></select>
+              <p class="hint" id="baselineHint"></p>
+              <button id="connectionHelp" class="link-button hidden">
+                Aide à la connexion LM Studio ↗
               </button>
+              <button id="runComparison" disabled>
+                Mesurer la dernière réponse
+              </button>
+              <div id="comparisonResult"></div>
             </div>
-          </form>
-          <div class="footer">
-            <span
-              >Les performances dépendent du modèle et de votre machine.</span
-            ><span>Entrée pour envoyer · ⇧ Entrée pour une ligne</span>
+            <div class="performance-card">
+              <h2>Votre machine</h2>
+              <p class="hint" id="hardwareHint">Lecture du matériel…</p>
+              <div class="performance-metrics">
+                <div>
+                  <span>RAM du système</span><strong id="ramDetail">—</strong>
+                </div>
+                <div>
+                  <span>Application local-llm</span
+                  ><strong id="processMemory">—</strong>
+                </div>
+                <div>
+                  <span>Température CPU</span><strong id="tempDetail">—</strong>
+                </div>
+              </div>
+              <p class="hint" id="systemSample">
+                Actualisation toutes les 3 secondes.
+              </p>
+              <details>
+                <summary>Sources et périmètre des mesures</summary>
+                <p id="systemMethod"></p>
+              </details>
+            </div>
           </div>
-        </div>
+        </section>
       </main>
     </div>
     <dialog id="library">
@@ -1040,6 +1270,72 @@
       </p>
       <div class="library-roots" id="libraryRoots"></div>
     </dialog>
+    <dialog id="connectionDialog">
+      <div class="dialog-head">
+        <h2>Connecter LM Studio</h2>
+        <button id="closeConnection" aria-label="Fermer l’aide LM Studio">
+          ×
+        </button>
+      </div>
+      <div id="connectionInstructions"></div>
+    </dialog>
+    <dialog id="settings">
+      <div class="dialog-head">
+        <h2>Réglages de la discussion</h2>
+        <button id="closeSettings" aria-label="Fermer les réglages">×</button>
+      </div>
+      <label class="setting-label" for="responseLength"
+        >Longueur de réponse</label
+      >
+      <select id="responseLength">
+        <option value="128">Courte</option>
+        <option value="256" selected>Standard</option>
+        <option value="512">Détaillée</option>
+        <option value="custom">Personnalisée</option>
+      </select>
+      <p class="hint">
+        C’est une borne maximale, pas une longueur imposée. Le modèle s’arrête
+        avant s’il a fini sa réponse.
+      </p>
+      <details>
+        <summary>Pourquoi une borne si le modèle est local ?</summary>
+        <p>
+          Même sans facturation, le modèle utilise du temps de calcul et de la
+          mémoire. Cette borne évite une génération interminable et doit tenir
+          dans son contexte. Un token est un morceau de texte, pas forcément un
+          mot.
+        </p>
+      </details>
+      <div id="customLength" class="hidden">
+        <label class="setting-label" for="maxTokens"
+          >Plafond de génération, en tokens</label
+        ><input
+          id="maxTokens"
+          required
+          type="number"
+          min="1"
+          max="512"
+          value="256"
+        />
+        <p class="hint" id="tokenLimitHint"></p>
+      </div>
+      <label class="control" for="temperature"
+        ><span class="control-label"
+          >Variété des réponses
+          <output id="temperatureValue" class="value">0.0</output></span
+        ><input
+          id="temperature"
+          type="range"
+          min="0"
+          max="1.5"
+          step="0.1"
+          value="0"
+      /></label>
+      <p class="hint">
+        À 0, le modèle privilégie sa réponse la plus probable. Une valeur plus
+        élevée ajoute de la variation.
+      </p>
+    </dialog>
     <dialog id="recommendations">
       <div class="dialog-head">
         <h2>Des modèles pour votre machine</h2>
@@ -1066,6 +1362,9 @@
       let lmCatalog = [],
         activeLM = null,
         catalogData = { models: [], roots: [] };
+      let completions = [],
+        measuring = false,
+        systemPolling = false;
       const ready = () => activeLM !== null || info.loaded;
       function updateTheme() {
         const dark = document.documentElement.dataset.theme === "dark";
@@ -1125,8 +1424,12 @@
         $("modelSelect").disabled =
           value || (!catalog.length && !lmCatalog.length);
         $("newChat").disabled = value;
+        $("completionSelect").disabled = value || !completions.length;
+        $("baseline").disabled = value;
+        $("lmModel").disabled = value || !lmCatalog.length;
         $("scanModels").disabled = value;
         $("prompt").disabled = !ready();
+        updateMeasureButton();
         document
           .querySelectorAll("#modelList button")
           .forEach((b) => (b.disabled = value));
@@ -1136,20 +1439,22 @@
         $("modelName").textContent = data.model;
         $("engineStatus").textContent = data.loaded
           ? data.engine.includes("native")
-            ? "Kernels natifs actifs"
-            : "NumPy / BLAS actif"
+            ? "local-llm · CPU"
+            : "local-llm · CPU"
           : "Choisissez un modèle";
         $("engineDot").classList.toggle("off", !data.loaded);
-        $("contextBadge").textContent = data.context_length
-          ? data.context_length.toLocaleString("fr") + " CONTEXTE · CPU"
-          : "CPU LOCAL";
+        $("contextBadge").textContent = "CPU LOCAL";
         $("composerInfo").textContent = data.loaded
-          ? data.engine + " · sur cette machine"
+          ? "local-llm · sur cette machine"
           : "Chargez un modèle pour commencer";
         const limit = data.max_request_tokens || 512;
         $("maxTokens").max = limit;
         $("maxTokens").value = Math.min(Number($("maxTokens").value), limit);
-        $("maxTokensValue").value = $("maxTokens").value;
+        $("tokenLimitHint").textContent =
+          "Plafond actuel du serveur : " +
+          limit +
+          " tokens. Le contexte du modèle peut imposer une borne plus courte.";
+        syncLength();
         setBusy(busy);
       }
       function renderCatalog(data) {
@@ -1272,6 +1577,7 @@
           activeLM = lmCatalog.find((m) => m.id === id.slice(9)) || null;
           if (!activeLM) return;
           history = [];
+          clearMeasurements();
           epoch++;
           $("conversation").replaceChildren(emptyBackup.cloneNode(true));
           bindSuggestions();
@@ -1279,8 +1585,7 @@
           $("engineStatus").textContent = "Exécution par LM Studio";
           $("engineDot").classList.remove("off");
           $("contextBadge").textContent = "LM STUDIO";
-          $("composerInfo").textContent =
-            "Moteur LM Studio · aucun gain local-llm attribué";
+          $("composerInfo").textContent = "LM Studio · sur cette machine";
           $("notice").textContent =
             "LM Studio chargera le modèle si nécessaire. Le premier démarrage peut prendre du temps.";
           renderCatalog(catalogData);
@@ -1296,6 +1601,7 @@
           activeLM = null;
           showInfo(loaded);
           history = [];
+          clearMeasurements();
           $("conversation").replaceChildren(
             $("empty") || emptyBackup.cloneNode(true),
           );
@@ -1319,8 +1625,14 @@
         try {
           const data = await api("/v1/lmstudio/models");
           lmCatalog = data.models;
+          $("lmAddress").textContent = data.url || "http://127.0.0.1:1234";
           if (activeLM && !lmCatalog.some((m) => m.id === activeLM.id)) {
             activeLM = null;
+            history = [];
+            clearMeasurements();
+            epoch++;
+            $("conversation").replaceChildren(emptyBackup.cloneNode(true));
+            bindSuggestions();
             showInfo(info);
           }
           $("libraryConnection").textContent = data.available
@@ -1345,8 +1657,9 @@
             $("lmModel").append(o);
           }
           if (data.models.some((m) => m.id === old)) $("lmModel").value = old;
-          if ($("baseline").value === "lmstudio" && $("lmOption").disabled)
-            $("baseline").value = "numpy";
+          $("lmOption").textContent = data.available
+            ? "LM Studio"
+            : "LM Studio · serveur non connecté";
           baselineChanged();
         } catch (e) {
           $("lmStatus").textContent = e.message;
@@ -1354,12 +1667,65 @@
       }
       function baselineChanged() {
         const lm = $("baseline").value === "lmstudio";
-        $("lmModel").classList.toggle("hidden", !lm);
+        $("lmModel").classList.toggle("hidden", !lm || !lmCatalog.length);
+        $("lmModelLabel").classList.toggle("hidden", !lm || !lmCatalog.length);
+        $("connectionHelp").classList.toggle(
+          "hidden",
+          !lm || lmCatalog.length > 0,
+        );
         $("baselineHint").textContent = lm
-          ? "Sélectionnez les mêmes poids et la même quantification. CPU/GPU et identité des poids non vérifiés : écart indicatif."
-          : $("baseline").value === "none"
-            ? "Seul le débit de la réponse sera affiché."
-            : "Même modèle, mêmes tokens. Comparaison CPU sur 8 étapes, cache activé des deux côtés.";
+          ? "Choisissez les mêmes poids et la même quantification. Le placement CPU/GPU et la définition du débit doivent aussi correspondre. Sinon l’écart reste indicatif."
+          : "Diagnostic technique sur les mêmes tokens, avec des projections NumPy. Ce témoin lent ne représente ni llama.cpp ni LM Studio et ne valide aucun gain face à un moteur standard.";
+        updateMeasureButton();
+      }
+      function updateMeasureButton() {
+        const response = selectedCompletion();
+        $("runComparison").disabled =
+          busy ||
+          measuring ||
+          !response ||
+          response.stats.backend === "lmstudio" ||
+          ($("baseline").value === "lmstudio" && $("lmOption").disabled);
+      }
+      function selectedCompletion() {
+        return completions.find((c) => c.id === $("completionSelect").value);
+      }
+      function clearMeasurements() {
+        completions = [];
+        $("completionSelect").replaceChildren(
+          node("option", "", "Envoyez un message pour commencer"),
+        );
+        $("completionSelect").disabled = true;
+        $("responsePerformance").replaceChildren(
+          node(
+            "p",
+            "hint",
+            "Les statistiques de la prochaine réponse apparaîtront ici.",
+          ),
+        );
+        $("comparisonResult").replaceChildren();
+        updateMeasureButton();
+      }
+      function setWorkspace(name) {
+        const chat = name === "chat";
+        $("chatView").classList.toggle("hidden", !chat);
+        $("performanceView").classList.toggle("hidden", chat);
+        $("chatTab").setAttribute("aria-selected", String(chat));
+        $("performanceTab").setAttribute("aria-selected", String(!chat));
+        $("newChat").classList.toggle("hidden", !chat);
+      }
+      function syncLength() {
+        const custom = $("responseLength").value === "custom",
+          limit = Number($("maxTokens").max) || 512;
+        $("customLength").classList.toggle("hidden", !custom);
+        if (!custom)
+          $("maxTokens").value = Math.min(
+            limit,
+            Number($("responseLength").value),
+          );
+        for (const option of $("responseLength").options)
+          if (option.value !== "custom")
+            option.disabled = Number(option.value) > limit;
       }
       function message(role, text) {
         $("empty")?.remove();
@@ -1391,188 +1757,263 @@
         const s = $("scroll");
         s.scrollTop = s.scrollHeight;
       }
-      function statsView(wrap, stats, usage) {
-        const row = node("div", "metrics");
-        row.append(
+      function statsView(wrap, response) {
+        const footer = node("div", "reply-footer");
+        footer.append(
           node(
             "span",
             "metric-speed",
-            stats.decode_tokens_per_second > 0
-              ? fmt(stats.decode_tokens_per_second) + " tok/s"
-              : "Débit non mesurable",
-          ),
-          node(
-            "span",
-            "",
-            (usage.completion_tokens ?? "—") + " tokens générés",
-          ),
-          node(
-            "span",
-            "",
-            fmt(stats.prefill_seconds) +
-              (stats.backend === "lmstudio"
-                ? " s · première réponse"
-                : " s · préparation"),
-          ),
-          node(
-            "span",
-            "",
-            stats.backend === "lmstudio"
-              ? "Débit global LM Studio · préparation incluse · sans optimisation local-llm"
-              : bytes(stats.kv_cache_bytes || 0) + " · cache KV",
+            fmt(response.observed_speed) + " tok/s · réponse complète",
           ),
         );
-        wrap.append(row);
+        const copy = node("button", "", "Copier");
+        copy.type = "button";
+        copy.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(response.text);
+            copy.textContent = "Copié";
+          } catch {
+            copy.textContent = "Copie indisponible";
+          }
+        };
+        footer.append(copy);
+        wrap.append(footer);
+        completions.unshift(response);
+        completions = completions.slice(0, 8);
+        $("completionSelect").replaceChildren();
+        for (const item of completions) {
+          const option = node("option", "", item.question.slice(0, 65));
+          option.value = item.id;
+          $("completionSelect").append(option);
+        }
+        $("completionSelect").disabled = false;
+        renderResponsePerformance();
       }
-      async function comparison(wrap, id, selected, lmModel, signal, turn) {
-        const card = node("div", "compare");
+      function renderResponsePerformance() {
+        const item = selectedCompletion();
+        if (!item) return;
+        const card = $("responsePerformance");
+        card.replaceChildren(node("h2", "", "Cette réponse"));
+        const grid = node("div", "performance-metrics");
+        for (const [label, value] of [
+          ["Débit global observé", fmt(item.observed_speed) + " tok/s"],
+          ["Durée totale", fmt(item.wall_seconds) + " s"],
+          ["Tokens générés", item.usage.completion_tokens ?? "—"],
+        ]) {
+          const col = node("div");
+          col.append(node("span", "", label), node("strong", "", value));
+          grid.append(col);
+        }
         card.append(
-          node("div", "compare-title", "Mesure du moteur de référence…"),
+          grid,
+          node(
+            "p",
+            "hint",
+            "Débit global = tokens générés / durée complète de la requête. Préparation, génération et transport sont inclus.",
+          ),
         );
-        wrap.append(card);
-        scrollEnd();
-        try {
-          const data = await api(
-            "/v1/compare",
-            { completion_id: id, baseline: selected, lmstudio_model: lmModel },
-            signal,
-          );
-          if (turn !== epoch) return;
-          card.replaceChildren(
+        const details = node("details");
+        details.append(node("summary", "", "Détails du moteur"));
+        details.append(
+          node(
+            "p",
+            "",
+            item.stats.backend === "lmstudio"
+              ? "Exécution par LM Studio. Aucun gain local-llm attribué."
+              : "Exécution par local-llm. Décodage moteur : " +
+                  fmt(item.stats.decode_tokens_per_second) +
+                  " tok/s, hors préparation, sampling et transport. " +
+                  Math.max(0, (item.usage.completion_tokens || 0) - 1) +
+                  " étapes / " +
+                  (item.stats.decode_seconds || 0).toFixed(4) +
+                  " s.",
+          ),
+        );
+        details.append(
+          node(
+            "p",
+            "",
+            "Préparation / premier texte : " +
+              fmt(item.stats.prefill_seconds) +
+              " s.",
+          ),
+        );
+        if (item.stats.kv_cache_bytes !== null)
+          details.append(
             node(
-              "div",
-              "compare-title",
-              (data.comparable
-                ? "● Comparaison mesurée"
-                : "○ Écart indicatif") +
-                " · " +
-                data.reference_name,
+              "p",
+              "",
+              "Cache KV : " + bytes(item.stats.kv_cache_bytes || 0) + ".",
             ),
           );
-          if (Number.isFinite(data.delta_tokens_per_second)) {
-            const delta = data.delta_tokens_per_second,
-              hero = node("div", "gain-hero" + (delta < 0 ? " negative" : ""));
-            hero.append(
-              node(
-                "span",
-                "eyebrow",
-                data.comparable
-                  ? delta >= 0
-                    ? "Accélération mesurée par local-llm"
-                    : "Ralentissement mesuré"
-                  : "Écart indicatif avec LM Studio",
-              ),
-            );
-            hero.append(
-              node(
-                "strong",
-                "",
-                (delta >= 0 ? "+" : "") + fmt(delta) + " tok/s",
-              ),
-            );
-            const percent =
-              (data.local_tokens_per_second / data.baseline_tokens_per_second -
-                1) *
-              100;
-            hero.append(
-              node(
-                "span",
-                "gain-percent",
-                (percent >= 0 ? "+" : "") + fmt(percent) + " % de débit",
-              ),
-            );
-            hero.append(
-              node(
-                "p",
-                "",
-                data.comparable
-                  ? "Sur le même calcul, face aux projections CPU NumPy. Le gain porte sur le rejeu mesuré ci-dessous."
-                  : "Les poids et le matériel des deux moteurs ne sont pas vérifiés. Cet écart ne prouve pas une accélération de LM Studio.",
-              ),
-            );
-            card.append(hero);
-          } else {
+        card.append(details);
+        $("comparisonResult").replaceChildren();
+        updateMeasureButton();
+      }
+      async function comparison() {
+        const item = selectedCompletion();
+        if (!item || busy || measuring) return;
+        measuring = true;
+        updateMeasureButton();
+        $("runComparison").textContent = "Mesure en cours…";
+        setBusy(true);
+        const turn = epoch,
+          selected = $("baseline").value,
+          card = node("div", "compare");
+        card.append(
+          node(
+            "p",
+            "hint",
+            "Mesure de la référence… La discussion sera disponible dès la fin de cet essai.",
+          ),
+        );
+        $("comparisonResult").replaceChildren(card);
+        try {
+          const data = await api("/v1/compare", {
+            completion_id: item.id,
+            baseline: selected,
+            lmstudio_model: $("lmModel").value,
+          });
+          if (turn !== epoch) return;
+          const diagnostic = data.kind === "numpy_cached";
+          card.replaceChildren(
+            node(
+              "h2",
+              "",
+              diagnostic
+                ? "Diagnostic des projections"
+                : "Essai face à LM Studio",
+            ),
+          );
+          const grid = node("div", "performance-metrics");
+          for (const [label, value] of [
+            ["local-llm", fmt(data.local_tokens_per_second) + " tok/s"],
+            [
+              diagnostic ? "Témoin NumPy" : "LM Studio",
+              fmt(data.baseline_tokens_per_second) + " tok/s",
+            ],
+          ]) {
+            const col = node("div");
+            col.append(node("span", "", label), node("strong", "", value));
+            grid.append(col);
+          }
+          card.append(
+            grid,
+            node(
+              "p",
+              "hint",
+              diagnostic
+                ? "Ces valeurs décrivent un diagnostic interne. Aucun gain face à un moteur standard n’est validé par cette comparaison."
+                : "Écart indicatif : les poids, le tokenizer et le placement CPU/GPU ne sont pas vérifiés. Aucun gain du moteur n’est encore validé.",
+            ),
+          );
+          if (!diagnostic && Number.isFinite(data.delta_tokens_per_second))
             card.append(
               node(
                 "p",
                 "hint",
-                data.specialized_projections === false
-                  ? "Aucun gain attribuable : ce modèle utilise déjà le même chemin de calcul."
-                  : "Aucun gain validé pour cette mesure.",
-              ),
-            );
-          }
-          const grid = node("div", "compare-grid");
-          for (const [label, value, cls] of [
-            ["local-llm", fmt(data.local_tokens_per_second) + " tok/s", ""],
-            ["Référence", fmt(data.baseline_tokens_per_second) + " tok/s", ""],
-            [
-              data.specialized_projections === false
-                ? "Même chemin BLAS"
-                : data.comparable
-                  ? "Gain mesuré"
-                  : "Écart indicatif",
-              data.delta_tokens_per_second == null
-                ? "—"
-                : (data.delta_tokens_per_second >= 0 ? "+" : "") +
+                "Différence de débit rapportée : " +
+                  (data.delta_tokens_per_second >= 0 ? "+" : "") +
                   fmt(data.delta_tokens_per_second) +
-                  " tok/s",
-              data.delta_tokens_per_second >= 0 ? "gain" : "loss",
-            ],
-          ]) {
-            const col = node("div");
-            col.append(
-              node("span", "eyebrow", label),
-              node("strong", cls, value),
-            );
-            grid.append(col);
-          }
-          card.append(grid);
-          card.append(
-            node(
-              "p",
-              "hint",
-              data.kind === "numpy_cached"
-                ? data.decode_steps +
-                    " étapes identiques · médiane de " +
-                    data.runs +
-                    " mesures · cache KV des deux côtés"
-                : "Même prompt · vérifiez les poids et les réglages CPU/GPU de LM Studio",
-            ),
-          );
-          const details = node("details");
-          details.append(
-            node("summary", "", "Méthode et limites"),
-            node("p", "", data.method),
-          );
-          if (data.max_absolute_error !== undefined)
-            details.append(
-              node(
-                "p",
-                "",
-                "Erreur maximale des logits : " +
-                  data.max_absolute_error.toExponential(2),
+                  " tok/s.",
               ),
             );
-          card.append(details);
-          if (data.comparable === false && data.kind === "numpy_cached")
+          if (diagnostic)
             card.append(
               node(
                 "p",
-                "error",
-                "Écart numérique hors tolérance : aucun gain validé.",
+                "hint",
+                data.decode_steps +
+                  " étapes identiques · médiane de " +
+                  data.runs +
+                  " essais · cache KV des deux côtés · logits " +
+                  (data.within_tolerance
+                    ? "dans la tolérance"
+                    : "hors tolérance"),
               ),
             );
+          const details = node("details");
+          details.append(
+            node("summary", "", "Méthode et temps bruts"),
+            node("p", "", data.method),
+          );
+          if (data.measurements_seconds)
+            details.append(
+              node(
+                "pre",
+                "",
+                JSON.stringify(data.measurements_seconds, null, 2),
+              ),
+            );
+          card.append(details);
         } catch (e) {
           card.replaceChildren(
             node(
-              "div",
-              e.name === "AbortError" ? "hint" : "error",
-              e.name === "AbortError" ? "Comparaison interrompue." : e.message,
+              "p",
+              "hint",
+              e.name === "AbortError" ? "Mesure interrompue." : e.message,
             ),
           );
+        } finally {
+          measuring = false;
+          setBusy(false);
+          $("runComparison").textContent = "Mesurer cette réponse";
         }
-        scrollEnd();
+      }
+      async function pollSystem() {
+        if (systemPolling || document.hidden) return;
+        systemPolling = true;
+        try {
+          const data = await api("/v1/system"),
+            known =
+              Number.isFinite(data.memory_used_bytes) &&
+              data.memory_total_bytes > 0;
+          const ram = known
+            ? bytes(data.memory_used_bytes) +
+              " / " +
+              bytes(data.memory_total_bytes)
+            : "Indisponible";
+          $("ramLive").textContent = ram;
+          $("ramDetail").textContent = ram;
+          $("ramBar").value = known
+            ? (100 * data.memory_used_bytes) / data.memory_total_bytes
+            : 0;
+          const temperature = Number.isFinite(data.cpu_temperature_celsius)
+            ? fmt(data.cpu_temperature_celsius) + " °C"
+            : "Indisponible";
+          $("tempLive").textContent = temperature;
+          $("tempDetail").textContent = temperature;
+          $("sensorNote").textContent = data.temperature_note || "";
+          $("sensorNote").classList.toggle("hidden", !data.temperature_note);
+          $("processMemory").textContent = Number.isFinite(
+            data.process_rss_bytes,
+          )
+            ? bytes(data.process_rss_bytes)
+            : "Indisponible";
+          $("systemSample").textContent =
+            "Actualisé à " +
+            new Date(data.sampled_at * 1000).toLocaleTimeString("fr") +
+            " · toutes les 3 secondes.";
+          $("systemMethod").textContent = [
+            data.memory_method,
+            data.temperature_method,
+            data.temperature_note,
+            data.process_note,
+          ]
+            .filter(Boolean)
+            .join(" ");
+        } catch {
+          $("ramLive").textContent = "Hors ligne";
+          $("tempLive").textContent = "—";
+          $("systemSample").textContent =
+            "Lecture indisponible. Les anciennes valeurs ne sont plus en direct.";
+          $("ramDetail").textContent = "—";
+          $("tempDetail").textContent = "—";
+          $("processMemory").textContent = "—";
+          $("ramBar").value = 0;
+        } finally {
+          systemPolling = false;
+        }
       }
       async function submit(event) {
         event.preventDefault();
@@ -1582,10 +2023,15 @@
         }
         const text = $("prompt").value.trim();
         if (!text || !ready()) return;
-        const turn = ++epoch,
-          selected = $("baseline").value,
-          lmModel = $("lmModel").value,
-          auto = $("autoCompare").checked;
+        if (!$("maxTokens").checkValidity()) {
+          $("settings").showModal();
+          $("responseLength").value = "custom";
+          syncLength();
+          $("maxTokens").reportValidity();
+          return;
+        }
+        const turn = ++epoch;
+        const started = performance.now();
         history.push({ role: "user", content: text });
         message("user", text);
         const view = message("assistant", "");
@@ -1650,29 +2096,23 @@
             throw new Error("Flux interrompu avant les statistiques finales");
           view.content.classList.remove("pending");
           history.push({ role: "assistant", content: answer });
-          statsView(view.wrap, final.local_llm, final.usage || {});
-          $("notice").textContent = "Réponse terminée.";
-          if (final.local_llm.backend === "lmstudio") {
-            view.wrap.append(
-              node(
-                "p",
-                "hint",
-                "Réponse exécutée par LM Studio. Aucun gain du moteur local-llm n’est revendiqué.",
-              ),
-            );
-          } else if (auto && selected !== "none") {
+          const wall = (performance.now() - started) / 1000;
+          statsView(view.wrap, {
+            id: final.id,
+            stats: final.local_llm,
+            usage: final.usage || {},
+            wall_seconds: wall,
+            observed_speed:
+              Number.isFinite(final.usage?.completion_tokens) && wall > 0
+                ? final.usage.completion_tokens / wall
+                : null,
+            text: answer,
+            question: text,
+          });
+          $("notice").textContent = "";
+          if (final.choices?.[0]?.finish_reason === "length")
             $("notice").textContent =
-              "Réponse terminée · comparaison en cours…";
-            await comparison(
-              view.wrap,
-              final.id,
-              selected,
-              lmModel,
-              controller.signal,
-              turn,
-            );
-            $("notice").textContent = "Prêt.";
-          }
+              "Le plafond de réponse a été atteint. Vous pouvez demander la suite ou choisir Détaillée dans les réglages.";
         } catch (e) {
           view.content.classList.remove("pending");
           if (final) {
@@ -1719,8 +2159,26 @@
           if (!busy) $("chatForm").requestSubmit();
         }
       });
-      $("maxTokens").oninput = () =>
-        ($("maxTokensValue").value = $("maxTokens").value);
+      $("responseLength").onchange = syncLength;
+      $("settingsButton").onclick = () => $("settings").showModal();
+      $("closeSettings").onclick = () => $("settings").close();
+      $("chatTab").onclick = () => setWorkspace("chat");
+      $("performanceTab").onclick = () => setWorkspace("performance");
+      $("completionSelect").onchange = renderResponsePerformance;
+      $("runComparison").onclick = comparison;
+      $("connectionHelp").onclick = () => {
+        $("connectionInstructions").replaceChildren(
+          ...Array.from($("lmGuide").children)
+            .filter((e) => e.tagName !== "SUMMARY")
+            .map((e) => {
+              const copy = e.cloneNode(true);
+              copy.removeAttribute("id");
+              return copy;
+            }),
+        );
+        $("connectionDialog").showModal();
+      };
+      $("closeConnection").onclick = () => $("connectionDialog").close();
       $("temperature").oninput = () =>
         ($("temperatureValue").value = Number($("temperature").value).toFixed(
           1,
@@ -1831,20 +2289,6 @@
               ),
             );
           const preferred = data.models.find((m) => m.recommended);
-          $("recPreview").replaceChildren(
-            node(
-              "strong",
-              "",
-              preferred ? preferred.name : "Voir les suggestions",
-            ),
-            node(
-              "p",
-              "hint",
-              preferred
-                ? preferred.format + " · conseillé pour votre CPU"
-                : "Choisir selon votre mémoire disponible.",
-            ),
-          );
         } catch (e) {
           $("hardwareHint").textContent =
             "Suggestions indisponibles : " + e.message;
@@ -1852,6 +2296,13 @@
       }
       bindSuggestions();
       recommendations();
+      syncLength();
+      baselineChanged();
+      pollSystem();
+      setInterval(pollSystem, 3000);
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) pollSystem();
+      });
       (async () => {
         try {
           showInfo(await api("/health"));
