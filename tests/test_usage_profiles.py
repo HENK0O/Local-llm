@@ -115,6 +115,14 @@ class UsageProfileTests(unittest.TestCase):
                 sidecar.write_text(json.dumps(dict(binding,method='--external')))
                 self.assertIsNone(draft_method(target,draft))
 
+    def test_specialized_auxiliary_weights_are_never_loaded_as_standalone_chat_models(self):
+        runtime = Accelerator(executable='mock')
+        with patch.object(runtime, 'available', return_value={'available':True}), patch.object(runtime, '_start') as start:
+            for architecture in ('dflash','dspark'):
+                item = SimpleNamespace(path='/tmp/auxiliary.gguf', architecture=architecture)
+                with self.assertRaisesRegex(ValueError, 'auxiliaires'): runtime.load(item)
+            start.assert_not_called()
+
     def test_bounded_host_cache_still_invalidates_interrupted_requests(self):
         runtime = Accelerator(executable='unused')
         runtime.config = replace(runtime.config, cache_ram_mib=64, slots=1)

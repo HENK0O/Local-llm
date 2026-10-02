@@ -287,7 +287,7 @@ class Accelerator:
         if not self.available()['available']:
             raise ValueError(self.available()['error'])
         path = Path(item.path)
-        if path.suffix.lower() != '.gguf' or item.architecture in {'dflash', 'bert', 'nomic-bert', None}:
+        if path.suffix.lower() != '.gguf' or item.architecture in {'dflash', 'dspark', 'bert', 'nomic-bert', None}:
             raise ValueError('Un modèle de discussion GGUF est requis ; les modèles auxiliaires ne répondent pas seuls.')
         with self.lock:
             if self.model_id == item.id and self.process is not None and self.process.poll() is None:

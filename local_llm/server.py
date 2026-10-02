@@ -201,7 +201,7 @@ class ChatService:
             raise FileNotFoundError(f"reference repository not found: {self.reference_repo}")
         self.reference_runtime = None
         candidates = [m for m in self.catalog.values() if Path(m.path).suffix.lower() == '.gguf'
-                      and m.architecture not in {None, 'dflash', 'bert', 'nomic-bert'}]
+                      and m.architecture not in {None, 'dflash', 'dspark', 'bert', 'nomic-bert'}]
         candidate = explicit if model_path is not None else min(
             (m for m in candidates if m.compatible), key=lambda m: m.size_bytes, default=None)
         if engine != 'native' and candidate is not None and self.accelerator.available()['available']:
@@ -235,7 +235,7 @@ class ChatService:
             models = []
             for m in self.catalog.values():
                 data = m.to_dict()
-                data["accelerator_candidate"] = Path(m.path).suffix.lower() == ".gguf" and m.architecture not in {None, "dflash", "bert", "nomic-bert"}
+                data["accelerator_candidate"] = Path(m.path).suffix.lower() == ".gguf" and m.architecture not in {None, "dflash", "dspark", "bert", "nomic-bert"}
                 models.append(data)
             return {"models": models, "accelerator": self.accelerator.describe(),
                     "current_id": self.current_id,

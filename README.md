@@ -40,7 +40,7 @@ le moteur CPU reste utilisable. `--engine gpu` impose le moteur direct et
 `--engine native` conserve le moteur CPU. La bibliothèque permet aussi de
 charger directement un GGUF que le moteur CPU ne prend pas en charge ; sa
 compatibilité finale dépend du build llama.cpp installé. Les modèles auxiliaires
-DFlash et les modèles d’embeddings ne sont pas proposés comme modèles de chat.
+DFlash/DSpark et les modèles d’embeddings ne sont pas proposés comme modèles de chat.
 
 Dans **Performances**, choisissez **Optimiser ce modèle**. L’app explore les
 threads de génération et de préparation séparément, les batches physiques de
