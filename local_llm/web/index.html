@@ -1575,13 +1575,14 @@
               >
               <select id="draftModel">
                 <option value="">
-                  Automatique · motifs du contexte, sans modèle supplémentaire
+                  Automatique · chercher un auxiliaire compatible
                 </option>
               </select>
               <p class="hint">
                 Un modèle auxiliaire doit avoir le même vocabulaire. L’app teste
-                la spéculation et ne la garde que si elle améliore les mesures,
-                avec des sorties identiques sur le benchmark.
+                plusieurs profondeurs de spéculation, puis vérifie le meilleur
+                réglage sur des prompts différents. Aucun modèle n’est
+                téléchargé.
               </p>
               <button id="optimizeModel" disabled>Optimiser ce modèle</button>
               <button id="cancelOptimization" class="hidden">
@@ -1596,9 +1597,10 @@
               ></progress>
               <div id="optimizationResult"></div>
               <p class="hint">
-                Comparaison sur ce PC : mêmes poids, même quantification, même
-                contexte, trois prompts et deux passages en ordre inversé. Le
-                gain du benchmark n’est pas une mesure de chaque réponse.
+                Comparaison sur ce PC : mêmes poids et même contexte.
+                Discussion, code et contexte long : deux passages pour choisir,
+                puis trois passages sur des prompts indépendants pour vérifier.
+                Le gain affiché vient de cette vérification.
               </p>
             </div>
             <label for="completionSelect">Réponse mesurée</label>
@@ -2234,10 +2236,18 @@
       };
       updateTheme();
       const fmt = (n) => (Number.isFinite(n) ? n.toFixed(1) : "—");
+      const duration = (n) =>
+        !Number.isFinite(n)
+          ? "—"
+          : n < 1
+            ? Math.round(n * 1000) + " ms"
+            : fmt(n) + " s";
       const bytes = (n) =>
-        n >= 1073741824
-          ? (n / 1073741824).toFixed(1) + " Gio"
-          : (n / 1048576).toFixed(0) + " Mio";
+        !Number.isFinite(n)
+          ? "—"
+          : n >= 1073741824
+            ? (n / 1073741824).toFixed(1) + " Gio"
+            : (n / 1048576).toFixed(0) + " Mio";
       function modelQuant(m) {
         const named = m.name.match(/(?:IQ\d|Q\d)_[A-Z0-9_]+/i);
         return named ? named[0] : m.quantization || "Format non précisé";
@@ -2314,7 +2324,8 @@
             data.features?.includes("prefix_cache") &&
               data.features?.includes("system_telemetry") &&
               data.features?.includes("lmstudio_instances") &&
-              data.features?.includes("gpu_runtime"),
+              data.features?.includes("gpu_runtime") &&
+              data.features?.includes("validated_calibration"),
           ),
         );
         $("composerInfo").textContent = data.loaded
@@ -2641,13 +2652,16 @@
       async function loadDraftChoices() {
         draftChoices = (await api("/v1/accelerator/drafts")).models;
         $("draftModel").replaceChildren(
-          node(
-            "option",
-            "",
-            "Automatique · motifs du contexte, sans modèle supplémentaire",
-          ),
+          node("option", "", "Automatique · chercher un auxiliaire compatible"),
         );
         $("draftModel").firstElementChild.value = "";
+        const off = node(
+          "option",
+          "",
+          "Sans modèle auxiliaire · motifs seulement",
+        );
+        off.value = "off";
+        $("draftModel").append(off);
         for (const m of draftChoices) {
           const option = node(
             "option",
@@ -2661,7 +2675,10 @@
       function renderOptimization() {
         if (!$("optimizeModel")) return;
         $("optimizeModel").disabled =
-          busy || !activeGPU?.loaded || !gpuInfo.loaded;
+          busy ||
+          !activeGPU?.loaded ||
+          !gpuInfo.loaded ||
+          !info.features?.includes("validated_calibration");
         $("draftModel").disabled = busy || !activeGPU?.loaded;
         $("cancelOptimization").classList.toggle("hidden", !calibrationRunning);
         $("optimizationProgress").classList.toggle(
@@ -2672,8 +2689,8 @@
         const status = $("optimizationStatus");
         status.textContent = calibrationRunning
           ? gpuInfo.job?.message || "Calibration en cours…"
-          : !info.features?.includes("gpu_runtime")
-            ? "Relancez le serveur local-llm pour activer le moteur direct et la calibration."
+          : !info.features?.includes("validated_calibration")
+            ? "Relancez le serveur local-llm pour activer la calibration avec validation indépendante."
             : !gpuInfo.available
               ? gpuInfo.error ||
                 "Installez llama.cpp pour activer le moteur direct."
@@ -2694,43 +2711,124 @@
         const expanded = output.querySelector("details")?.open;
         output.replaceChildren();
         const profile = gpuInfo.profile;
-        if (!profile || !activeGPU || activeGPU.model_id !== gpuInfo.model_id)
+        if (!activeGPU || activeGPU.model_id !== gpuInfo.model_id) return;
+        const config = gpuInfo.config || profile?.config;
+        if (config) {
+          output.append(
+            node(
+              "p",
+              "hint",
+              config.context.toLocaleString("fr") +
+                " tokens de contexte · " +
+                config.slots +
+                " conversation(s) en cache · KV " +
+                (config.kv_type || "f16").toUpperCase() +
+                " · batch " +
+                config.batch +
+                " · threads " +
+                (config.threads || "auto"),
+            ),
+          );
+        }
+        const memory = gpuInfo.memory_plan;
+        if (memory)
+          output.append(
+            node(
+              "p",
+              "hint",
+              "Allocation estimée : " +
+                bytes(memory.estimated_bytes) +
+                (memory.available_bytes == null
+                  ? " · RAM disponible inconnue."
+                  : " sur " +
+                    bytes(memory.available_bytes) +
+                    " disponibles au chargement, avec " +
+                    bytes(memory.reserve_bytes) +
+                    " de marge système.") +
+                (memory.conservative
+                  ? " Estimation prudente pour cette architecture hybride."
+                  : "") +
+                " La RAM réellement observée reste affichée dans les capteurs.",
+            ),
+          );
+        if (!profile) return;
+        if (
+          profile.protocol !== 4 ||
+          !profile.validation ||
+          !profile.training_summaries
+        ) {
+          output.append(
+            node(
+              "p",
+              "hint",
+              "Ancien profil : relancez le serveur et recalibrez ce modèle pour obtenir une mesure vérifiée sur des prompts indépendants.",
+            ),
+          );
           return;
+        }
         const baseline = profile.summaries.standard,
           winner = profile.summaries[profile.winner];
         const grid = node("div", "performance-metrics");
+        const delta = winner.decode_tps - baseline.decode_tps;
         for (const [label, value] of [
           ["Décodage standard", fmt(baseline.decode_tps) + " tok/s"],
           ["Décodage retenu", fmt(winner.decode_tps) + " tok/s"],
-          [
-            "Gain de débit mesuré",
-            "+" + fmt(winner.decode_tps - baseline.decode_tps) + " tok/s",
-          ],
-          ["Temps des 3 prompts · standard", fmt(baseline.seconds) + " s"],
-          ["Temps des 3 prompts · retenu", fmt(winner.seconds) + " s"],
-          ["Mémoire du processus après essai", bytes(winner.process_rss_bytes)],
+          ["Gain vérifié", (delta >= 0 ? "+" : "") + fmt(delta) + " tok/s"],
+          ["Suite indépendante · standard", fmt(baseline.seconds) + " s"],
+          ["Suite indépendante · retenu", fmt(winner.seconds) + " s"],
+          ["RSS après essai", bytes(winner.process_rss_bytes)],
         ]) {
           const item = node(
             "div",
-            label === "Gain de débit mesuré" && profile.decode_gain_percent > 0
-              ? "optimization-gain"
-              : "",
+            label === "Gain vérifié" && delta > 0 ? "optimization-gain" : "",
           );
           item.append(node("span", "", label), node("strong", "", value));
           grid.append(item);
         }
         output.append(
+          grid,
           node(
             "p",
             "hint",
             fmt(profile.decode_gain_percent) +
-              " % de débit supplémentaire sur le benchmark · " +
+              " % de débit de décodage supplémentaire · " +
               fmt(profile.gain_percent) +
-              " % de débit global supplémentaire sur les trois prompts.",
+              " % de débit global supplémentaire sur la vérification indépendante.",
           ),
         );
+        const cache = profile.cache_benchmark;
+        if (cache) {
+          const latency = node("div", "performance-metrics");
+          for (const [label, value] of [
+            [
+              "Premier token · contexte froid",
+              duration(cache.cold_first_token_seconds),
+            ],
+            [
+              "Premier token · contexte réutilisé",
+              duration(cache.warm_first_token_seconds),
+            ],
+            [
+              "Préparation économisée par le cache",
+              cache.prefill_seconds_saved == null
+                ? "Non vérifiée"
+                : fmt(cache.prefill_seconds_saved * 1000) + " ms",
+            ],
+          ]) {
+            const item = node("div");
+            item.append(node("span", "", label), node("strong", "", value));
+            latency.append(item);
+          }
+          output.append(
+            latency,
+            node(
+              "p",
+              "hint",
+              "Médianes de trois paires du même prompt, sans cache puis avec cache. Ce gain de préparation ne se transpose pas automatiquement à vos réponses et n’est pas une comparaison avec LM Studio.",
+            ),
+          );
+        }
         output.append(
-          grid,
           node(
             "p",
             "hint",
@@ -2738,40 +2836,106 @@
               (profile.config.speculative === "none"
                 ? "désactivée"
                 : profile.config.speculative === "draft-simple"
-                  ? "modèle auxiliaire validé"
+                  ? "auxiliaire validé"
                   : "motifs du contexte validés") +
-              ". Deux conversations GPU restent en cache, dans un contexte borné ; le moteur CPU conserve jusqu’à huit conversations dans 64 Mio.",
+              (profile.config.speculative !== "none"
+                ? " · jusqu’à " +
+                  profile.config.draft_tokens +
+                  " tokens anticipés"
+                : "") +
+              ". " +
+              (profile.kv_precision_changed
+                ? "Le cache KV passe de F16 à Q8 : sorties gloutonnes identiques sur ces tests uniquement, sans garantie générale de qualité."
+                : "Précision du cache KV conservée en F16."),
           ),
         );
         const details = node("details");
         details.open = !!expanded;
-        details.append(node("summary", "", "Essais et validité du profil"));
+        details.append(
+          node("summary", "", "Diagnostic du modèle et essais écartés"),
+        );
+        for (const [category, row] of Object.entries(winner.categories || {})) {
+          const reference = baseline.categories[category];
+          details.append(
+            node(
+              "p",
+              "hint",
+              category +
+                " · standard " +
+                fmt(reference.decode_tps) +
+                " tok/s, retenu " +
+                fmt(row.decode_tps) +
+                " tok/s · " +
+                fmt(reference.seconds) +
+                " → " +
+                fmt(row.seconds) +
+                " s.",
+            ),
+          );
+        }
         for (const [name, trial] of Object.entries(profile.trials)) {
-          const summary = profile.summaries[name];
+          const decision = profile.decisions?.[name];
+          const summary = profile.training_summaries?.[name];
           details.append(
             node(
               "p",
               "hint",
               name +
                 " : " +
-                (trial.error
-                  ? "essai non retenu"
-                  : summary
-                    ? fmt(summary.decode_tps) +
-                      " tok/s · " +
-                      fmt(summary.seconds) +
-                      " s"
-                    : "sortie différente, configuration rejetée"),
+                (name === profile.winner ? "retenu. " : "") +
+                (name === "standard"
+                  ? "Référence GPU avec KV F16."
+                  : decision?.reason || "Mesure non validée.") +
+                (summary
+                  ? " Sélection : " + fmt(summary.decode_tps) + " tok/s."
+                  : "") +
+                (decision?.stage
+                  ? " Décision sur la " + decision.stage + "."
+                  : ""),
             ),
           );
         }
+        if (Number.isFinite(winner.variation_percent))
+          details.append(
+            node(
+              "p",
+              "hint",
+              "Écart entre le passage le plus lent et le plus rapide : " +
+                fmt(winner.variation_percent) +
+                " % de la médiane (référence : " +
+                fmt(baseline.variation_percent) +
+                " %).",
+            ),
+          );
+        if (profile.draft_search)
+          details.append(
+            node(
+              "p",
+              "hint",
+              "Auxiliaires : " +
+                profile.draft_search.compatible +
+                " compatibles, " +
+                profile.draft_search.tested +
+                " testés. " +
+                profile.draft_search.reason,
+            ),
+          );
+        details.append(
+          node(
+            "p",
+            "hint",
+            "Validation : " +
+              profile.validation.decision.reason +
+              " Les temps incluent la préparation et la génération ; les chargements et échauffements sont exclus. Les tests utilisent jusqu’à 128/192/128 tokens, sans obliger le modèle à ignorer sa fin de réponse.",
+          ),
+        );
         details.append(
           node(
             "p",
             "hint",
             "Mesuré le " +
               new Date(profile.measured_at).toLocaleString("fr-FR") +
-              ". Profil lié aux poids, au matériel, à la version du runtime et à la capacité du contexte. Les sorties du benchmark sont comparées par empreinte ; cela ne constitue pas une évaluation générale de la qualité du modèle.",
+              ". Profil lié aux poids, au matériel, au runtime et au contexte. Aucun texte de vos conversations n’est utilisé. Un contexte agrandi invalide le profil. Ces tests ne constituent pas une évaluation générale de qualité.",
           ),
         );
         output.append(details);
@@ -2815,7 +2979,11 @@
           const draftId = $("draftModel").value;
           gpuInfo.job = await api(
             "/v1/accelerator/optimize",
-            draftId ? { draft_id: draftId } : {},
+            draftId === "off"
+              ? { draft_mode: "off" }
+              : draftId
+                ? { draft_id: draftId }
+                : {},
           );
           calibrationRunning = true;
           renderOptimization();
@@ -3140,6 +3308,11 @@
           ["Débit global observé", fmt(item.observed_speed) + " tok/s"],
           ["Durée totale", fmt(item.wall_seconds) + " s"],
           ["Tokens générés", item.usage.completion_tokens ?? "—"],
+          [
+            "Premier token reçu par le serveur",
+            duration(item.stats.first_token_seconds),
+          ],
+          ["Premier texte de réponse", duration(item.stats.first_text_seconds)],
         ]) {
           const col = node("div");
           col.append(node("span", "", label), node("strong", "", value));
@@ -3187,9 +3360,11 @@
           node(
             "p",
             "",
-            "Préparation / premier texte : " +
-              fmt(item.stats.prefill_seconds) +
-              " s.",
+            (item.stats.backend === "lmstudio"
+              ? "Délai avant le premier token : "
+              : "Préparation rapportée par le moteur : ") +
+              duration(item.stats.prefill_seconds) +
+              ".",
           ),
         );
         if (item.stats.kv_cache_bytes !== null)
@@ -3348,7 +3523,8 @@
               Boolean(
                 health.features?.includes("prefix_cache") &&
                   health.features?.includes("lmstudio_instances") &&
-                  health.features?.includes("gpu_runtime"),
+                  health.features?.includes("gpu_runtime") &&
+                  health.features?.includes("validated_calibration"),
               ),
             );
             systemRetryAt = 0;
@@ -3399,7 +3575,8 @@
             Boolean(
               !outdated &&
                 info.features?.includes("system_telemetry") &&
-                info.features?.includes("gpu_runtime"),
+                info.features?.includes("gpu_runtime") &&
+                info.features?.includes("validated_calibration"),
             ),
           );
           $("ramLive").textContent = outdated

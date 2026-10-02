@@ -48,7 +48,7 @@ class CalibrationTests(unittest.TestCase):
 
     def test_configuration_cannot_inject_flags_or_change_precision(self):
         for kwargs in ({'speculative': '--external'}, {'batch': 1}, {'threads': -1},
-                       {'flash': 'bad'}, {'context': 1}, {'slots': 3},
+                       {'flash': 'bad'}, {'context': 1}, {'slots': 0}, {'slots': 5}, {'kv_type': 'q4_0'}, {'draft_tokens': 64},
                        {'draft_path': '/tmp/model'}, {'speculative': 'draft-simple'}):
             with self.assertRaises(ValueError): ExecutionConfig(**kwargs)
         self.assertEqual(ExecutionConfig(speculative='draft-simple', draft_path='/tmp/draft.gguf').speculative, 'draft-simple')
@@ -78,7 +78,7 @@ class RuntimeTests(unittest.TestCase):
         def capabilities(free):
             runtime = Accelerator(executable='llama-server')
             with patch('local_llm.accelerator.subprocess.check_output', side_effect=[
-                'log timestamp\nversion: stable', '--cache-ram --spec-type --no-context-shift --no-webui',
+                'log timestamp\nversion: stable', '--cache-ram --spec-type --no-context-shift --no-webui --cache-type-k --spec-ngram-simple-size-m',
                 f'Available devices:\nMTL0: Apple M5 (18000 MiB, {free} MiB free)']):
                 return runtime.available()
         self.assertEqual(capabilities(1000), capabilities(5000))
@@ -139,8 +139,10 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(runtime.client.iter_chat.call_args.args[0]['cache_prompt'])
         with self.assertRaisesRegex(ValueError, 'changé'):
             list(runtime.iter_chat(dict(payload, model='wrong'), 'a'))
-        with self.assertRaisesRegex(ValueError, 'contexte'):
-            list(runtime.iter_chat(dict(payload, max_tokens=5000), 'a'))
+        with patch('local_llm.accelerator.GGUFReader', return_value=SimpleNamespace(metadata={'llama.context_length':4096, 'general.architecture':'llama'})):
+            runtime.path = Mock(); runtime.path.stat.return_value.st_size = 100
+            with self.assertRaisesRegex(ValueError, 'contexte'):
+                list(runtime.iter_chat(dict(payload, max_tokens=5000), 'a'))
 
     def test_slot_eviction_never_moves_another_conversation_to_a_dirty_slot(self):
         slots = SlotPool()
@@ -181,10 +183,12 @@ class RuntimeTests(unittest.TestCase):
         import os, platform
         rows = trials()
         winner, summaries = select_winner(rows)
-        report = {'protocol': PROTOCOL, 'model_sha256': 'fingerprint',
+        validation = {name: dict(trial, samples=[dict(row, passes=3) for row in trial['samples'][:3]] * 3) for name, trial in rows.items()}
+        verified = {name: summarize(trial['samples']) for name, trial in validation.items()}
+        report = {'validation': {'trials': validation}, 'training_summaries': summaries, 'protocol': PROTOCOL, 'model_sha256': 'fingerprint',
                   'hardware': {'system': platform.system(), 'machine': platform.machine(), 'cpu_count': os.cpu_count()},
                   'runtime': {'version': 'test', 'devices': 'GPU'}, 'context_length': 4096, 'slots': 2,
-                  'config': rows[winner]['config'], 'trials': rows, 'summaries': summaries, 'winner': winner}
+                  'config': rows[winner]['config'], 'trials': rows, 'summaries': verified, 'winner': winner}
         with tempfile.TemporaryDirectory() as folder:
             runtime = self.runtime(); runtime.state_dir = Path(folder); runtime.path = Path('/tmp/model.gguf')
             source = Path(folder) / 'fingerprint.json'
@@ -193,7 +197,9 @@ class RuntimeTests(unittest.TestCase):
                 start.assert_called_once_with(ExecutionConfig(batch=256))
                 self.assertEqual(runtime.profile, report)
                 start.reset_mock(); runtime.profile = None
-                for broken in (dict(report, model_sha256='changed'), dict(report, runtime={'version': 'old', 'devices': 'GPU'}), dict(report, context_length=2048), dict(report, winner='standard')):
+                invalid_validation = json.loads(json.dumps(report['validation']))
+                invalid_validation['trials']['candidate']['samples'][0]['output_sha256'] = 'changed'
+                for broken in (dict(report, validation=invalid_validation), dict(report, model_sha256='changed'), dict(report, runtime={'version': 'old', 'devices': 'GPU'}), dict(report, context_length=2048), dict(report, winner='standard')):
                     source.write_text(json.dumps(broken)); runtime._restore_profile()
                     self.assertIsNone(runtime.profile)
                 start.assert_not_called()

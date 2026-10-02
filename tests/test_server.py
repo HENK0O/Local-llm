@@ -443,6 +443,7 @@ class LMStudioProxyTests(unittest.TestCase):
             self.assertIsNone(chunks[-1]['local_llm']['reused_prompt_tokens'])
             self.assertGreater(chunks[-1]['local_llm']['decode_tokens_per_second'], 0)
             self.assertEqual(chunks[-1]['local_llm']['timing_kind'], 'observed_total')
+            self.assertGreaterEqual(chunks[-1]['local_llm']['first_text_seconds'], chunks[-1]['local_llm']['first_token_seconds'])
             self.assertEqual(chunks[-1]['usage']['completion_tokens'], 2)
             self.assertEqual(chunks[-1]['model'], 'ling-custom')
             self.assertEqual(chunks[-1]['local_llm']['model_key'], 'ling')

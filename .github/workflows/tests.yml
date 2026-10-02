@@ -22,7 +22,7 @@ jobs:
         with:
           node-version: "22"
       - name: Verify browser-local conversation storage
-        run: node --test tests/test_chat_store.cjs
+        run: node --test tests/*.cjs
 
   apple-silicon-native:
     name: Apple Silicon · native Q8/Q4 required

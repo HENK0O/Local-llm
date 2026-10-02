@@ -193,9 +193,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == 'calibrate':
         from .accelerator import Accelerator
         from .discovery import inspect_model
+        from .telemetry import SystemTelemetry
         runtime = Accelerator()
+        telemetry = SystemTelemetry()
+        def available_memory():
+            memory = telemetry.snapshot()
+            total, used = memory.get('memory_total_bytes'), memory.get('memory_used_bytes')
+            return min(total, max(0, total - used) + (runtime._rss() or 0)) if total is not None and used is not None else None
+        runtime.memory_probe = available_memory
         try:
-            runtime.load(inspect_model(args.model))
+            runtime.load(inspect_model(args.model), available_memory())
             runtime.optimize(args.draft)
             last = None
             while runtime.job['state'] == 'running':
@@ -219,6 +226,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             parser.error(str(exc))
         finally:
             runtime.close()
+            telemetry.close()
     if args.command == "create-toy":
         path = create_toy_model(args.output, args.seed)
         print(f"Toy model written to {path}")

@@ -43,38 +43,70 @@ compatibilité finale dépend du build llama.cpp installé. Les modèles auxilia
 DFlash et les modèles d’embeddings ne sont pas proposés comme modèles de chat.
 
 Dans **Performances**, choisissez **Optimiser ce modèle**. L’app compare une
-configuration standard, deux tailles de batch et la génération spéculative par
-motifs du contexte. Un GGUF auxiliaire installé, plus petit et ayant exactement
-les mêmes tokens et tokens spéciaux, peut également être testé. Les propositions
-sont validées par le modèle cible ; aucune spéculation n’est activée par défaut.
-Une variante plus lente ou dont la sortie diffère est rejetée.
+configuration GPU standard, deux tailles de batch, un cache KV Q8 et la
+spéculation par motifs avec 2, 4 ou 8 tokens anticipés. En mode automatique, elle
+cherche les GGUF auxiliaires installés ayant exactement les mêmes tokens et
+tokens spéciaux, et teste au maximum les deux plus petits compatibles qui
+rentrent dans la RAM disponible, avec trois profondeurs chacun. Vous pouvez
+choisir un auxiliaire précis ou désactiver cette recherche. Aucun téléchargement
+n’est effectué. Le modèle cible valide toujours les propositions spéculatives.
 
-Les essais utilisent les mêmes poids, la même quantification F16/Q8/etc., le même
-cache KV F16, la même capacité de contexte et deux slots. Trois prompts fixes
-(dont un contexte répétitif favorable aux motifs) sont joués deux fois à
-température zéro, en ordre de configurations inversé et après échauffement.
-La configuration gagnante doit accélérer chacune des deux suites d’au moins
-5 %, sans réduire le débit de décodage, et produire exactement les mêmes tokens.
-Le temps affiché est la médiane des deux suites complètes ; le débit est pondéré
-par les tokens décodés et leur durée. Ces mesures ne prouvent ni un gain sur
-toute conversation ni une qualité générale supérieure.
+La **sélection** utilise trois prompts publics fixes : discussion, code et
+contexte long varié, avec des plafonds de 128, 192 et 128 tokens. Deux passages
+avec ordre inversé, après échauffement, filtrent les configurations. Le meilleur
+candidat est ensuite comparé au standard sur **trois autres prompts**, joués
+**trois fois**. Cette vérification indépendante ne sert pas à chercher un autre
+candidat : si elle échoue, l’app garde le standard. Chaque passage doit améliorer
+le temps global d’au moins 5 %, sans réduire le débit de décodage ni ralentir
+une catégorie de plus de 10 %. Les sorties gloutonnes sont comparées par leurs
+empreintes de tokens. Les chargements et échauffements sont exclus du temps de
+la suite ; la préparation, la génération et l’appel HTTP local sont inclus.
+Les médianes des suites et le débit pondéré par le travail sont affichés.
 
-Le profil contient les empreintes des poids et sorties du benchmark, les temps,
-les réglages et l’identité du matériel/runtime, sans conversations personnelles.
-Il est sauvegardé dans `~/.cache/local-llm` (`LOCAL_LLM_STATE_DIR` pour changer ce
-dossier), vérifié puis rechargé avec le modèle. Un changement de poids, de build,
-de matériel ou de contexte invalide le profil. L’annulation restaure les réglages
-précédents avant de rendre le modèle disponible.
+Les poids et leur quantification ne changent jamais. La capacité du contexte et
+le nombre de slots sont les mêmes pour tous les essais. Le standard utilise un
+cache KV F16 ; **le cache Q8 est une modification de précision distincte**,
+rejetée dès qu’une sortie diffère sur la sélection ou la vérification. Même si
+ces tests passent, ils ne garantissent pas la qualité sur tous les prompts ni
+avec d’autres températures. Le diagnostic indique explicitement cette différence.
 
-Le worker d’inférence écoute sur une adresse loopback et un port privé avec
-une clé temporaire. local-llm ferme uniquement les processus qu’il a créés.
-Les poids restent chargés entre les réponses jusqu’au déchargement/changement
-de moteur ou à la fermeture de l’app. Deux conversations disposent chacune
-d’un slot de cache GPU, avec éviction de la moins récente ; les interruptions
-invalident le slot avant réutilisation. Le contexte n’est pas tronqué ou compressé
-silencieusement. Le moteur CPU conserve jusqu’à huit préfixes exacts dans 64 Mio.
-La RAM système inclut les processus externes comme LM Studio ; charger la même
-copie dans les deux moteurs peut donc nécessiter de la décharger dans LM Studio.
+L’écran détaille les réglages retenus, la mémoire estimée, les RSS observés après
+les essais, les résultats par catégorie et la raison de chaque rejet. Le gain
+affiché vient uniquement des prompts indépendants ; ce n’est pas une promesse
+pour chaque réponse. Si aucun réglage ne passe, le gain affiché est zéro.
+Une mesure séparée compare trois paires du même contexte sans cache puis avec
+cache : premier token et préparation réellement économisée. Le cache doit avoir
+réutilisé des tokens pour qu’un gain de préparation soit déclaré. Ce test ne
+constitue pas une comparaison avec LM Studio. Les réponses rapportent aussi le
+délai du premier token, réflexion incluse, et le délai du premier texte visible,
+mesurés à la réception par le serveur, dans **Performances**.
+
+Le profil reste local (`~/.cache/local-llm`, ou `LOCAL_LLM_STATE_DIR`) et ne
+contient aucun texte de conversation. Il est lié à l’empreinte des poids, au
+matériel, au build llama.cpp, au contexte et aux slots. Un ancien profil ou un
+profil dont la validation ne peut pas être reproduite depuis ses mesures est
+ignoré. Un gain CPU→GPU, un gain contre LM Studio et un gain contre le standard
+GPU sont des observations différentes.
+
+Le worker GPU est lancé sur un port privé de boucle locale, avec un jeton
+aléatoire temporaire. L’app arrête uniquement le processus qu’elle a créé. Les
+poids restent chargés entre les messages et sont libérés au déchargement/changement
+de moteur ou à la fermeture de l’app. Au chargement, une estimation prudente des
+poids, du KV et des buffers adapte le contexte (jusqu’à 16 384 tokens, dans la
+limite du modèle) et conserve **un à quatre slots** selon la RAM disponible,
+avec une marge système. Les architectures hybrides/MLA gardent un seul slot et
+une estimation plus conservatrice. Ces estimations ne remplacent pas les capteurs.
+Si une conversation dépasse la capacité chargée, l’app peut réallouer jusqu’à
+32 768 tokens si le modèle et la RAM le permettent ; les messages sont conservés,
+le cache est vidé et le profil de vitesse est invalidé. Une impossibilité est
+signalée, sans tronquer ni compresser silencieusement la conversation.
+
+Les slots gardent les conversations les plus récentes et les interruptions
+invalident le slot avant réutilisation. Le moteur CPU conserve jusqu’à huit
+préfixes ; son budget est limité à 1/32 de la RAM disponible, avec un plafond de
+512 Mio (64 Mio si la RAM est inconnue). Ce budget borne les **caches retenus**,
+pas le KV de la génération active. La RAM système inclut LM Studio ; charger
+une seconde copie d’un grand modèle peut demander de le décharger dans LM Studio.
 
 La même calibration est disponible sans serveur HTTP :
 
@@ -85,7 +117,7 @@ local-llm calibrate /chemin/modele.gguf --output /tmp/profil.json
 
 L’API expose `GET /v1/accelerator`, `GET /v1/accelerator/drafts` et les POST
 `/v1/accelerator/load` (`{"id":"id-du-catalogue"}`), `/optimize` (facultatif
-`{"draft_id":"id-du-catalogue"}`), `/cancel` et `/unload`. L’optimisation retourne
+`{"draft_id":"id-du-catalogue"}` ou `{"draft_mode":"off"}`), `/cancel` et `/unload`. L’optimisation retourne
 202 ; son état et ses mesures sont accessibles dans `GET /v1/accelerator`.
 Pour le chat direct, envoyez `backend: "llamacpp"`, `model` correspondant à
 l’identifiant chargé, `conversation_id` propre au fil et `stream: true` à
@@ -306,7 +338,7 @@ réponses du fil, les comparaisons manuelles et les mesures de la machine.
 Aucune comparaison ne démarre automatiquement après une réponse.
 
 **Réutilisation du contexte.** Le moteur natif conserve au maximum un cache KV
-de préfixe, borné à 64 Mio, entre les requêtes. Seuls les tokens identiques sont
+de préfixe, borné selon la RAM disponible (512 Mio maximum), entre les requêtes. Seuls les tokens identiques sont
 réutilisés ; la fin du prompt est évaluée pour obtenir de nouveaux logits.
 L’API indique `reused_prompt_tokens` et le chiffre vert **+N tok** compte les
 tokens d’entrée dont le recalcul a été évité. Sa bulle précise la méthode : il

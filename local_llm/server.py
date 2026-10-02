@@ -171,6 +171,7 @@ class ChatService:
         self._records = OrderedDict()
         self.prefix_cache = PrefixCache()
         self.accelerator = Accelerator()
+        self.accelerator.memory_probe = self._accelerator_memory_available
         self._accelerator_records = OrderedDict()
         self.extra_model_roots = list(model_dirs or [])
         self.model_roots = default_model_roots() + self.extra_model_roots
@@ -263,6 +264,11 @@ class ChatService:
                 self.current_id = item.id
                 self._records.clear()
                 self.prefix_cache.clear()
+                memory = self.telemetry.snapshot()
+                total, used = memory.get('memory_total_bytes'), memory.get('memory_used_bytes')
+                if total is not None and used is not None:
+                    # Retain only a small fraction of spare RAM; active KV is separate.
+                    self.prefix_cache.max_bytes = min(512 * 1024 ** 2, max(0, (total - used) // 32))
                 self.reference_runtime = (
                     ReferenceRuntime(self.reference, self.reference_repo, model.config)
                     if self.reference is not None and (self.reference.is_dir() or
@@ -287,7 +293,7 @@ class ChatService:
                 "max_lmstudio_tokens": self.max_lmstudio_tokens,
                 "max_accelerator_tokens": MAX_ACCELERATOR_TOKENS,
                 "accelerator": self.accelerator.describe(),
-                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding"],
+                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory"],
                 "retained_cache_bytes": self.prefix_cache.nbytes,
                 "retained_cache_limit_bytes": self.prefix_cache.max_bytes}
 
@@ -303,6 +309,14 @@ class ChatService:
             'LM Studio est inclus dans la RAM système, pas dans ces processus.')
         return snapshot
 
+    def _accelerator_memory_available(self):
+        snapshot = self.telemetry.snapshot()
+        total, used = snapshot.get('memory_total_bytes'), snapshot.get('memory_used_bytes')
+        if total is None or used is None:
+            return None
+        # Reallocation replaces our worker. Do not count unrelated LM Studio RAM.
+        return min(total, max(0, total - used) + (self.accelerator._rss() or 0))
+
     def load_accelerator(self, payload):
         if not isinstance(payload, dict) or not isinstance(payload.get("id"), str):
             raise ValueError("model id is required")
@@ -310,12 +324,7 @@ class ChatService:
         if item is None:
             raise ValueError("Modèle absent des bibliothèques configurées")
         with self._generation_lock:
-            memory = self.telemetry.snapshot()
-            available = memory.get("memory_total_bytes")
-            if available and memory.get("memory_used_bytes") is not None:
-                available -= memory["memory_used_bytes"]
-                available += self.accelerator._rss() or 0
-            result = self.accelerator.load(item, available)
+            result = self.accelerator.load(item, self._accelerator_memory_available())
             self.unload_model()
             self._accelerator_records.clear()
             return result
@@ -349,7 +358,24 @@ class ChatService:
             total, used = memory.get("memory_total_bytes"), memory.get("memory_used_bytes")
             if total and used is not None and Path(draft).stat().st_size * 1.2 + 512 * 1024 ** 2 > total - used:
                 raise ValueError("Mémoire insuffisante pour tester ce modèle auxiliaire.")
-        result = self.accelerator.optimize(draft)
+        if draft is not None:
+            result = self.accelerator.optimize(draft)
+        else:
+            if payload.get('draft_mode', 'auto') not in {'auto', 'off'}:
+                raise ValueError('draft_mode must be auto or off')
+            memory = self.telemetry.snapshot()
+            total, used = memory.get('memory_total_bytes'), memory.get('memory_used_bytes')
+            available = max(0, total - used) if total is not None and used is not None else None
+            # Keep a memory margin for the target's buffers, and bound trial count.
+            candidates = (sorted(self.accelerator_drafts()['models'], key=lambda m: m['size_bytes'])
+                          if payload.get('draft_mode', 'auto') == 'auto' else [])
+            eligible = [m for m in candidates if available is not None and
+                        m['size_bytes'] * 1.2 + 1024 ** 3 < available]
+            paths = [self.catalog[m['id']].path for m in eligible[:2]] if payload.get('draft_mode', 'auto') == 'auto' else []
+            result = self.accelerator.optimize(drafts=paths)
+            self.accelerator.job['draft_search'] = {'compatible': len(candidates), 'tested': len(paths),
+                'reason': 'Recherche désactivée' if payload.get('draft_mode') == 'off' else
+                          'Deux fichiers maximum, classés par taille, avec une marge de mémoire ; aucun téléchargement.'}
         self._accelerator_records.clear()
         return result
 
@@ -912,6 +938,8 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
         for key in ("top_k", "top_p", "seed"):
             if getattr(request, key) is not None:
                 payload[key] = getattr(request, key)
+        started = time.perf_counter()
+        first = first_text = None
         runtime.lock.acquire()
         upstream = runtime.iter_chat(payload, request.conversation_id)
         usage, timings = {}, {}
@@ -923,6 +951,13 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 usage = chunk.get("usage") or usage
                 timings = chunk.get("timings") or timings
                 choices = chunk.get("choices") or []
+                for choice in choices:
+                    delta = choice.get('delta') or {}
+                    now = time.perf_counter()
+                    if first is None and any(delta.get(k) for k in ('content', 'reasoning_content', 'reasoning')):
+                        first = now - started
+                    if first_text is None and delta.get('content'):
+                        first_text = now - started
                 if choices and choices[0].get("finish_reason"):
                     finish = choices[0]["finish_reason"]
                 chunk.update(id=response_id, backend="llamacpp")
@@ -937,6 +972,8 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 "local_llm": {"backend": "llamacpp", "completion_id": response_id,
                     "model_name": request.model_name, "decode_tokens_per_second": timings.get("predicted_per_second"),
                     "prefill_seconds": timings.get("prompt_ms", 0) / 1000 if timings else None,
+                    "first_token_seconds": first, "first_text_seconds": first_text,
+                    "request_seconds": time.perf_counter() - started,
                     "decode_seconds": timings.get("predicted_ms", 0) / 1000 if timings else None,
                     "kv_cache_bytes": None, "reused_prompt_tokens": timings.get("cache_n"),
                     "optimized": bool(profile and profile["winner"] != "standard"), "timing_kind": "engine",
@@ -970,7 +1007,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             if getattr(request, key) is not None:
                 payload[key] = getattr(request, key)
         started = time.perf_counter()
-        first = None
+        first = first_text = None
         usage = {}
         finish = "stop"
         upstream = self.server.service.lmstudio.iter_chat(payload)
@@ -992,9 +1029,12 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                     if choice.get("finish_reason"):
                         finish = choice["finish_reason"]
                     delta = choice.get("delta") or {}
+                    received = time.perf_counter()
+                    if first_text is None and delta.get("content"):
+                        first_text = received - started
                     if delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning"):
                         if first is None:
-                            first = time.perf_counter()
+                            first = received
                 chunk.update(id=response_id, backend="lmstudio")
                 self._write_event(chunk)
             if not verified:
@@ -1008,6 +1048,8 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 "model_key": request.model_key, "model_name": request.model_name, "model_instance_id": request.model_id,
                 "decode_tokens_per_second": count / seconds if count is not None and seconds > 0 else None,
                 "prefill_seconds": first - started if first is not None else None,
+                "first_token_seconds": first - started if first is not None else None,
+                "first_text_seconds": first_text, "request_seconds": seconds,
                 "decode_seconds": seconds, "kv_cache_bytes": None,
                 "reused_prompt_tokens": None,
                 "timing_kind": "observed_total", "optimized": False}})
@@ -1039,12 +1081,19 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
         })
         token_ids: List[int] = []
+        started = time.perf_counter()
+        first = first_text = None
         final_stats: Optional[GenerationStats] = None
         try:
             for piece in self.server.service.iter_completion(request, response_id):
                 if piece.token_id is not None:
                     token_ids.append(piece.token_id)
                 final_stats = piece.stats or final_stats
+                now = time.perf_counter()
+                if first is None and piece.token_id is not None:
+                    first = now - started
+                if first_text is None and piece.text:
+                    first_text = now - started
                 if piece.text:
                     self._write_event({
                         "id": response_id, "object": "chat.completion.chunk", "created": created,
@@ -1071,6 +1120,8 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 final["local_llm"] = {
                     "backend": request.backend,
                     "completion_id": response_id,
+                    "first_token_seconds": first, "first_text_seconds": first_text,
+                    "request_seconds": time.perf_counter() - started,
                     "prefill_seconds": final_stats.prefill_seconds,
                     "decode_seconds": final_stats.decode_seconds,
                     "prefill_tokens_per_second": final_stats.prefill_tokens_per_second,

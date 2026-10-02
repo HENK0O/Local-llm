@@ -34,7 +34,7 @@ class FakeRuntime:
     def unload(self): self.loaded = False
     def close(self): self.closed = True
     def _rss(self): return 1000
-    def optimize(self, draft):
+    def optimize(self, draft=None, drafts=None):
         self.job = {'state': 'running', 'progress': 0}
         return self.job
     def context(self, messages):
@@ -81,6 +81,9 @@ class AcceleratorHTTPTests(unittest.TestCase):
         self.assertEqual(stats['backend'], 'llamacpp')
         self.assertEqual(stats['decode_tokens_per_second'], 80)
         self.assertEqual(stats['reused_prompt_tokens'], 7)
+        self.assertGreaterEqual(stats['first_token_seconds'], 0)
+        self.assertGreaterEqual(stats['first_text_seconds'], stats['first_token_seconds'])
+        self.assertGreater(stats['request_seconds'], stats['first_text_seconds'])
         self.assertIsNone(stats['calibration_gain_percent'])
         self.assertFalse(stats['optimized'])
         self.assertIn('chat-a', self.runtime.slots.entries)
@@ -147,6 +150,31 @@ class AcceleratorHTTPTests(unittest.TestCase):
         self.assertIn('partagées', result['process_note'])
         with patch.object(self.service.telemetry, 'snapshot', return_value={'process_rss_bytes': 2000}), patch.object(self.runtime, '_rss', return_value=None):
             self.assertIsNone(self.service.system_snapshot()['process_rss_bytes'])
+
+
+class DraftSearchTests(unittest.TestCase):
+    def test_auto_drafts_are_ranked_bounded_and_fit_spare_memory(self):
+        with patch('local_llm.server.default_model_roots', return_value=[]):
+            service = ChatService()
+        runtime = service.accelerator = FakeRuntime()
+        runtime.optimize = Mock(wraps=runtime.optimize)
+        gib = 1024 ** 3
+        entries = [{'id':'large','size_bytes':2*gib}, {'id':'second','size_bytes':300*1024**2},
+                   {'id':'smallest','size_bytes':100*1024**2}, {'id':'third','size_bytes':400*1024**2}]
+        service.catalog = {m['id']:SimpleNamespace(path='/tmp/' + m['id'] + '.gguf') for m in entries}
+        try:
+            with patch.object(service, 'accelerator_drafts', return_value={'models':entries}), patch.object(service.telemetry, 'snapshot', return_value={'memory_total_bytes':10*gib,'memory_used_bytes':8*gib}):
+                service.optimize_accelerator({})
+            runtime.optimize.assert_called_once_with(drafts=['/tmp/smallest.gguf','/tmp/second.gguf'])
+            self.assertEqual(runtime.job['draft_search']['compatible'], 4)
+            self.assertEqual(runtime.job['draft_search']['tested'], 2)
+            runtime.optimize.reset_mock()
+            with patch.object(service, 'accelerator_drafts') as discover:
+                service.optimize_accelerator({'draft_mode':'off'})
+            discover.assert_not_called()
+            runtime.optimize.assert_called_once_with(drafts=[])
+        finally:
+            service.telemetry.close()
 
 
 if __name__ == '__main__': unittest.main()

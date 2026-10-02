@@ -11,7 +11,7 @@ from local_llm.cli import main
 
 class AcceleratorCLITests(unittest.TestCase):
     def test_calibration_exports_report_and_always_closes_owned_runtime(self):
-        runtime = Mock(); runtime.job = {'state': 'complete'}; runtime.profile = {'winner': 'standard'}
+        runtime = Mock(); runtime._rss.return_value = 0; runtime.job = {'state': 'complete'}; runtime.profile = {'winner': 'standard'}
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / 'report.json'
             with patch('local_llm.accelerator.Accelerator', return_value=runtime), patch('local_llm.discovery.inspect_model'), contextlib.redirect_stdout(io.StringIO()):
@@ -22,7 +22,7 @@ class AcceleratorCLITests(unittest.TestCase):
 
     def test_failed_calibration_and_ctrl_c_release_owned_runtime(self):
         for error, status in [(ValueError('bad model'), 2), (KeyboardInterrupt(), 130)]:
-            runtime = Mock(); runtime.load.side_effect = error
+            runtime = Mock(); runtime._rss.return_value = 0; runtime.load.side_effect = error
             with patch('local_llm.accelerator.Accelerator', return_value=runtime), patch('local_llm.discovery.inspect_model'), contextlib.redirect_stderr(io.StringIO()):
                 if status == 2:
                     with self.assertRaises(SystemExit) as result: main(['calibrate', 'installed.gguf'])

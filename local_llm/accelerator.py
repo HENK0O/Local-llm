@@ -7,14 +7,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import os
 import platform
 import re
 import secrets
 import shutil
 import socket
-import statistics
 import subprocess
 import tempfile
 import threading
@@ -27,14 +25,12 @@ from typing import Optional
 from .gguf import GGUFReader
 from .lmstudio import LMStudioClient
 from .loading import model_fingerprint
+from .calibration import (TRAIN_PROMPTS, VALIDATION_PROMPTS, CATEGORIES, OUTPUT_LIMITS,
+                          TRAIN_PASSES, VALIDATION_PASSES, assess_candidate, summarize,
+                          select_winner, memory_plan)
 
 
-PROTOCOL = 3
-PROMPTS = (
-    "Explain how a bicycle works in detail, using clear complete sentences.",
-    "Write a Python function to merge two sorted lists, then explain the algorithm.",
-    "Résume les observations suivantes puis propose un plan :\n" + "Une équipe teste une application locale. Elle mesure la vitesse, la mémoire et la stabilité à chaque essai.\n" * 32,
-)
+PROTOCOL = 4
 
 
 @dataclass(frozen=True)
@@ -46,12 +42,16 @@ class ExecutionConfig:
     slots: int = 2
     speculative: str = "none"
     draft_path: Optional[str] = None
+    draft_tokens: int = 4
+    kv_type: str = "f16"
 
     def __post_init__(self):
         if not 0 <= self.threads <= 256 or self.batch not in {256, 512, 1024, 2048}:
             raise ValueError("Invalid execution configuration")
-        if self.flash not in {"auto", "on", "off"} or not 512 <= self.context <= 32768 or self.slots != 2:
+        if self.flash not in {"auto", "on", "off"} or not 512 <= self.context <= 32768 or not 1 <= self.slots <= 4:
             raise ValueError("Invalid context or attention configuration")
+        if self.kv_type not in {"f16", "q8_0"} or self.draft_tokens not in {2, 4, 8}:
+            raise ValueError("Invalid cache precision or speculative depth")
         if self.speculative not in {"none", "ngram-simple", "draft-simple"}:
             raise ValueError("Unsupported speculative configuration")
         if (self.speculative == "draft-simple") != bool(self.draft_path):
@@ -71,49 +71,6 @@ def draft_compatible(target: Path, draft: Path) -> bool:
             'tokenizer.ggml.add_bos_token', 'tokenizer.ggml.add_eos_token')
     return bool(a.get('tokenizer.ggml.tokens')) and all(a.get(k) == b.get(k) for k in keys)
 
-
-def summarize(samples):
-    if not samples or any(not math.isfinite(s['seconds']) or s['seconds'] <= 0 or
-                          not math.isfinite(s['decode_tps']) or s['decode_tps'] <= 0 for s in samples):
-        raise ValueError("Invalid benchmark timings")
-    # Compare complete workloads, not a median mixing short and long prompts.
-    if len(samples) != 2 * len(PROMPTS):
-        raise ValueError('Two complete benchmark passes are required')
-    rounds = [samples[r:r + len(PROMPTS)] for r in range(0, len(samples), len(PROMPTS))]
-    return {'seconds': statistics.median(sum(s['seconds'] for s in group) for group in rounds),
-            'decode_tps': statistics.median(
-                sum(max(1, s['generated_tokens'] - 1) for s in group) /
-                sum(max(1, s['generated_tokens'] - 1) / s['decode_tps'] for s in group)
-                for group in rounds),
-            'prefill_seconds': statistics.median(s['prefill_seconds'] for s in samples),
-            'process_rss_bytes': max(s.get('process_rss_bytes') or 0 for s in samples)}
-
-
-def select_winner(trials, baseline_name='standard'):
-    """Reject changed outputs and noisy/regressive gains, including speculation."""
-    base = trials[baseline_name]
-    if len(base['samples']) != 2 * len(PROMPTS):
-        raise ValueError('Two complete benchmark passes are required')
-    reference = [s['output_sha256'] for s in base['samples']]
-    summaries = {baseline_name: summarize(base['samples'])}
-    winner = baseline_name
-    for name, trial in trials.items():
-        if name == baseline_name or [s['output_sha256'] for s in trial['samples']] != reference:
-            continue
-        try:
-            candidate = summarize(trial['samples'])
-        except (ValueError, KeyError, TypeError):
-            continue
-        summaries[name] = candidate
-        # Improvement must be present in both repetitions, not just one outlier.
-        rounds = [sum(s['seconds'] for s in trial['samples'][r:r + len(PROMPTS)]) /
-                  sum(s['seconds'] for s in base['samples'][r:r + len(PROMPTS)])
-                  for r in range(0, len(reference), len(PROMPTS))]
-        if (all(r < 0.95 for r in rounds) and
-                candidate['decode_tps'] >= summaries[baseline_name]['decode_tps'] and
-                candidate['seconds'] < summaries[winner]['seconds']):
-            winner = name
-    return winner, summaries
 
 
 class SlotPool:
@@ -146,7 +103,9 @@ class Accelerator:
         self.path = self.model_id = self.model_name = None
         self.config = ExecutionConfig()
         self.profile = None
-        self.slots = SlotPool()
+        self.memory = None
+        self.memory_probe = None
+        self.slots = SlotPool(self.config.slots)
         self.job = None
         self.cancelled = threading.Event()
         self.capabilities = None
@@ -160,7 +119,7 @@ class Accelerator:
                 try:
                     version = subprocess.check_output([self.executable, '--version'], stderr=subprocess.STDOUT, text=True, timeout=30)
                     help_text = subprocess.check_output([self.executable, '--help'], stderr=subprocess.DEVNULL, text=True, timeout=30)
-                    required = ('--cache-ram', '--spec-type', '--no-context-shift', '--no-webui')
+                    required = ('--cache-ram', '--spec-type', '--no-context-shift', '--no-webui', '--cache-type-k', '--spec-ngram-simple-size-m')
                     if any(flag not in help_text for flag in required):
                         raise ValueError('Version llama.cpp trop ancienne. Mettez-la à jour puis relancez local-llm.')
                     devices = subprocess.check_output([self.executable, '--list-devices'], stderr=subprocess.STDOUT, text=True, timeout=30)
@@ -179,7 +138,7 @@ class Accelerator:
         return {**(self.capabilities or {'available': bool(self.executable)}), 'loaded': running,
                 'model_id': self.model_id, 'model_name': self.model_name,
                 'config': asdict(self.config), 'context_length': self.config.context,
-                'profile': self.profile, 'cached_conversations': len(self.slots.entries),
+                'profile': self.profile, 'memory_plan': self.memory, 'cached_conversations': len(self.slots.entries),
                 'job': dict(self.job) if self.job else None}
 
     def _stop(self):
@@ -198,7 +157,7 @@ class Accelerator:
         if self.log:
             self.log.close()
             self.log = None
-        self.slots = SlotPool()
+        self.slots = SlotPool(self.config.slots)
 
     def close(self):
         self.cancelled.set()
@@ -206,6 +165,7 @@ class Accelerator:
             self.closed = True
             self._stop()
             self.path = self.model_id = self.model_name = None
+            self.memory = None
 
     def unload(self):
         if self.job and self.job['state'] == 'running':
@@ -213,6 +173,7 @@ class Accelerator:
         with self.lock:
             self._stop()
             self.path = self.model_id = self.model_name = None
+            self.memory = None
             self.profile = None
             self.job = None
 
@@ -230,12 +191,14 @@ class Accelerator:
                    '--n-gpu-layers', 'all', '--ctx-size', str(config.context * config.slots),
                    '--parallel', str(config.slots), '--batch-size', str(config.batch),
                    '--ubatch-size', str(512 if config.batch == 2048 else config.batch), '--flash-attn', config.flash,
-                   '--cache-type-k', 'f16', '--cache-type-v', 'f16', '--cache-ram', '0',
+                   '--cache-type-k', config.kv_type, '--cache-type-v', config.kv_type, '--cache-ram', '0',
                    '--no-context-shift', '--no-webui', '--jinja', '--spec-type', config.speculative]
         if config.threads:
             command += ['--threads', str(config.threads), '--threads-batch', str(config.threads)]
         if config.draft_path:
-            command += ['--spec-draft-model', config.draft_path, '--spec-draft-ngl', 'all', '--spec-draft-n-max', '4']
+            command += ['--spec-draft-model', config.draft_path, '--spec-draft-ngl', 'all', '--spec-draft-n-max', str(config.draft_tokens)]
+        if config.speculative == 'ngram-simple':
+            command += ['--spec-ngram-simple-size-m', str(config.draft_tokens)]
         self.log = tempfile.TemporaryFile(mode='w+b')
         env = {k: v for k, v in os.environ.items() if not k.startswith('LLAMA_ARG_') and k != 'LM_STUDIO_API_TOKEN'}
         try:
@@ -257,6 +220,7 @@ class Accelerator:
                     if props.get('total_slots', config.slots) != config.slots or actual_context != config.context:
                         raise ValueError('La capacité de contexte du runtime diffère de la configuration demandée.')
                     self.config = config
+                    self.slots = SlotPool(config.slots)
                     return
                 if self.cancelled.is_set() and self.job and self.job['state'] == 'running':
                     raise ValueError('Calibration interrompue')
@@ -277,14 +241,14 @@ class Accelerator:
         with self.lock:
             if self.model_id == item.id and self.process is not None and self.process.poll() is None:
                 return self.describe()
-            if memory_available is not None and path.stat().st_size * 1.2 + 512 * 1024 ** 2 > memory_available:
-                raise ValueError('Mémoire disponible insuffisante pour ce modèle et son contexte. Déchargez les modèles inutilisés dans LM Studio ou choisissez un fichier plus petit.')
+            metadata = GGUFReader(path).metadata
+            plan = memory_plan(metadata, path.stat().st_size, memory_available)
             self.path, self.model_id, self.model_name = path, item.id, item.name
             self.profile = None
             self.job = None
-            context = int(GGUFReader(path).metadata.get(str(item.architecture) + '.context_length', 4096))
+            self.memory = plan
             try:
-                self._start(ExecutionConfig(context=min(4096, max(512, context))))
+                self._start(ExecutionConfig(context=plan["context"], slots=plan["slots"]))
                 self._restore_profile()
             except BaseException:
                 self._stop()
@@ -305,10 +269,16 @@ class Accelerator:
                     report['context_length'] != self.config.context or report['slots'] != self.config.slots):
                 return
             config = ExecutionConfig(**report['config'])
-            valid = {name: trial for name, trial in report['trials'].items()
-                     if len(trial['samples']) == 2 * len(PROMPTS) and not trial.get('error')}
-            winner, summaries = select_winner(valid)
-            if winner != report['winner'] or summaries != report['summaries'] or asdict(config) != valid[winner]['config']:
+            winner, summaries = select_winner(report['trials'])
+            validation = report['validation']
+            accepted = winner == 'standard' or assess_candidate(validation['trials']['standard'], validation['trials'][winner])['accepted']
+            expected_winner = winner if accepted else 'standard'
+            verified = {name: summarize(trial['samples']) for name, trial in validation['trials'].items() if not trial.get('error')}
+            if (expected_winner != report['winner'] or summaries != report['training_summaries'] or
+                    verified != report['summaries'] or asdict(config) != report['trials'][expected_winner]['config'] or
+                    any(len(t['samples']) != VALIDATION_PASSES * len(CATEGORIES) or
+                        any(row.get('passes') != VALIDATION_PASSES for row in t['samples'])
+                        for t in validation['trials'].values() if not t.get('error'))):
                 return
             if config.draft_path:
                 if not draft_compatible(self.path, Path(config.draft_path)):
@@ -319,7 +289,7 @@ class Accelerator:
             self.profile = report
         except (OSError, ValueError, KeyError, TypeError):
             self.profile = None
-            self._start(ExecutionConfig(context=self.config.context))
+            self._start(replace(self.config, threads=0, batch=2048, flash="auto", speculative="none", draft_path=None, kv_type="f16"))
 
     def context(self, messages):
         if self.job and self.job['state'] == 'running':
@@ -344,7 +314,18 @@ class Accelerator:
                 raise ValueError('Le modèle a changé ; renvoyez la requête.')
             preview = self.context(payload['messages'])
             if preview['prompt_tokens'] + payload['max_tokens'] > self.config.context:
-                raise ValueError('Le contexte dépasse la capacité chargée. Réduisez la longueur de réponse ou créez une conversation.')
+                required = preview['prompt_tokens'] + payload['max_tokens']
+                available = self.memory_probe() if self.memory_probe else None
+                plan = memory_plan(GGUFReader(self.path).metadata, self.path.stat().st_size, available, required)
+                original = self.config
+                try:
+                    self._start(replace(original, context=plan['context'], slots=plan['slots']))
+                except Exception:
+                    self._start(original)
+                    raise
+                self.memory = plan
+                # Measurements made at another context capacity are not transferable.
+                self.profile = None
             slot, reset = self.slots.acquire(conversation)
             body = dict(payload, cache_prompt=not reset, id_slot=slot, repeat_penalty=1.0)
             upstream = self.client.iter_chat(body)
@@ -367,10 +348,10 @@ class Accelerator:
                 pass
         return None
 
-    def _sample(self, prompt):
+    def _sample(self, prompt, limit=128):
         formatted = self.client._request('/apply-template', {'messages': [{'role': 'user', 'content': prompt}]})['prompt']
         started = time.perf_counter()
-        result = self.client._request('/completion', {'prompt': formatted, 'n_predict': 64,
+        result = self.client._request('/completion', {'prompt': formatted, 'n_predict': limit,
             'temperature': 0, 'seed': 42, 'repeat_penalty': 1.0, 'cache_prompt': False,
             'return_tokens': True, 'id_slot': 0, 'stream': False}, timeout=180)
         timings = result['timings']
@@ -380,7 +361,7 @@ class Accelerator:
                 'output_sha256': hashlib.sha256(output).hexdigest(), 'process_rss_bytes': self._rss(),
                 'timings': timings}
 
-    def optimize(self, draft=None):
+    def optimize(self, draft=None, drafts=None):
         if not self.lock.acquire(blocking=False):
             raise ValueError('Une génération ou un chargement est en cours.')
         try:
@@ -388,72 +369,148 @@ class Accelerator:
                 raise ValueError('Chargez un modèle dans le moteur GPU avant de l’optimiser.')
             if self.job and self.job['state'] == 'running':
                 raise ValueError('Calibration déjà en cours')
-            if draft and not draft_compatible(self.path, Path(draft)):
-                raise ValueError('Modèle auxiliaire incompatible : vocabulaire identique et fichier plus petit requis.')
+            candidates = [Path(draft)] if draft else [Path(p) for p in (drafts or [])][:2]
+            if any(not draft_compatible(self.path, p) for p in candidates):
+                raise ValueError("Modèle auxiliaire incompatible")
             self.cancelled.clear()
             self.job = {'id': secrets.token_hex(8), 'state': 'running', 'progress': 0,
                         'message': 'Préparation des essais comparables', 'result': None}
-            threading.Thread(target=self._calibrate, args=(draft,), daemon=True).start()
+            threading.Thread(target=self._calibrate, args=(candidates,), daemon=True).start()
             return dict(self.job)
         finally:
             self.lock.release()
 
-    def _calibrate(self, draft):
-        with self.lock:
-            original = self.config
-            original_profile = self.profile
-            chosen = original
-            terminal = 'complete'
-            try:
-                initial_fingerprint, _ = model_fingerprint(self.path)
-                base = replace(original, threads=0, batch=2048, flash='auto', speculative='none', draft_path=None)
-                tuned = replace(base, threads=max(1, (os.cpu_count() or 4) // 2), batch=1024, flash='on')
-                configs = {'standard': base, 'réglages-1024': tuned,
-                           'réglages-256': replace(tuned, batch=256),
-                           'spéculation-contexte': replace(tuned, speculative='ngram-simple')}
-                if draft:
-                    configs['modèle-auxiliaire'] = replace(tuned, speculative='draft-simple', draft_path=str(draft))
-                trials = {name: {'config': asdict(config), 'samples': []} for name, config in configs.items()}
-                total = len(configs) * 2 * len(PROMPTS)
-                done = 0
-                # A/B then B/A reduces order/thermal bias; every load is warmed up.
-                for round_index in range(2):
-                    order = list(configs) if round_index == 0 else list(reversed(configs))
-                    for name in order:
+    def _latency_sample(self, prompt, cached):
+        started = time.perf_counter()
+        first = first_text = None
+        timings = {}
+        stream = self.client.iter_chat({'model': self.model_id, 'messages': [{'role': 'user', 'content': prompt}],
+            'max_tokens': 32, 'temperature': 0, 'seed': 42, 'repeat_penalty': 1.0,
+            'cache_prompt': cached, 'id_slot': 0})
+        try:
+            for chunk in stream:
+                if self.cancelled.is_set():
+                    raise ValueError('Calibration interrompue')
+                timings = chunk.get('timings') or timings
+                for choice in chunk.get('choices') or []:
+                    delta = choice.get('delta') or {}
+                    now = time.perf_counter()
+                    if first is None and any(delta.get(k) for k in ('content', 'reasoning_content', 'reasoning')):
+                        first = now - started
+                    if first_text is None and delta.get('content'):
+                        first_text = now - started
+        finally:
+            stream.close()
+        return {'first_token_seconds': first, 'first_text_seconds': first_text,
+                'seconds': time.perf_counter() - started,
+                'prefill_seconds': timings.get('prompt_ms', 0) / 1000 if timings else None,
+                'cached_tokens': timings.get('cache_n')}
+
+    def _cache_benchmark(self):
+        pairs = []
+        for i in range(3):
+            prompt = VALIDATION_PROMPTS[2] + '\nComparison run ' + str(i) + ': give a short answer.'
+            cold = self._latency_sample(prompt, False)
+            warm = self._latency_sample(prompt, True)
+            pairs.append({'cold': cold, 'warm': warm})
+        import statistics
+        def median(field, kind):
+            values = [pair[kind][field] for pair in pairs]
+            return statistics.median(values) if all(v is not None for v in values) else None
+        cold_prefill, warm_prefill = median('prefill_seconds', 'cold'), median('prefill_seconds', 'warm')
+        valid = all(isinstance(p['warm']['cached_tokens'], int) and p['warm']['cached_tokens'] > 0 for p in pairs)
+        return {'pairs': pairs, 'cache_verified': valid,
+                'cold_first_token_seconds': median('first_token_seconds', 'cold'),
+                'warm_first_token_seconds': median('first_token_seconds', 'warm'),
+                'prefill_seconds_saved': cold_prefill - warm_prefill if valid and cold_prefill is not None and warm_prefill is not None else None,
+                'scope': 'same_prompt_cold_then_warm_three_pairs'}
+
+    def _run_trials(self, configs, prompts, passes, phase, trials):
+        total = len(configs) * passes * len(prompts)
+        done = 0
+        for round_index in range(passes):
+            # Reverse, then rotate the order to limit systematic order effects.
+            order = list(configs) if round_index % 2 == 0 else list(reversed(configs))
+            if round_index == 2:
+                order = order[1:] + order[:1]
+            for name in order:
+                if self.cancelled.is_set():
+                    raise ValueError('Calibration interrompue')
+                if trials[name].get('error'):
+                    done += len(prompts)
+                    continue
+                self.job['message'] = phase + ' · ' + name + ' · passage ' + str(round_index + 1) + '/' + str(passes)
+                try:
+                    self._start(configs[name])
+                    self._sample('Describe a sunny day in a few complete sentences.', 32)
+                    for i, prompt in enumerate(prompts):
                         if self.cancelled.is_set():
                             raise ValueError('Calibration interrompue')
-                        self.job['message'] = 'Essai ' + name + ' · passage ' + str(round_index + 1) + '/2'
-                        try:
-                            self._start(configs[name])
-                            self._sample('Describe a sunny day in a few complete sentences.')
-                            for prompt in PROMPTS:
-                                if self.cancelled.is_set():
-                                    raise ValueError('Calibration interrompue')
-                                trials[name]['samples'].append(self._sample(prompt))
-                                done += 1
-                                self.job['progress'] = round(100 * done / total)
-                        except (OSError, ValueError) as exc:
-                            if name == 'standard' or self.cancelled.is_set():
-                                raise
-                            trials[name]['error'] = str(exc)
-                valid = {n: t for n, t in trials.items() if len(t['samples']) == 2 * len(PROMPTS) and not t.get('error')}
-                winner, summaries = select_winner(valid)
+                        row = self._sample(prompt, OUTPUT_LIMITS[i])
+                        row.update(category=CATEGORIES[i], passes=passes, workload=i)
+                        trials[name]['samples'].append(row)
+                        done += 1
+                        offset, span = (0, 65) if phase == 'Sélection' else (65, 25)
+                        self.job['progress'] = round(offset + span * done / total)
+                except (OSError, ValueError) as exc:
+                    if name == 'standard' or self.cancelled.is_set():
+                        raise
+                    trials[name]['error'] = str(exc)
+
+    def _calibrate(self, drafts):
+        with self.lock:
+            original, original_profile = self.config, self.profile
+            chosen, terminal = original, 'complete'
+            try:
+                initial_fingerprint, _ = model_fingerprint(self.path)
+                base = replace(original, threads=0, batch=2048, flash='auto', speculative='none', draft_path=None, kv_type='f16')
+                tuned = replace(base, threads=max(1, (os.cpu_count() or 4) // 2), batch=1024, flash='on')
+                configs = {'standard': base, 'réglages-1024': tuned, 'réglages-256': replace(tuned, batch=256),
+                           'cache-q8': replace(tuned, kv_type='q8_0')}
+                for depth in (2, 4, 8):
+                    configs['motifs-' + str(depth)] = replace(tuned, speculative='ngram-simple', draft_tokens=depth)
+                paths = [drafts] if isinstance(drafts, (str, Path)) else drafts or []
+                for index, path in enumerate(paths):
+                    for depth in (2, 4, 8):
+                        configs['auxiliaire-' + str(index + 1) + '-' + str(depth)] = replace(tuned,
+                            speculative='draft-simple', draft_path=str(path), draft_tokens=depth)
+                trials = {name: {'config': asdict(config), 'samples': []} for name, config in configs.items()}
+                self._run_trials(configs, TRAIN_PROMPTS, TRAIN_PASSES, 'Sélection', trials)
+                candidate, training_summaries = select_winner(trials)
+                decisions = {name: assess_candidate(trials['standard'], trial) for name, trial in trials.items() if name != 'standard'}
+                finalists = {'standard': base}
+                if candidate != 'standard':
+                    finalists[candidate] = configs[candidate]
+                validation = {name: {'config': asdict(config), 'samples': []} for name, config in finalists.items()}
+                self._run_trials(finalists, VALIDATION_PROMPTS, VALIDATION_PASSES, 'Vérification indépendante', validation)
+                decision = {'accepted': True, 'reason': 'La référence est conservée.'} if candidate == 'standard' else assess_candidate(validation['standard'], validation[candidate])
+                winner = candidate if decision['accepted'] else 'standard'
+                if candidate != 'standard':
+                    decisions[candidate] = dict(decision, stage='validation indépendante')
+                summaries = {name: summarize(trial['samples']) for name, trial in validation.items() if not trial.get('error')}
                 chosen = configs[winner]
+                self.job.update(progress=90, message='Mesure du premier token et du cache de contexte')
+                self._start(chosen)
+                cache = self._cache_benchmark()
                 fingerprint, _ = model_fingerprint(self.path)
                 if fingerprint != initial_fingerprint:
                     original_profile = None
-                    original = replace(original, speculative='none', draft_path=None)
+                    original = replace(original, speculative='none', draft_path=None, kv_type='f16')
                     raise ValueError('Les poids ont changé pendant la calibration ; aucun gain n’est validé.')
                 report = {'protocol': PROTOCOL, 'model_sha256': fingerprint, 'model_id': self.model_id,
                           'hardware': {'system': platform.system(), 'machine': platform.machine(), 'cpu_count': os.cpu_count()},
                           'runtime': self.available(), 'context_length': base.context, 'slots': base.slots,
+                          'memory_plan': self.memory, 'cache_benchmark': cache, 'draft_search': self.job.get('draft_search'),
                           'measured_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                          'winner': winner, 'config': asdict(chosen), 'trials': trials, 'summaries': summaries,
+                          'winner': winner, 'candidate': candidate, 'config': asdict(chosen), 'trials': trials,
+                          'training_summaries': training_summaries, 'summaries': summaries, 'decisions': decisions,
+                          'validation': {'trials': validation, 'decision': decision, 'passes': VALIDATION_PASSES},
                           'draft_sha256': model_fingerprint(Path(chosen.draft_path))[0] if chosen.draft_path else None,
                           'gain_percent': 100 * (summaries['standard']['seconds'] / summaries[winner]['seconds'] - 1),
                           'decode_gain_percent': 100 * (summaries[winner]['decode_tps'] / summaries['standard']['decode_tps'] - 1),
-                          'scope': 'benchmark_local_3_prompts_2_passes', 'outputs_identical_on_benchmark': True}
-                # Profiles contain hashes and aggregate timings, never prompts/replies.
+                          'scope': 'independent_chat_code_long_context_3_passes',
+                          'kv_precision_changed': chosen.kv_type != base.kv_type,
+                          'outputs_identical_on_benchmark': True}
                 self.state_dir.mkdir(parents=True, exist_ok=True)
                 target = self.state_dir / (fingerprint + '.json')
                 fd, filename = tempfile.mkstemp(dir=self.state_dir, suffix='.tmp')
@@ -465,19 +522,17 @@ class Accelerator:
                     if os.path.exists(filename):
                         os.unlink(filename)
                 self.profile = report
-                self.job.update(progress=100, message='Configuration validée' if winner != 'standard' else 'La configuration standard reste la meilleure', result=report)
+                self.job.update(progress=100, message='Configuration validée sur des prompts indépendants' if winner != 'standard' else 'La configuration standard reste la meilleure', result=report)
             except Exception as exc:
-                self.profile = original_profile
-                chosen = original
+                self.profile, chosen = original_profile, original
                 terminal = 'cancelled' if self.cancelled.is_set() else 'failed'
                 self.job.update(message=str(exc))
             finally:
-                # Cancellation cannot prevent restoring a working configuration.
                 self.cancelled.clear()
                 try:
                     self._start(chosen)
                 except Exception as exc:
                     terminal = 'failed'
                     self.job.update(message='Restauration échouée : ' + str(exc))
-                self.slots = SlotPool()
+                self.slots = SlotPool(self.config.slots)
                 self.job['state'] = terminal
