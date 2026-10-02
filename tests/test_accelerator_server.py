@@ -16,6 +16,7 @@ class FakeRuntime:
         self.lock = threading.RLock()
         self.config = ExecutionConfig()
         self.profile = None
+        self.usage_profile = "balanced"
         self.slots = SlotPool()
         self.model_id, self.model_name, self.path = 'target', 'Target GGUF', None
         self.loaded = True
@@ -24,6 +25,11 @@ class FakeRuntime:
         self.closed = False
         self.payload = None
 
+    def active_measurement(self): return None
+    def set_usage_profile(self, usage):
+        if usage not in {'balanced','discussion','code','long_context'}: raise ValueError('Profil inconnu')
+        self.usage_profile = usage
+        return self.describe()
     def available(self): return {'available': True, 'gpu': True}
     def describe(self):
         return dict(self.available(), loaded=self.loaded, model_id=self.model_id, model_name=self.model_name, job=self.job)
@@ -65,6 +71,7 @@ class AcceleratorHTTPTests(unittest.TestCase):
     def setUp(self):
         self.runtime.loaded = True; self.runtime.model_id = 'target'; self.runtime.job = None
         self.runtime.cancelled.clear()
+        self.runtime.usage_profile = 'balanced'
 
     def request(self, path, payload=None, origin=None):
         headers = {'Content-Type': 'application/json'}
@@ -86,6 +93,8 @@ class AcceleratorHTTPTests(unittest.TestCase):
         self.assertGreater(stats['request_seconds'], stats['first_text_seconds'])
         self.assertIsNone(stats['calibration_gain_percent'])
         self.assertFalse(stats['optimized'])
+        self.assertEqual(stats['optimization_profile'], 'balanced')
+        self.assertIsNone(stats['draft_proposed_tokens'])
         self.assertIn('chat-a', self.runtime.slots.entries)
         with self.request('/v1/context', {'completion_id': data['id']}) as response:
             snapshot = json.load(response)
@@ -95,6 +104,14 @@ class AcceleratorHTTPTests(unittest.TestCase):
         with self.request('/v1/context', {'backend': 'llamacpp', 'model': 'target', 'stream': True,
                          'messages': [{'role': 'user', 'content': 'Preview'}]}) as response:
             self.assertEqual(json.load(response)['prompt'], 'EXACT: Preview')
+
+    def test_usage_profile_endpoint_validates_and_applies_only_named_profiles(self):
+        with self.request('/v1/accelerator/profile', {'profile':'code'}) as response:
+            self.assertEqual(response.status, 200)
+        self.assertEqual(self.runtime.usage_profile,'code')
+        for payload in ({'profile':'--external'}, {}, {'profile':3}):
+            with self.assertRaises(HTTPError) as error: self.request('/v1/accelerator/profile', payload)
+            self.assertEqual(error.exception.code,400)
 
     def test_unloaded_wrong_model_nonstream_and_calibration_never_silently_route_elsewhere(self):
         payload = {'backend': 'llamacpp', 'model': 'target', 'stream': True,
@@ -115,7 +132,7 @@ class AcceleratorHTTPTests(unittest.TestCase):
         with self.request('/v1/accelerator/load', {'id': 'target'}) as response: self.assertTrue(json.load(response)['loaded'])
         with self.assertRaises(HTTPError) as error: self.request('/v1/accelerator/load', {'id': '/arbitrary/model.gguf'})
         self.assertEqual(error.exception.code, 400)
-        for path in ('load', 'unload', 'optimize', 'cancel'):
+        for path in ('load', 'unload', 'optimize', 'cancel', 'profile'):
             with self.assertRaises(HTTPError) as error: self.request('/v1/accelerator/' + path, {}, 'https://evil.invalid')
             self.assertEqual(error.exception.code, 403)
         with self.request('/v1/accelerator/optimize', {}) as response:

@@ -42,26 +42,47 @@ charger directement un GGUF que le moteur CPU ne prend pas en charge ; sa
 compatibilité finale dépend du build llama.cpp installé. Les modèles auxiliaires
 DFlash et les modèles d’embeddings ne sont pas proposés comme modèles de chat.
 
-Dans **Performances**, choisissez **Optimiser ce modèle**. L’app compare une
-configuration GPU standard, deux tailles de batch, un cache KV Q8 et la
-spéculation par motifs avec 2, 4 ou 8 tokens anticipés. En mode automatique, elle
-cherche les GGUF auxiliaires installés ayant exactement les mêmes tokens et
-tokens spéciaux, et teste au maximum les deux plus petits compatibles qui
-rentrent dans la RAM disponible, avec trois profondeurs chacun. Vous pouvez
-choisir un auxiliaire précis ou désactiver cette recherche. Aucun téléchargement
-n’est effectué. Le modèle cible valide toujours les propositions spéculatives.
+Dans **Performances**, choisissez **Optimiser ce modèle**. L’app explore les
+threads de génération et de préparation séparément, les batches physiques de
+préparation (`ubatch`), les tailles de batch, le cache KV Q8 et, si le build le
+propose, le sampling GPU. Elle teste les motifs `ngram-simple` (4/16/48 tokens,
+avec une recherche de motifs courts), `ngram-map-k` et `ngram-mod` adaptatif
+(jusqu’à 64 tokens). Les options absentes du build installé sont ignorées.
+En mode automatique, elle cherche au maximum deux auxiliaires locaux compatibles
+qui rentrent dans la RAM disponible et teste 2/4/8/16 tokens anticipés. Un
+auxiliaire classique doit avoir exactement les mêmes tokens et tokens spéciaux.
+Vous pouvez choisir un auxiliaire précis ou désactiver cette recherche. Aucun
+modèle n’est téléchargé. Le modèle cible valide les propositions spéculatives.
 
-La **sélection** utilise trois prompts publics fixes : discussion, code et
-contexte long varié, avec des plafonds de 128, 192 et 128 tokens. Deux passages
-avec ordre inversé, après échauffement, filtrent les configurations. Le meilleur
-candidat est ensuite comparé au standard sur **trois autres prompts**, joués
-**trois fois**. Cette vérification indépendante ne sert pas à chercher un autre
-candidat : si elle échoue, l’app garde le standard. Chaque passage doit améliorer
-le temps global d’au moins 5 %, sans réduire le débit de décodage ni ralentir
-une catégorie de plus de 10 %. Les sorties gloutonnes sont comparées par leurs
-empreintes de tokens. Les chargements et échauffements sont exclus du temps de
-la suite ; la préparation, la génération et l’appel HTTP local sont inclus.
-Les médianes des suites et le débit pondéré par le travail sont affichés.
+Une **présélection** de trois prompts publics à 64 tokens retient au maximum
+six configurations, en préservant le meilleur candidat par usage. Ces mesures
+rapides ne servent jamais à annoncer un gain. La **sélection** reprend trois
+prompts fixes (discussion, code, contexte long varié), avec des plafonds de
+128/192/128 tokens et deux passages dans des ordres opposés après échauffement.
+Chaque candidat retenu par usage est ensuite comparé au standard sur **trois
+autres prompts**, joués **trois fois**. La vérification indépendante ne sert
+jamais à chercher un candidat de remplacement : en cas d’échec, cet usage garde
+le standard. Les sorties gloutonnes doivent être identiques dans les **trois
+catégories**, y compris pour un profil spécialisé.
+
+Quatre profils sont proposés : **Équilibré, Discussion, Code, Contexte long**.
+Chaque passage doit améliorer le temps d’au moins 5 % et préserver le débit de
+décodage. Le profil équilibré vérifie la suite complète et refuse une catégorie
+ralentie de plus de 10 %. Les profils spécialisés évaluent les performances de
+leur catégorie uniquement : leur gain ne constitue pas un gain général.
+Le sélecteur dans Performances applique le profil aux prochaines réponses du
+modèle. Si ses réglages diffèrent, le worker est rechargé et son cache vidé ; les
+conversations restent disponibles. Ce coût de changement est affiché séparément
+et n’est pas inclus dans le gain de génération.
+
+Les chargements et échauffements sont exclus du temps des suites ; préparation,
+génération et appel HTTP local sont inclus, ainsi que le travail spéculatif.
+Les compteurs réels de tokens anticipés proposés et acceptés sont affichés
+lorsque le runtime les expose ; une valeur absente reste inconnue. Le coût de
+l’auxiliaire seul n’est pas fourni par cette API : un taux d’acceptation élevé ne
+suffit donc pas à valider un gain. Les médianes et le débit pondéré par le travail
+sont affichés. Les tests ne couvrent qu’un prompt indépendant par catégorie,
+répété trois fois : ils ne garantissent pas les mêmes gains sur toute requête.
 
 Les poids et leur quantification ne changent jamais. La capacité du contexte et
 le nombre de slots sont les mêmes pour tous les essais. Le standard utilise un
@@ -92,17 +113,22 @@ Le worker GPU est lancé sur un port privé de boucle locale, avec un jeton
 aléatoire temporaire. L’app arrête uniquement le processus qu’elle a créé. Les
 poids restent chargés entre les messages et sont libérés au déchargement/changement
 de moteur ou à la fermeture de l’app. Au chargement, une estimation prudente des
-poids, du KV et des buffers adapte le contexte (jusqu’à 16 384 tokens, dans la
-limite du modèle) et conserve **un à quatre slots** selon la RAM disponible,
-avec une marge système. Les architectures hybrides/MLA gardent un seul slot et
-une estimation plus conservatrice. Ces estimations ne remplacent pas les capteurs.
+poids, du KV et des buffers démarre avec **un seul emplacement GPU et au plus
+4096 tokens** de contexte. Avoir davantage de RAM libre ne provoque plus une
+réservation automatique de quatre caches GPU. Un cache de préfixes en RAM hôte,
+**borné à 64/128/256 Mio selon la marge disponible** (ou désactivé si elle est
+insuffisante), permet de retrouver les états des conversations récentes sans
+réserver un emplacement GPU par fil. Le runtime ne restaure que des préfixes de
+tokens identiques. Ce cache est volatile et ne sauvegarde pas les conversations
+sur disque. Les architectures hybrides/MLA utilisent une estimation plus
+conservatrice. Ces estimations ne remplacent pas les capteurs.
 Si une conversation dépasse la capacité chargée, l’app peut réallouer jusqu’à
 32 768 tokens si le modèle et la RAM le permettent ; les messages sont conservés,
 le cache est vidé et le profil de vitesse est invalidé. Une impossibilité est
 signalée, sans tronquer ni compresser silencieusement la conversation.
 
-Les slots gardent les conversations les plus récentes et les interruptions
-invalident le slot avant réutilisation. Le moteur CPU conserve jusqu’à huit
+Les interruptions imposent une requête sans réutilisation de cache au prochain
+message du même fil. Le moteur CPU conserve jusqu’à huit
 préfixes ; son budget est limité à 1/32 de la RAM disponible, avec un plafond de
 512 Mio (64 Mio si la RAM est inconnue). Ce budget borne les **caches retenus**,
 pas le KV de la génération active. La RAM système inclut LM Studio ; charger
@@ -117,13 +143,70 @@ local-llm calibrate /chemin/modele.gguf --output /tmp/profil.json
 
 L’API expose `GET /v1/accelerator`, `GET /v1/accelerator/drafts` et les POST
 `/v1/accelerator/load` (`{"id":"id-du-catalogue"}`), `/optimize` (facultatif
-`{"draft_id":"id-du-catalogue"}` ou `{"draft_mode":"off"}`), `/cancel` et `/unload`. L’optimisation retourne
+`{"draft_id":"id-du-catalogue"}` ou `{"draft_mode":"off"}`), `/cancel`, `/unload` et
+`/profile` (par exemple `{"profile":"code"}` ; valeurs : `balanced`, `discussion`,
+`code`, `long_context`). L’optimisation retourne
 202 ; son état et ses mesures sont accessibles dans `GET /v1/accelerator`.
 Pour le chat direct, envoyez `backend: "llamacpp"`, `model` correspondant à
 l’identifiant chargé, `conversation_id` propre au fil et `stream: true` à
 `/v1/chat/completions`. La capacité de réponse est bornée à 4096 tokens et par le
 contexte chargé. Le débit moteur et les tokens d’entrée effectivement réutilisés
 sont rapportés séparément des gains mesurés pendant la calibration.
+
+### Auxiliaires spécialisés
+
+EAGLE-3, DFlash et DSpark nécessitent un auxiliaire entraîné pour la cible précise.
+Le vocabulaire ou le nom affiché ne suffit pas. Un GGUF auxiliaire spécialisé
+peut être déclaré par un fichier adjacent portant le même nom, avec le suffixe
+`.local-llm-draft.json` (pour `auxiliaire.gguf`, `auxiliaire.local-llm-draft.json`) :
+
+```json
+{
+  "method": "draft-dflash",
+  "target_sha256": "SHA256_DES_POIDS_CIBLES",
+  "draft_sha256": "SHA256_DES_POIDS_AUXILIAIRES",
+  "source": "https://adresse-de-la-fiche-amont-documentant-la-paire"
+}
+```
+
+Méthodes autorisées : `draft-eagle3`, `draft-dflash`, `draft-dspark`. Les empreintes
+se calculent sur chaque fichier entier (par exemple `shasum -a 256 fichier.gguf`).
+Cette déclaration est à renseigner **uniquement si la compatibilité de la paire
+est documentée en amont**. Elle lie les poids exacts ; elle ne prouve ni la
+qualité ni le gain. Les mêmes tests indépendants s’appliquent, et le build
+llama.cpp doit proposer la méthode. Sans déclaration, un DFlash/DSpark n’est
+jamais associé automatiquement à un modèle de chat. Les fichiers auxiliaires
+restent ignorés par Git.
+
+### Expérience MLX optionnelle (Apple Silicon)
+
+Une calibration **séparée en ligne de commande** explore la préparation MLX
+(128/512/2048 tokens par étape), avec les mêmes règles de sélection, vérification
+indépendante et profils d’usage. Elle ne remplace pas encore le moteur de chat
+GGUF. Il faut un dossier local compatible MLX contenant les poids Safetensors,
+le tokenizer et le template de conversation ; **les GGUF de LM Studio ne sont
+pas directement utilisables par cette expérience**. Aucun poids n’est téléchargé
+ou converti. Le chargement reste hors ligne, sans code de modèle distant.
+
+MLX-LM récent demande Python 3.11+ et une version de Transformers différente du
+backend de référence. Utilisez donc un environnement séparé ; n’installez pas
+MLX dans la `.venv` du moteur Python 3.9 :
+
+```bash
+python3.12 -m venv /chemin/venv-mlx
+/chemin/venv-mlx/bin/python -m pip install 'mlx-lm>=0.31,<0.33'
+local-llm mlx-experiment /chemin/modele-mlx-local \
+  --python /chemin/venv-mlx/bin/python --output /tmp/mesures-mlx.json
+```
+
+Le rapport précise les versions, l’empreinte des fichiers, la mémoire GPU
+observée et le périmètre. Il compare les réglages du **même modèle MLX** ; il ne
+prétend pas que MLX soit supérieur à llama.cpp et ne mélange pas des poids de
+quantifications différentes. L’intégration a été vérifiée sur un minuscule
+modèle synthétique local ; une conclusion sur un modèle réel demande encore un
+modèle MLX installé et une mesure appropriée. Voir les sources officielles :
+[MLX-LM](https://github.com/ml-explore/mlx-lm) et
+[spéculation llama.cpp](https://github.com/ggml-org/llama.cpp/blob/master/docs/speculative.md).
 
 ## Essai rapide avec un vrai modèle
 
@@ -148,25 +231,25 @@ bibliothèques locales sont détectés et sélectionnables dans l’interface.
 
 ### Support actuel
 
-| Élément | Support |
-|---|---|
-| Architectures | Llama (MHA/GQA), Baguette non hybride |
-| Poids | SafeTensors F32/F16/BF16, GGUF v3 F32/F16/BF16/Q8_0/Q4_0 |
-| Tokenizers | UTF-8 pédagogique, GPT-2 byte-level BPE |
-| Inférence | prefill, cache KV préalloué, décodage autoregressif, sampling |
-| CPU | NumPy/BLAS ; C++ multithread ; SIMD NEON Apple Silicon |
-| Validation | logits, tokens gloutons, cache contre recalcul, traces externes |
-| Interfaces | CLI, chat interactif, streaming SSE, API HTTP locale |
+| Élément       | Support                                                         |
+| ------------- | --------------------------------------------------------------- |
+| Architectures | Llama (MHA/GQA), Baguette non hybride                           |
+| Poids         | SafeTensors F32/F16/BF16, GGUF v3 F32/F16/BF16/Q8_0/Q4_0        |
+| Tokenizers    | UTF-8 pédagogique, GPT-2 byte-level BPE                         |
+| Inférence     | prefill, cache KV préalloué, décodage autoregressif, sampling   |
+| CPU           | NumPy/BLAS ; C++ multithread ; SIMD NEON Apple Silicon          |
+| Validation    | logits, tokens gloutons, cache contre recalcul, traces externes |
+| Interfaces    | CLI, chat interactif, streaming SSE, API HTTP locale            |
 
 ### Performances indicatives
 
 Mesures sur un MacBook Air Apple M5, modèle SmolLM2-360M-Instruct :
 
-| Backend | Poids | Decode | Résultat glouton |
-|---|---:|---:|---|
-| F16 / BLAS | 692 Mio | ~46 tok/s | référence |
+| Backend                  |   Poids |     Decode | Résultat glouton                    |
+| ------------------------ | ------: | ---------: | ----------------------------------- |
+| F16 / BLAS               | 692 Mio |  ~46 tok/s | référence                           |
 | Q8_0 / C++ NEON fusionné | 369 Mio | ~106 tok/s | tokens identiques sur le cas mesuré |
-| Q8_0 / NumPy | 369 Mio | ~5 tok/s | tokens identiques |
+| Q8_0 / NumPy             | 369 Mio |   ~5 tok/s | tokens identiques                   |
 
 Les chiffres dépendent du prompt, de la longueur générée et de la machine. Les
 commandes reproductibles et la méthodologie sont détaillées plus bas.
@@ -686,7 +769,7 @@ contenant plusieurs fichiers, un GGUF regroupe dans un seul fichier :
 - éventuellement le template de conversation du modèle.
 
 Cette disposition permet de retrouver rapidement chaque tenseur et de lire les
-poids avec un *memory mapping* (`mmap`) sans copier immédiatement tout le fichier
+poids avec un _memory mapping_ (`mmap`) sans copier immédiatement tout le fichier
 en mémoire. Un fichier GGUF n'est pas forcément quantifié : le même modèle peut
 exister en F16, Q8 ou Q4. La quantification réduit sa taille et sa consommation
 mémoire, au prix d'une approximation numérique et avec une vitesse qui dépend

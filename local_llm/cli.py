@@ -118,6 +118,11 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate.add_argument('--draft', type=Path, help='optional smaller GGUF with exactly the same tokenizer')
     calibrate.add_argument('--output', type=Path, help='export measured profile as JSON')
 
+    mlx = subparsers.add_parser('mlx-experiment', help='offline MLX prefill calibration on installed Safetensors (Apple Silicon)')
+    mlx.add_argument('model', type=Path, help='local MLX-compatible model directory')
+    mlx.add_argument('--python', type=Path, help='Python 3.11+ from a separate environment with mlx-lm installed')
+    mlx.add_argument('--output', type=Path, help='export experimental measurements as JSON')
+
     evaluate = subparsers.add_parser(
         "evaluate", help="check logits, greedy tokens, KV cache and runtime regressions"
     )
@@ -190,6 +195,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == 'mlx-experiment':
+        from .mlx_experiment import run_experiment
+        try:
+            report = run_experiment(args.model, args.python)
+            encoded = json.dumps(report, ensure_ascii=False, indent=2) + '\n'
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(encoded)
+            print(encoded, end='')
+            return 0
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
     if args.command == 'calibrate':
         from .accelerator import Accelerator
         from .discovery import inspect_model

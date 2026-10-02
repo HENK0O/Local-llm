@@ -19,3 +19,5 @@ pytorch_model*.bin
 *.pfx
 *.log
 local-llm-conversations*.json
+
+*.local-llm-draft.json

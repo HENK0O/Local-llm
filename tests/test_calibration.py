@@ -19,7 +19,9 @@ class MemoryAndValidationTests(unittest.TestCase):
         metadata = self.metadata(); gib = 1024 ** 3
         small = memory_plan(metadata, gib, 3 * gib)
         large = memory_plan(metadata, gib, 12 * gib)
-        self.assertGreater(large['context'] * large['slots'], small['context'] * small['slots'])
+        self.assertEqual(large['context'], 4096)
+        self.assertEqual(large['slots'], 1)
+        self.assertGreater(memory_plan(metadata, gib, 12*gib, required=9000)['context'], large['context'])
         for plan in (small, large):
             self.assertLessEqual(plan['estimated_bytes'] + plan['reserve_bytes'], plan['available_bytes'])
             self.assertGreaterEqual(plan['context'], 512)
@@ -60,7 +62,7 @@ class MemoryAndValidationTests(unittest.TestCase):
             self.assertEqual(runtime.job['state'], 'complete')
             self.assertEqual(runtime.profile['candidate'], 'motifs-4')
             self.assertEqual(runtime.profile['winner'], 'standard')
-            self.assertEqual(set(run_trials.call_args_list[1].args[0]), {'standard','motifs-4'})
+            self.assertEqual(set(run_trials.call_args_list[2].args[0]), {'standard','motifs-4'})
             self.assertIn('Sorties différentes', runtime.profile['validation']['decision']['reason'])
             self.assertEqual(starts[-1].speculative, 'none')
             self.assertEqual(runtime.profile['gain_percent'], 0)
@@ -90,7 +92,9 @@ class MemoryAndValidationTests(unittest.TestCase):
         self.assertGreaterEqual(runtime.config.context, 5128)
         self.assertIsNone(runtime.profile)
         self.assertEqual(runtime.client.iter_chat.call_args.args[0]['messages'], payload['messages'])
-        self.assertFalse(runtime.client.iter_chat.call_args.args[0]['cache_prompt'])
+        # The new bounded host cache permits exact-prefix reuse; the newly
+        # created worker has no state to reuse yet.
+        self.assertTrue(runtime.client.iter_chat.call_args.args[0]['cache_prompt'])
 
 
 if __name__ == '__main__': unittest.main()

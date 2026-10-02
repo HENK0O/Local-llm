@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from local_llm.accelerator import Accelerator, ExecutionConfig, PROTOCOL, SlotPool, draft_compatible, select_winner, summarize
+from local_llm.calibration import verified_profiles
 
 
 def samples(seconds=1, tps=100):
@@ -48,7 +49,7 @@ class CalibrationTests(unittest.TestCase):
 
     def test_configuration_cannot_inject_flags_or_change_precision(self):
         for kwargs in ({'speculative': '--external'}, {'batch': 1}, {'threads': -1},
-                       {'flash': 'bad'}, {'context': 1}, {'slots': 0}, {'slots': 5}, {'kv_type': 'q4_0'}, {'draft_tokens': 64},
+                       {'flash': 'bad'}, {'context': 1}, {'slots': 0}, {'slots': 5}, {'kv_type': 'q4_0'}, {'draft_tokens': 128},
                        {'draft_path': '/tmp/model'}, {'speculative': 'draft-simple'}):
             with self.assertRaises(ValueError): ExecutionConfig(**kwargs)
         self.assertEqual(ExecutionConfig(speculative='draft-simple', draft_path='/tmp/draft.gguf').speculative, 'draft-simple')
@@ -185,7 +186,7 @@ class RuntimeTests(unittest.TestCase):
         winner, summaries = select_winner(rows)
         validation = {name: dict(trial, samples=[dict(row, passes=3) for row in trial['samples'][:3]] * 3) for name, trial in rows.items()}
         verified = {name: summarize(trial['samples']) for name, trial in validation.items()}
-        report = {'validation': {'trials': validation}, 'training_summaries': summaries, 'protocol': PROTOCOL, 'model_sha256': 'fingerprint',
+        report = {'profiles': verified_profiles(rows, validation), 'draft_fingerprints': {}, 'validation': {'trials': validation}, 'training_summaries': summaries, 'protocol': PROTOCOL, 'model_sha256': 'fingerprint',
                   'hardware': {'system': platform.system(), 'machine': platform.machine(), 'cpu_count': os.cpu_count()},
                   'runtime': {'version': 'test', 'devices': 'GPU'}, 'context_length': 4096, 'slots': 2,
                   'config': rows[winner]['config'], 'trials': rows, 'summaries': verified, 'winner': winner}

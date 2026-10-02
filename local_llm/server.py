@@ -23,7 +23,7 @@ from .lmstudio import LMStudioClient
 from .recommendations import recommend_models
 from .telemetry import SystemTelemetry
 from .cache import PrefixCache
-from .accelerator import Accelerator, draft_compatible
+from .accelerator import Accelerator, draft_method
 from .gguf import Q4Matrix, Q8Matrix, q4_backend_name, q8_backend_name
 from .loading import load_runtime
 from .reference_runtime import ReferenceRuntime
@@ -293,7 +293,7 @@ class ChatService:
                 "max_lmstudio_tokens": self.max_lmstudio_tokens,
                 "max_accelerator_tokens": MAX_ACCELERATOR_TOKENS,
                 "accelerator": self.accelerator.describe(),
-                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory"],
+                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory", "usage_profiles"],
                 "retained_cache_bytes": self.prefix_cache.nbytes,
                 "retained_cache_limit_bytes": self.prefix_cache.max_bytes}
 
@@ -337,8 +337,9 @@ class ChatService:
                 if Path(item.path).suffix.lower() != '.gguf':
                     continue
                 try:
-                    if draft_compatible(target, Path(item.path)):
-                        models.append({'id': item.id, 'name': item.name, 'size_bytes': item.size_bytes})
+                    method = draft_method(target, Path(item.path))
+                    if method and (method == 'draft-simple' or method in self.accelerator.available().get('specialized_methods', [])):
+                        models.append({'id': item.id, 'name': item.name, 'size_bytes': item.size_bytes, 'method': method})
                 except (OSError, ValueError, KeyError, TypeError):
                     continue
         return {'models': models}
@@ -826,7 +827,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self._path()
-        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/lmstudio/load", "/v1/accelerator/load", "/v1/accelerator/unload", "/v1/accelerator/optimize", "/v1/accelerator/cancel", "/v1/compare"}:
+        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/lmstudio/load", "/v1/accelerator/load", "/v1/accelerator/unload", "/v1/accelerator/optimize", "/v1/accelerator/cancel", "/v1/accelerator/profile", "/v1/compare"}:
             self._error(404, "route not found")
             return
         if not self._same_origin():
@@ -847,6 +848,12 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/v1/accelerator/optimize":
                 self._send_json(202, self.server.service.optimize_accelerator(payload))
+                return
+            if path == "/v1/accelerator/profile":
+                if not isinstance(payload, dict) or not isinstance(payload.get("profile"), str):
+                    raise ValueError("profile is required")
+                self._send_json(200, self.server.service.accelerator.set_usage_profile(payload["profile"]))
+                self.server.service._accelerator_records.clear()
                 return
             if path == "/v1/accelerator/cancel":
                 self.server.service.accelerator.cancelled.set()
@@ -966,7 +973,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             self.server.service._accelerator_records[response_id] = {**preview, "created": time.monotonic()}
             while len(self.server.service._accelerator_records) > 8:
                 self.server.service._accelerator_records.popitem(last=False)
-            profile = runtime.profile
+            profile = runtime.active_measurement()
             self._write_event({"id": response_id, "model": request.model_id,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": finish}], "usage": usage,
                 "local_llm": {"backend": "llamacpp", "completion_id": response_id,
@@ -978,6 +985,8 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                     "kv_cache_bytes": None, "reused_prompt_tokens": timings.get("cache_n"),
                     "optimized": bool(profile and profile["winner"] != "standard"), "timing_kind": "engine",
                     "calibration_gain_percent": profile["gain_percent"] if profile else None,
+                    "optimization_profile": runtime.usage_profile,
+                    "draft_proposed_tokens": timings.get("draft_n"), "draft_accepted_tokens": timings.get("draft_n_accepted"),
                     "speculative": runtime.config.speculative, "cached_conversations": len(runtime.slots.entries)}})
             self._write_event("[DONE]")
         except (BrokenPipeError, ConnectionResetError):
