@@ -61,6 +61,42 @@ class LMStudioClient:
         except (OSError, ValueError, KeyError, TypeError, URLError) as exc:
             return {"available": False, "url": self.url, "models": [], "error": str(exc)}
 
+    def iter_chat(self, payload):
+        """Relay OpenAI SSE, including usage; close upstream on disconnect."""
+        headers = {"Content-Type": "application/json"}
+        if self.token:
+            headers["Authorization"] = "Bearer " + self.token
+        body = dict(payload, stream=True, stream_options={"include_usage": True})
+        request = Request(self.url + "/v1/chat/completions",
+                          data=json.dumps(body).encode(), headers=headers)
+        with self.opener.open(request, timeout=180) as response:
+            frame = []
+            size = 0
+            done = False
+            while True:
+                line = response.readline(1024 * 1024 + 1)
+                if not line:
+                    break
+                size += len(line)
+                if size > 8 * 1024 * 1024 or len(line) > 1024 * 1024:
+                    raise ValueError("LM Studio stream is too large")
+                text = line.decode("utf-8").strip()
+                if not text:
+                    if frame:
+                        raw = "\n".join(frame)
+                        frame = []
+                        if raw == "[DONE]":
+                            done = True
+                            break
+                        chunk = json.loads(raw)
+                        if not isinstance(chunk, dict) or chunk.get("error"):
+                            raise ValueError("LM Studio generation failed")
+                        yield chunk
+                elif text.startswith("data:"):
+                    frame.append(text[5:].lstrip())
+            if not done:
+                raise ValueError("LM Studio stream ended before completion")
+
     def complete_raw(self, model_id: str, prompt: str, tokens: int) -> Dict:
         # v0 retains raw completions and engine timings; v1 chat would apply
         # another chat template, making a prompt comparison ambiguous.

@@ -320,6 +320,45 @@ class HTTPServerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "--allow-remote"):
             create_server("missing.gguf", host="0.0.0.0")
 
+class LMStudioProxyTests(unittest.TestCase):
+    def test_streaming_chat_works_without_a_native_model_and_is_not_attributed(self):
+        from unittest.mock import patch
+        from local_llm.server import ChatService
+        with patch('local_llm.server.default_model_roots', return_value=[]):
+            service = ChatService()
+        service.lmstudio.models = lambda: {'available': True, 'models': [{'id': 'ling'}]}
+        def stream(payload):
+            self.assertEqual(payload['model'], 'ling')
+            self.assertEqual(payload['messages'][0]['content'], 'Bonjour')
+            yield {'choices': [{'delta': {'content': 'Salut'}, 'finish_reason': None}]}
+            yield {'choices': [], 'usage': {'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5}}
+            yield {'choices': [{'delta': {}, 'finish_reason': 'stop'}]}
+        service.lmstudio.iter_chat = stream
+        with self.assertRaises(ValueError):
+            service.parse({'backend': 'lmstudio', 'model': 'unknown', 'messages': [{'role': 'user', 'content': 'hi'}], 'stream': True})
+        with self.assertRaises(ValueError):
+            service.parse({'backend': 'lmstudio', 'model': 'ling', 'messages': [{'role': 'user', 'content': 'hi'}]})
+        server = LocalLLMHTTPServer(('127.0.0.1', 0), service)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=3)
+            payload = {'backend': 'lmstudio', 'model': 'ling', 'messages': [{'role': 'user', 'content': 'Bonjour'}], 'stream': True}
+            connection.request('POST', '/v1/chat/completions', json.dumps(payload), {'Content-Type': 'application/json'})
+            response = connection.getresponse(); body = response.read().decode(); connection.close()
+            self.assertEqual(response.status, 200)
+            self.assertIn('Salut', body)
+            chunks = [json.loads(line[6:]) for line in body.splitlines() if line.startswith('data: {')]
+            self.assertFalse(chunks[-1]['local_llm']['optimized'])
+            self.assertGreater(chunks[-1]['local_llm']['decode_tokens_per_second'], 0)
+            self.assertEqual(chunks[-1]['local_llm']['timing_kind'], 'observed_total')
+            self.assertEqual(chunks[-1]['usage']['completion_tokens'], 2)
+            self.assertFalse(service._records)
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=3)
+            connection.request('GET', '/v1/recommendations'); response = connection.getresponse()
+            self.assertEqual(response.status, 200); self.assertIn('hardware', json.loads(response.read())); connection.close()
+        finally:
+            server.shutdown(); server.server_close(); thread.join(timeout=2)
+
 
 if __name__ == "__main__":
     unittest.main()

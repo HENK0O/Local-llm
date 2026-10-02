@@ -20,6 +20,7 @@ from .generation import GenerationStats, generate_tokens
 from .comparison import compare_cached
 from .discovery import default_model_roots, discover_models, inspect_model
 from .lmstudio import LMStudioClient
+from .recommendations import recommend_models
 from .gguf import Q4Matrix, Q8Matrix, q4_backend_name, q8_backend_name
 from .loading import load_runtime
 from .reference_runtime import ReferenceRuntime
@@ -127,8 +128,8 @@ def parse_chat_request(payload: object, default_max_tokens: int = 128,
         raise ValueError("stream must be a boolean")
     if template_name is not None and not isinstance(template_name, str):
         raise ValueError("chat_template must be a string")
-    if not isinstance(backend, str) or backend not in {"local", "reference"}:
-        raise ValueError("backend must be 'local' or 'reference'")
+    if not isinstance(backend, str) or backend not in {"local", "reference", "lmstudio"}:
+        raise ValueError("backend must be local, reference or lmstudio")
     return ChatRequest(messages, max_tokens, temperature, top_k, top_p, seed,
                        stream, template_name, backend)
 
@@ -153,7 +154,8 @@ class ChatService:
                  model_dirs=None, lm_studio_url: str = "http://127.0.0.1:1234") -> None:
         self._generation_lock = threading.RLock()
         self._records = OrderedDict()
-        self.model_roots = default_model_roots() + list(model_dirs or [])
+        self.extra_model_roots = list(model_dirs or [])
+        self.model_roots = default_model_roots() + self.extra_model_roots
         self.catalog = {m.id: m for m in discover_models(self.model_roots)}
         if model_path is not None:
             explicit = inspect_model(Path(model_path))
@@ -186,6 +188,7 @@ class ChatService:
     def available_models(self, refresh: bool = False) -> Dict:
         with self._generation_lock:
             if refresh:
+                self.model_roots = default_model_roots() + self.extra_model_roots
                 items = {m.id: m for m in discover_models(self.model_roots)}
                 if self.current_id and self.current_id in self.catalog:
                     items[self.current_id] = self.catalog[self.current_id]
@@ -278,11 +281,19 @@ class ChatService:
         return self.reference.name if self.reference is not None else "Recalcul complet"
 
     def parse(self, payload: object) -> ChatRequest:
+        request = parse_chat_request(payload, self.default_max_tokens, self.max_request_tokens)
+        if request.backend == "lmstudio":
+            model_id = payload.get("model")
+            listing = self.lmstudio.models()
+            if not listing["available"]:
+                raise ValueError("Activez le serveur local dans LM Studio, puis actualisez la bibliothèque")
+            if not isinstance(model_id, str) or model_id not in {m["id"] for m in listing["models"]}:
+                raise ValueError("Modèle absent du serveur LM Studio")
+            if not request.stream:
+                raise ValueError("LM Studio nécessite stream=true")
+            return replace(request, model_id=model_id)
         if self.model is None:
             raise ValueError("Charge un modèle avant de démarrer une conversation")
-        request = parse_chat_request(
-            payload, self.default_max_tokens, self.max_request_tokens
-        )
         model_id = payload.get("model") if isinstance(payload, dict) else None
         if model_id is not None and not isinstance(model_id, str):
             raise ValueError("model must be a string")
@@ -511,6 +522,9 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
         if path == "/v1/local-models":
             self._send_json(200, self.server.service.available_models())
             return
+        if path == "/v1/recommendations":
+            self._send_json(200, recommend_models(installed=self.server.service.catalog.values()))
+            return
         if path == "/v1/lmstudio/models":
             self._send_json(200, self.server.service.lmstudio.models())
             return
@@ -606,7 +620,9 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(200, self.server.service.benchmark(payload))
                 return
             request = self.server.service.parse(payload)
-            if request.stream:
+            if request.backend == "lmstudio":
+                self._stream_lmstudio(request)
+            elif request.stream:
                 self._stream_completion(request)
             else:
                 self._complete(request)
@@ -649,6 +665,61 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
         value = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
         self.wfile.write(f"data: {value}\n\n".encode("utf-8"))
         self.wfile.flush()
+
+    def _stream_lmstudio(self, request: ChatRequest) -> None:
+        response_id = self._response_id()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        payload = {"model": request.model_id,
+                   "messages": [{"role": m.role, "content": m.content} for m in request.messages],
+                   "max_tokens": request.max_tokens, "temperature": request.temperature}
+        for key in ("top_p", "seed"):
+            if getattr(request, key) is not None:
+                payload[key] = getattr(request, key)
+        started = time.perf_counter()
+        first = None
+        usage = {}
+        finish = "stop"
+        upstream = self.server.service.lmstudio.iter_chat(payload)
+        try:
+            for chunk in upstream:
+                if isinstance(chunk.get("usage"), dict):
+                    usage = chunk["usage"]
+                choices = chunk.get("choices") or []
+                if choices:
+                    choice = choices[0]
+                    if choice.get("finish_reason"):
+                        finish = choice["finish_reason"]
+                    if choice.get("delta", {}).get("content"):
+                        if first is None:
+                            first = time.perf_counter()
+                chunk.update(id=response_id, model=request.model_id, backend="lmstudio")
+                self._write_event(chunk)
+            seconds = time.perf_counter() - started
+            count = usage.get("completion_tokens")
+            count = count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else None
+            self._write_event({"id": response_id, "model": request.model_id,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
+                "usage": usage, "local_llm": {"backend": "lmstudio", "completion_id": response_id,
+                "decode_tokens_per_second": count / seconds if count is not None and seconds > 0 else None,
+                "prefill_seconds": first - started if first is not None else None,
+                "decode_seconds": seconds, "kv_cache_bytes": None,
+                "timing_kind": "observed_total", "optimized": False}})
+            self._write_event("[DONE]")
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception as exc:
+            try:
+                self._write_event({"error": {"message": str(exc)}})
+                self._write_event("[DONE]")
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        finally:
+            upstream.close()
 
     def _stream_completion(self, request: ChatRequest) -> None:
         response_id = self._response_id()

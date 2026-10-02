@@ -28,10 +28,31 @@ class DiscoveredModel:
         return asdict(self)
 
 
+def lmstudio_model_roots(home: Path) -> List[Path]:
+    """Read only the configured library path, never credentials or model weights."""
+    roots = [home / ".lmstudio/models", home / ".cache/lm-studio/models"]
+    settings = [home / ".lmstudio/settings.json",
+                home / "Library/Application Support/LM Studio/settings.json",
+                home / ".config/LM Studio/settings.json"]
+    if os.environ.get("APPDATA"):
+        settings.append(Path(os.environ["APPDATA"]) / "LM Studio/settings.json")
+    for path in settings:
+        try:
+            if path.stat().st_size > 1024 * 1024:
+                continue
+            value = json.loads(path.read_text()).get("downloadsFolder")
+            if isinstance(value, str) and value.strip():
+                folder = Path(value).expanduser()
+                if folder.is_absolute():
+                    roots.append(folder)
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return list(dict.fromkeys(roots))
+
+
 def default_model_roots() -> List[Path]:
     home = Path.home()
-    roots = [Path.cwd() / "models", home / ".lmstudio/models",
-             home / ".cache/lm-studio/models",
+    roots = [Path.cwd() / "models", *lmstudio_model_roots(home),
              Path(os.environ.get("HF_HUB_CACHE", Path(os.environ.get("HF_HOME", home / ".cache/huggingface")) / "hub"))]
     roots.extend(Path(p).expanduser() for p in os.environ.get("LOCAL_LLM_MODEL_DIRS", "").split(os.pathsep) if p)
     return roots
@@ -85,11 +106,12 @@ def inspect_model(path: Path, source: str = "local") -> DiscoveredModel:
 
 def discover_models(roots: Optional[Iterable[Path]] = None, limit: int = 256) -> List[DiscoveredModel]:
     found = {}
+    studio_roots = {p.resolve() for p in lmstudio_model_roots(Path.home())}
     for root in roots if roots is not None else default_model_roots():
         root = Path(root).expanduser().resolve()
         if not root.is_dir():
             continue
-        source = "LM Studio" if "lmstudio" in str(root) or "lm-studio" in str(root) else "Hugging Face" if "huggingface" in str(root) else "local"
+        source = "LM Studio" if root in studio_roots or "lmstudio" in str(root) or "lm-studio" in str(root) else "Hugging Face" if "huggingface" in str(root) else "local"
         for directory, dirs, files in os.walk(root, followlinks=False):
             relative = Path(directory).relative_to(root)
             dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in {"blobs", "node_modules", "__pycache__"}) if len(relative.parts) < 5 else []

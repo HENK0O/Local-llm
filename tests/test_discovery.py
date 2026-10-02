@@ -107,3 +107,17 @@ class DiscoveryTests(unittest.TestCase):
             service.complete(service.parse({'messages': [{'role': 'user', 'content': 'hi'}], 'max_tokens': 1}), 'single')
             with self.assertRaisesRegex(ValueError, 'peu de tokens'):
                 service.compare_completion({'completion_id': 'single'})
+
+class LMStudioDirectoryTests(unittest.TestCase):
+    def test_custom_lmstudio_directory_and_invalid_settings(self):
+        from local_llm.discovery import lmstudio_model_roots
+        with tempfile.TemporaryDirectory() as d:
+            home = Path(d); settings = home / '.lmstudio/settings.json'
+            settings.parent.mkdir()
+            custom = home / 'external-library'
+            settings.write_text(json.dumps({'downloadsFolder': str(custom)}))
+            self.assertIn(custom, lmstudio_model_roots(home))
+            settings.write_text('{invalid')
+            self.assertEqual(len(lmstudio_model_roots(home)), 2)
+            settings.write_text(json.dumps({'downloadsFolder': 'relative/models'}))
+            self.assertEqual(len(lmstudio_model_roots(home)), 2)

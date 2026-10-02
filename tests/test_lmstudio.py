@@ -60,3 +60,21 @@ class LMStudioTests(unittest.TestCase):
         request = opener.call_args.args[0]
         self.assertNotIn('test-secret', request.full_url)
         self.assertEqual(request.get_header('Authorization'), 'Bearer test-secret')
+
+class LMStudioStreamingTests(unittest.TestCase):
+    def test_stream_forwards_content_and_usage_without_exposing_token(self):
+        client = LMStudioClient(token='test-secret')
+        stream = io.BytesIO(b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\ndata: {"usage":{"completion_tokens":2},"choices":[]}\n\ndata: [DONE]\n\n')
+        with patch.object(client.opener, 'open', return_value=stream) as opener:
+            chunks = list(client.iter_chat({'model': 'ling', 'messages': []}))
+        self.assertEqual(chunks[0]['choices'][0]['delta']['content'], 'Hi')
+        self.assertEqual(chunks[-1]['usage']['completion_tokens'], 2)
+        request = opener.call_args.args[0]
+        self.assertTrue(json.loads(request.data)['stream_options']['include_usage'])
+        self.assertTrue(stream.closed)
+
+    def test_truncated_or_failed_stream_does_not_report_success(self):
+        for raw in [b'data: {"choices":[]}\n\n', b'data: {"error":{"message":"oops"}}\n\n']:
+            client = LMStudioClient()
+            with patch.object(client.opener, 'open', return_value=io.BytesIO(raw)), self.assertRaises(ValueError):
+                list(client.iter_chat({'model': 'qwen'}))

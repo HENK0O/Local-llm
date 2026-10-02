@@ -8,6 +8,14 @@
       content="Inférence locale sur CPU et comparaison de performances mesurées."
     />
     <title>local-llm · Playground</title>
+    <script>
+      try {
+        document.documentElement.dataset.theme =
+          localStorage.getItem("local-llm-theme") || "dark";
+      } catch {
+        document.documentElement.dataset.theme = "dark";
+      }
+    </script>
     <style>
       :root {
         color-scheme: light;
@@ -21,6 +29,117 @@
         --soft: #e6eee7;
         --red: #a34040;
         --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+      }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #111517;
+        --panel: #171d20;
+        --paper: #1b2326;
+        --ink: #e8eeeb;
+        --muted: #a0aea7;
+        --line: #303c37;
+        --accent: #8ee0b1;
+        --soft: #23392e;
+        --red: #f39a9a;
+      }
+      .gain-hero {
+        margin: 18px 0 8px;
+        padding: 22px;
+        border-radius: 12px;
+        background: var(--soft);
+        border: 1px solid var(--accent);
+      }
+      .gain-hero strong {
+        display: block;
+        font-size: clamp(28px, 4vw, 42px);
+        letter-spacing: -1.5px;
+        color: var(--accent);
+      }
+      .gain-hero.negative {
+        border-color: var(--red);
+      }
+      .gain-hero.negative strong {
+        color: var(--red);
+      }
+      .gain-hero p {
+        margin: 8px 0 0;
+        color: var(--ink);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+      .gain-percent {
+        font: 14px var(--mono);
+      }
+      .metric-speed {
+        font-size: 16px;
+      }
+      .rec-preview {
+        background: var(--paper);
+        border: 1px solid var(--line);
+        padding: 12px;
+        border-radius: 9px;
+        margin-top: 12px;
+      }
+      .rec-preview strong {
+        display: block;
+        font-size: 13px;
+        margin-bottom: 6px;
+      }
+      .rec-preview p {
+        margin: 0;
+      }
+      .rec-list {
+        display: grid;
+        gap: 12px;
+        margin: 18px 0;
+      }
+      .rec-card {
+        padding: 20px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--paper);
+      }
+      .rec-card.preferred {
+        border-color: var(--accent);
+      }
+      .rec-card h3 {
+        margin: 10px 0;
+        font-size: 18px;
+      }
+      .rec-card a {
+        display: inline-block;
+        margin-top: 12px;
+        color: var(--accent);
+      }
+      .library-tools {
+        display: flex;
+        gap: 10px;
+        margin: 18px 0;
+      }
+      .library-tools input {
+        min-width: 0;
+        flex: 1;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        padding: 12px;
+        border-radius: 8px;
+      }
+      .runtime-tag {
+        display: inline-block;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        padding: 5px 8px;
+        border-radius: 6px;
+        font-size: 11px;
+      }
+      @media (max-width: 650px) {
+        .header-right {
+          flex-wrap: wrap;
+          justify-content: flex-end;
+        }
+        .gain-hero {
+          padding: 16px;
+        }
       }
       * {
         box-sizing: border-box;
@@ -70,6 +189,7 @@
       .app {
         display: grid;
         grid-template-columns: 258px minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr);
         height: 100dvh;
         min-height: 560px;
       }
@@ -226,6 +346,7 @@
         text-decoration: none;
       }
       .main {
+        min-height: 0;
         min-width: 0;
         display: flex;
         flex-direction: column;
@@ -255,10 +376,15 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      header > div:first-child {
+        min-width: 0;
+        flex: 1;
+      }
       .header-right {
+        flex-shrink: 0;
         display: flex;
         align-items: center;
-        gap: 17px;
+        gap: 10px;
       }
       .badge {
         font: 10px var(--mono);
@@ -480,6 +606,15 @@
       .send:hover:not(:disabled) {
         background: #1d5038;
       }
+      :root[data-theme="dark"] .send {
+        color: var(--bg);
+      }
+      :root[data-theme="dark"] .send:hover:not(:disabled) {
+        background: #b4efcd;
+      }
+      :root[data-theme="dark"] .stop {
+        color: var(--red);
+      }
       .stop {
         color: var(--red);
         background: var(--paper);
@@ -514,6 +649,10 @@
         padding: 25px;
         background: var(--bg);
         color: var(--ink);
+      }
+      dialog {
+        max-height: 85dvh;
+        overflow-y: auto;
       }
       dialog::backdrop {
         background: #1c28244d;
@@ -636,8 +775,21 @@
           height: 62px;
           padding: 0 18px;
         }
+        .machine-section .rec-preview,
+        .machine-section > .hint {
+          display: none;
+        }
+        .machine-section .side-heading {
+          margin-bottom: 0;
+        }
+        .badge {
+          display: none;
+        }
+        .header-right {
+          gap: 8px;
+        }
         .main {
-          height: calc(100dvh - 154px);
+          height: calc(100dvh - 195px);
           min-height: 400px;
         }
         .empty {
@@ -693,7 +845,7 @@
         </div>
         <section class="side-section library-section">
           <div class="side-heading">
-            <span class="eyebrow">Modèle local</span
+            <span class="eyebrow">Vos modèles</span
             ><button class="link-button" id="libraryButton">
               Bibliothèque ↗
             </button>
@@ -766,6 +918,21 @@
             ><span id="lmStatus">LM Studio : vérification…</span>
           </div>
         </section>
+        <section class="side-section machine-section">
+          <div class="side-heading">
+            <span class="eyebrow">Pour votre machine</span
+            ><button class="link-button" id="recommendButton">
+              Découvrir ↗
+            </button>
+          </div>
+          <p class="hint" id="hardwareHint">Analyse du matériel…</p>
+          <div class="rec-preview" id="recPreview">
+            <strong>Un modèle adapté à votre PC</strong>
+            <p class="hint">
+              Suggestions locales, sans téléchargement automatique.
+            </p>
+          </div>
+        </section>
         <div class="side-bottom">
           100 % local · aucun téléchargement<br /><a
             href="https://github.com/HENK0O/local-llm"
@@ -782,7 +949,9 @@
             <div class="header-model" id="modelName">Aucun modèle chargé</div>
           </div>
           <div class="header-right">
-            <span class="badge" id="contextBadge">CPU LOCAL</span
+            <button id="themeToggle" aria-label="Passer au thème clair">
+              ☀ Clair</button
+            ><span class="badge" id="contextBadge">CPU LOCAL</span
             ><button class="new" id="newChat">Nouvelle conversation +</button>
           </div>
         </header>
@@ -851,6 +1020,18 @@
         Les poids sont lus sur place. Seuls les modèles compatibles peuvent être
         chargés par local-llm.
       </p>
+      <div class="library-tools">
+        <input
+          id="modelSearch"
+          type="search"
+          placeholder="Chercher un modèle…"
+          aria-label="Chercher un modèle"
+        />
+      </div>
+      <p class="hint" id="libraryConnection">
+        Pour utiliser les modèles hors du moteur local-llm, activez le serveur
+        local de LM Studio.
+      </p>
       <div id="modelList" class="model-list"></div>
       <button id="scanModels">Rechercher à nouveau</button>
       <p class="hint">
@@ -858,6 +1039,20 @@
         <code>--model-dir /chemin/models</code>.
       </p>
       <div class="library-roots" id="libraryRoots"></div>
+    </dialog>
+    <dialog id="recommendations">
+      <div class="dialog-head">
+        <h2>Des modèles pour votre machine</h2>
+        <button id="closeRecommendations" aria-label="Fermer les suggestions">
+          ×
+        </button>
+      </div>
+      <p id="hardwareDetail" class="hint"></p>
+      <div id="recommendList" class="rec-list"></div>
+      <details>
+        <summary>Comment sont choisies les suggestions ?</summary>
+        <p id="recommendMethod"></p>
+      </details>
     </dialog>
     <script>
       "use strict";
@@ -868,11 +1063,37 @@
         busy = false,
         controller = null,
         epoch = 0;
+      let lmCatalog = [],
+        activeLM = null,
+        catalogData = { models: [], roots: [] };
+      const ready = () => activeLM !== null || info.loaded;
+      function updateTheme() {
+        const dark = document.documentElement.dataset.theme === "dark";
+        $("themeToggle").textContent = dark ? "☀ Clair" : "☾ Sombre";
+        $("themeToggle").setAttribute(
+          "aria-label",
+          dark ? "Passer au thème clair" : "Passer au thème sombre",
+        );
+      }
+      $("themeToggle").onclick = () => {
+        const theme =
+          document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+        document.documentElement.dataset.theme = theme;
+        try {
+          localStorage.setItem("local-llm-theme", theme);
+        } catch {}
+        updateTheme();
+      };
+      updateTheme();
       const fmt = (n) => (Number.isFinite(n) ? n.toFixed(1) : "—");
       const bytes = (n) =>
         n >= 1073741824
           ? (n / 1073741824).toFixed(1) + " Gio"
           : (n / 1048576).toFixed(0) + " Mio";
+      function modelQuant(m) {
+        const named = m.name.match(/(?:IQ\d|Q\d)_[A-Z0-9_]+/i);
+        return named ? named[0] : m.quantization || "Format non précisé";
+      }
       function node(tag, cls, text) {
         const e = document.createElement(tag);
         if (cls) e.className = cls;
@@ -894,17 +1115,18 @@
       }
       function setBusy(value) {
         busy = value;
-        $("send").disabled = value ? !controller : !info.loaded;
+        $("send").disabled = value ? !controller : !ready();
         $("send").textContent = value
           ? controller
             ? "Arrêter ■"
             : "Chargement…"
           : "Envoyer ↑";
         $("send").classList.toggle("stop", value && !!controller);
-        $("modelSelect").disabled = value || !catalog.some((m) => m.compatible);
+        $("modelSelect").disabled =
+          value || (!catalog.length && !lmCatalog.length);
         $("newChat").disabled = value;
         $("scanModels").disabled = value;
-        $("prompt").disabled = !info.loaded;
+        $("prompt").disabled = !ready();
         document
           .querySelectorAll("#modelList button")
           .forEach((b) => (b.disabled = value));
@@ -931,25 +1153,44 @@
         setBusy(busy);
       }
       function renderCatalog(data) {
+        catalogData = data;
         catalog = data.models;
         $("modelSelect").replaceChildren();
         if (!catalog.some((m) => m.compatible))
           $("modelSelect").append(
             node("option", "", "Aucun modèle compatible"),
           );
-        for (const m of catalog.filter((m) => m.compatible)) {
+        for (const m of catalog) {
           const o = node("option", "", m.name);
           o.value = m.id;
+          o.disabled = !m.compatible;
+          if (!m.compatible) o.textContent += " · moteur externe";
           $("modelSelect").append(o);
         }
-        $("modelSelect").value = data.current_id || "";
+        if (lmCatalog.length) {
+          const group = node("optgroup");
+          group.label = "Exécuter avec LM Studio";
+          for (const m of lmCatalog) {
+            const o = node("option", "", m.name);
+            o.value = "lmstudio:" + m.id;
+            group.append(o);
+          }
+          $("modelSelect").append(group);
+        }
+        $("modelSelect").value = activeLM
+          ? "lmstudio:" + activeLM.id
+          : data.current_id || "";
         $("modelHint").textContent =
           catalog.filter((m) => m.compatible).length +
           " compatibles · " +
           catalog.length +
-          " détectés";
+          " fichiers détectés" +
+          (lmCatalog.length ? " · " + lmCatalog.length + " via LM Studio" : "");
         $("modelList").replaceChildren();
-        for (const m of catalog) {
+        const query = $("modelSearch").value.trim().toLowerCase();
+        for (const m of catalog.filter((m) =>
+          (m.name + " " + m.source).toLowerCase().includes(query),
+        )) {
           const row = node("div", "model-row"),
             desc = node("div");
           desc.append(
@@ -957,10 +1198,19 @@
             node(
               "small",
               "",
-              m.source + " · " + bytes(m.size_bytes) + " · " + m.quantization,
+              m.source + " · " + bytes(m.size_bytes) + " · " + modelQuant(m),
             ),
           );
-          if (!m.compatible) desc.append(node("small", "error", m.reason));
+          if (!m.compatible) {
+            desc.append(node("small", "", "Détecté · " + m.reason));
+            desc.append(
+              node(
+                "small",
+                "",
+                "Le moteur local-llm ne peut pas accélérer cette architecture pour le moment.",
+              ),
+            );
+          }
           row.append(desc);
           if (m.compatible) {
             const b = node(
@@ -974,6 +1224,35 @@
           }
           $("modelList").append(row);
         }
+        if (lmCatalog.length)
+          $("modelList").append(
+            node("p", "eyebrow", "Disponibles via le serveur LM Studio"),
+          );
+        for (const m of lmCatalog.filter((m) =>
+          m.name.toLowerCase().includes(query),
+        )) {
+          const row = node("div", "model-row"),
+            desc = node("div");
+          desc.append(
+            node("strong", "", m.name),
+            node(
+              "small",
+              "",
+              "Serveur LM Studio · " +
+                (m.quantization || "") +
+                (m.loaded ? " · chargé" : ""),
+            ),
+          );
+          const b = node("button", "", "Utiliser via LM Studio");
+          b.disabled = busy;
+          b.onclick = () => loadModel("lmstudio:" + m.id);
+          row.append(desc, b);
+          $("modelList").append(row);
+        }
+        if (!$("modelList").children.length)
+          $("modelList").append(
+            node("p", "hint", "Aucun modèle ne correspond à cette recherche."),
+          );
         if (!catalog.length)
           $("modelList").append(
             node(
@@ -984,14 +1263,38 @@
           );
         $("libraryRoots").textContent =
           "Dossiers recherchés\n" + data.roots.join("\n");
-        $("modelSelect").disabled = busy || !catalog.some((m) => m.compatible);
+        $("modelSelect").disabled =
+          busy || (!catalog.length && !lmCatalog.length);
       }
       async function loadModel(id) {
         if (busy) return;
+        if (id.startsWith("lmstudio:")) {
+          activeLM = lmCatalog.find((m) => m.id === id.slice(9)) || null;
+          if (!activeLM) return;
+          history = [];
+          epoch++;
+          $("conversation").replaceChildren(emptyBackup.cloneNode(true));
+          bindSuggestions();
+          $("modelName").textContent = activeLM.name;
+          $("engineStatus").textContent = "Exécution par LM Studio";
+          $("engineDot").classList.remove("off");
+          $("contextBadge").textContent = "LM STUDIO";
+          $("composerInfo").textContent =
+            "Moteur LM Studio · aucun gain local-llm attribué";
+          $("notice").textContent =
+            "LM Studio chargera le modèle si nécessaire. Le premier démarrage peut prendre du temps.";
+          renderCatalog(catalogData);
+          setBusy(false);
+          $("library").close();
+          $("prompt").focus();
+          return;
+        }
         setBusy(true);
         $("notice").textContent = "Chargement du modèle en mémoire…";
         try {
-          showInfo(await api("/v1/local-models/load", { id }));
+          const loaded = await api("/v1/local-models/load", { id });
+          activeLM = null;
+          showInfo(loaded);
           history = [];
           $("conversation").replaceChildren(
             $("empty") || emptyBackup.cloneNode(true),
@@ -1003,7 +1306,9 @@
           $("prompt").focus();
         } catch (e) {
           $("notice").textContent = e.message;
-          $("modelSelect").value = info.current_id || "";
+          $("modelSelect").value = activeLM
+            ? "lmstudio:" + activeLM.id
+            : info.current_id || "";
         } finally {
           setBusy(false);
         }
@@ -1013,6 +1318,16 @@
         $("lmStatus").textContent = "LM Studio : vérification…";
         try {
           const data = await api("/v1/lmstudio/models");
+          lmCatalog = data.models;
+          if (activeLM && !lmCatalog.some((m) => m.id === activeLM.id)) {
+            activeLM = null;
+            showInfo(info);
+          }
+          $("libraryConnection").textContent = data.available
+            ? "Serveur LM Studio connecté : tous ses modèles sont disponibles ci-dessous."
+            : "LM Studio hors ligne. Dans LM Studio, ouvrez Developer et démarrez le serveur local, puis cliquez sur Rechercher à nouveau.";
+          renderCatalog(catalogData);
+          setBusy(busy);
           $("lmDot").classList.toggle("off", !data.available);
           $("lmStatus").textContent = data.available
             ? data.models.length + " modèles LM Studio"
@@ -1052,7 +1367,15 @@
           label = node("div", "message-label");
         if (role === "assistant") label.append(node("span", "mini-mark", "↗"));
         label.append(
-          node("span", "", role === "assistant" ? "local-llm" : "Vous"),
+          node(
+            "span",
+            "",
+            role === "assistant"
+              ? activeLM
+                ? "LM Studio"
+                : "local-llm"
+              : "Vous",
+          ),
         );
         const content = node(
           "div",
@@ -1078,9 +1401,26 @@
               ? fmt(stats.decode_tokens_per_second) + " tok/s"
               : "Débit non mesurable",
           ),
-          node("span", "", (usage.completion_tokens || 0) + " tokens"),
-          node("span", "", fmt(stats.prefill_seconds || 0) + " s · prefill"),
-          node("span", "", bytes(stats.kv_cache_bytes || 0) + " · cache KV"),
+          node(
+            "span",
+            "",
+            (usage.completion_tokens ?? "—") + " tokens générés",
+          ),
+          node(
+            "span",
+            "",
+            fmt(stats.prefill_seconds) +
+              (stats.backend === "lmstudio"
+                ? " s · première réponse"
+                : " s · préparation"),
+          ),
+          node(
+            "span",
+            "",
+            stats.backend === "lmstudio"
+              ? "Débit global LM Studio · préparation incluse · sans optimisation local-llm"
+              : bytes(stats.kv_cache_bytes || 0) + " · cache KV",
+          ),
         );
         wrap.append(row);
       }
@@ -1109,6 +1449,59 @@
                 data.reference_name,
             ),
           );
+          if (Number.isFinite(data.delta_tokens_per_second)) {
+            const delta = data.delta_tokens_per_second,
+              hero = node("div", "gain-hero" + (delta < 0 ? " negative" : ""));
+            hero.append(
+              node(
+                "span",
+                "eyebrow",
+                data.comparable
+                  ? delta >= 0
+                    ? "Accélération mesurée par local-llm"
+                    : "Ralentissement mesuré"
+                  : "Écart indicatif avec LM Studio",
+              ),
+            );
+            hero.append(
+              node(
+                "strong",
+                "",
+                (delta >= 0 ? "+" : "") + fmt(delta) + " tok/s",
+              ),
+            );
+            const percent =
+              (data.local_tokens_per_second / data.baseline_tokens_per_second -
+                1) *
+              100;
+            hero.append(
+              node(
+                "span",
+                "gain-percent",
+                (percent >= 0 ? "+" : "") + fmt(percent) + " % de débit",
+              ),
+            );
+            hero.append(
+              node(
+                "p",
+                "",
+                data.comparable
+                  ? "Sur le même calcul, face aux projections CPU NumPy. Le gain porte sur le rejeu mesuré ci-dessous."
+                  : "Les poids et le matériel des deux moteurs ne sont pas vérifiés. Cet écart ne prouve pas une accélération de LM Studio.",
+              ),
+            );
+            card.append(hero);
+          } else {
+            card.append(
+              node(
+                "p",
+                "hint",
+                data.specialized_projections === false
+                  ? "Aucun gain attribuable : ce modèle utilise déjà le même chemin de calcul."
+                  : "Aucun gain validé pour cette mesure.",
+              ),
+            );
+          }
           const grid = node("div", "compare-grid");
           for (const [label, value, cls] of [
             ["local-llm", fmt(data.local_tokens_per_second) + " tok/s", ""],
@@ -1188,7 +1581,7 @@
           return;
         }
         const text = $("prompt").value.trim();
-        if (!text || !info.loaded) return;
+        if (!text || !ready()) return;
         const turn = ++epoch,
           selected = $("baseline").value,
           lmModel = $("lmModel").value,
@@ -1209,7 +1602,8 @@
             headers: { "Content-Type": "application/json" },
             signal: controller.signal,
             body: JSON.stringify({
-              model: info.current_id,
+              model: activeLM ? activeLM.id : info.current_id,
+              backend: activeLM ? "lmstudio" : "local",
               messages: history,
               max_tokens: Number($("maxTokens").value),
               temperature: Number($("temperature").value),
@@ -1258,7 +1652,15 @@
           history.push({ role: "assistant", content: answer });
           statsView(view.wrap, final.local_llm, final.usage || {});
           $("notice").textContent = "Réponse terminée.";
-          if (auto && selected !== "none") {
+          if (final.local_llm.backend === "lmstudio") {
+            view.wrap.append(
+              node(
+                "p",
+                "hint",
+                "Réponse exécutée par LM Studio. Aucun gain du moteur local-llm n’est revendiqué.",
+              ),
+            );
+          } else if (auto && selected !== "none") {
             $("notice").textContent =
               "Réponse terminée · comparaison en cours…";
             await comparison(
@@ -1326,7 +1728,10 @@
       $("modelSelect").onchange = () => loadModel($("modelSelect").value);
       $("baseline").onchange = baselineChanged;
       $("lmRefresh").onclick = lmRefresh;
-      $("libraryButton").onclick = () => $("library").showModal();
+      $("libraryButton").onclick = () => {
+        $("library").showModal();
+        $("modelSearch").focus();
+      };
       $("closeLibrary").onclick = () => $("library").close();
       $("scanModels").onclick = async () => {
         if (busy) return;
@@ -1337,6 +1742,7 @@
           $("notice").textContent = e.message;
         } finally {
           setBusy(false);
+          await lmRefresh();
         }
       };
       $("newChat").onclick = () => {
@@ -1348,7 +1754,104 @@
         $("notice").textContent = "";
         $("prompt").focus();
       };
+      $("modelSearch").oninput = () => renderCatalog(catalogData);
+      $("recommendButton").onclick = () => $("recommendations").showModal();
+      $("closeRecommendations").onclick = () => $("recommendations").close();
+      async function recommendations() {
+        try {
+          const data = await api("/v1/recommendations"),
+            h = data.hardware;
+          const summary =
+            h.cpu +
+            " · " +
+            (h.logical_cores || "—") +
+            " cœurs logiques · " +
+            (h.memory_bytes ? bytes(h.memory_bytes) + " RAM" : "RAM inconnue");
+          $("hardwareHint").textContent = summary;
+          $("hardwareDetail").textContent = summary + ". " + h.gpu_note;
+          $("recommendMethod").textContent = data.method;
+          $("recommendList").replaceChildren();
+          for (const m of data.models) {
+            const card = node(
+              "article",
+              "rec-card" + (m.recommended ? " preferred" : ""),
+            );
+            card.append(
+              node(
+                "span",
+                "runtime-tag",
+                (m.recommended ? "Conseillé · " : "") + m.runtime,
+              ),
+              node("h3", "", m.name),
+              node("p", "hint", m.purpose),
+              node(
+                "p",
+                "hint",
+                m.format +
+                  " · environ " +
+                  m.memory_gib +
+                  " Gio de mémoire pour un contexte court · Apache 2.0",
+              ),
+            );
+            if (m.fits === null)
+              card.append(
+                node(
+                  "p",
+                  "hint",
+                  "Mémoire inconnue : vérifiez la capacité avant téléchargement.",
+                ),
+              );
+            if (m.installed_id) {
+              const b = node("button", "", "Utiliser le modèle installé");
+              b.onclick = async () => {
+                $("recommendations").close();
+                await loadModel(m.installed_id);
+              };
+              card.append(b);
+            }
+            const link = node("a", "", "Voir le modèle et ses formats ↗");
+            link.href = m.url;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            card.append(link);
+            const formatLink = node("a", "", "Obtenir le format conseillé ↗");
+            formatLink.href = m.download_url;
+            formatLink.target = "_blank";
+            formatLink.rel = "noopener noreferrer";
+            formatLink.style.marginLeft = "16px";
+            card.append(formatLink);
+            $("recommendList").append(card);
+          }
+          if (!data.models.length)
+            $("recommendList").append(
+              node(
+                "p",
+                "hint",
+                "Mémoire trop limitée pour les modèles de cette sélection avec la marge prévue.",
+              ),
+            );
+          const preferred = data.models.find((m) => m.recommended);
+          $("recPreview").replaceChildren(
+            node(
+              "strong",
+              "",
+              preferred ? preferred.name : "Voir les suggestions",
+            ),
+            node(
+              "p",
+              "hint",
+              preferred
+                ? preferred.format + " · conseillé pour votre CPU"
+                : "Choisir selon votre mémoire disponible.",
+            ),
+          );
+        } catch (e) {
+          $("hardwareHint").textContent =
+            "Suggestions indisponibles : " + e.message;
+        }
+      }
       bindSuggestions();
+      recommendations();
       (async () => {
         try {
           showInfo(await api("/health"));

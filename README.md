@@ -226,6 +226,39 @@ Ce témoin ne représente pas les performances de llama.cpp, de Transformers ou
 d’un GPU. Si les deux chemins utilisent déjà les mêmes projections BLAS, aucun
 gain n’est attribué aux kernels quantifiés.
 
+**Bibliothèque et apparence.** Tous les fichiers détectés sont visibles dans le
+sélecteur et la bibliothèque, y compris les architectures que local-llm ne sait
+pas exécuter. La recherche permet de retrouver Ling, Qwen et les autres modèles
+par nom. Les modèles hors du moteur restent explicitement indiqués ; ils ne
+sont jamais chargés silencieusement avec des opérations manquantes. Le dossier
+personnalisé `downloadsFolder` de LM Studio est également recherché et relu lors
+d’une actualisation. Le thème sombre est activé par défaut ; le bouton Clair /
+Sombre conserve le choix dans le navigateur.
+
+Le gain apparaît dans une carte dédiée : **tok/s supplémentaires et pourcentage
+de débit**, avec la référence utilisée et la méthode. Un gain absent, négatif ou
+non validé n’est pas transformé en accélération positive. Les « tokens générés »
+indiquent uniquement la longueur de la réponse.
+
+**Suggestions pour la machine.** Le panneau « Pour votre machine » détecte le
+processeur, les cœurs logiques et la mémoire physique du serveur local sur macOS,
+Linux et Windows, sans envoyer ces informations sur Internet. Une sélection
+hors ligne de modèles ouverts Apache 2.0, vérifiée le 2 octobre 2026, est filtrée
+par un budget prudent de mémoire : 40 % de la RAM, avec au moins 3 Gio, restent
+réservés au système. Les estimations concernent un contexte court, les poids et
+le cache ; elles ne prédisent aucun tok/s. Le processeur oriente le choix vers le
+petit modèle avec moins de quatre cœurs logiques. Le GPU et la RAM disponible
+instantanée ne déterminent pas le classement. Une mémoire inconnue reste
+explicitement inconnue ; les gros modèles au-delà du budget sont exclus.
+
+Les fiches officielles de [SmolLM2 360M](https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct),
+[SmolLM2 1.7B](https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct) et
+[Qwen3 8B GGUF](https://huggingface.co/Qwen/Qwen3-8B-GGUF) sont accessibles depuis
+les cartes. Choisir Q8_0 pour les SmolLM2 avec local-llm ; les Q4_K_M ne sont pas
+pris en charge par ce moteur. Qwen est proposé pour LM Studio. Aucun modèle
+n’est téléchargé automatiquement. `GET /v1/recommendations` expose le matériel,
+le budget et les suggestions avec leurs limites.
+
 **LM Studio.** Le serveur détecte sa bibliothèque locale même lorsque l’application
 est arrêtée. Pour voir les modèles via son API et mesurer un écart face à son
 runtime, active son serveur local (port 1234 par défaut), puis clique sur
@@ -235,6 +268,16 @@ quantification dans les deux moteurs. Un port différent se configure au lanceme
 ```bash
 local-llm serve --lm-studio http://127.0.0.1:1235
 ```
+
+Lorsque son serveur local est actif, les modèles de son API apparaissent dans
+le groupe « Exécuter avec LM Studio » et peuvent être utilisés dans le chat,
+y compris sans modèle natif chargé. Active le serveur dans l’onglet Developer
+de LM Studio, puis actualise la bibliothèque. Le chat est relayé en streaming
+via `/v1/chat/completions` avec `backend: "lmstudio"`, `model` et `stream: true`.
+Le débit de ce parcours est le débit global observé, préparation et transport
+inclus, calculé seulement si LM Studio fournit son usage en tokens. Il n’est pas
+assimilé au débit de décodage natif et aucun gain local-llm n’y est attribué.
+Les comparaisons de référence conservent les timings moteur de l’API v0.
 
 Si LM Studio exige une authentification, définis `LM_STUDIO_API_TOKEN` dans
 l’environnement du serveur. Le jeton n’est pas envoyé au navigateur. Le client
