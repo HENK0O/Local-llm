@@ -119,6 +119,7 @@ class ChatRequestTests(unittest.TestCase):
         self.assertEqual(args.port, 9000)
         self.assertEqual(str(args.reference), "model.pt")
         self.assertEqual(args.max_request_tokens, 512)
+        self.assertEqual(args.max_lmstudio_tokens, 8192)
         self.assertEqual(args.max_connections, 8)
 
     def test_cli_can_discover_models_without_a_positional_path(self):
@@ -358,15 +359,41 @@ class HTTPServerTests(unittest.TestCase):
             create_server("missing.gguf", host="0.0.0.0")
 
 class LMStudioProxyTests(unittest.TestCase):
+    def test_lmstudio_budget_is_configurable_and_separate_from_native_budget(self):
+        from unittest.mock import patch
+        from local_llm.server import ChatService
+        with patch('local_llm.server.default_model_roots', return_value=[]):
+            service = ChatService(max_lmstudio_tokens=64)
+        self.addCleanup(service.telemetry.close)
+        service.lmstudio.models = lambda: {'available': True, 'models': [{'id': 'ling'}]}
+        payload = {'backend': 'lmstudio', 'model': 'ling', 'stream': True,
+                   'messages': [{'role': 'user', 'content': 'hi'}], 'max_tokens': 64}
+        self.assertEqual(service.parse(payload).max_tokens, 64)
+        self.assertEqual(service.info()['max_lmstudio_tokens'], 64)
+        with self.assertRaisesRegex(ValueError, 'between 1 and 64'):
+            service.parse(dict(payload, max_tokens=65))
+        with self.assertRaisesRegex(ValueError, 'between 1 and 512'):
+            service.parse(dict(payload, backend='local', max_tokens=513))
+
     def test_streaming_chat_works_without_a_native_model_and_is_not_attributed(self):
         from unittest.mock import patch
         from local_llm.server import ChatService
         with patch('local_llm.server.default_model_roots', return_value=[]):
             service = ChatService()
         service.lmstudio.models = lambda: {'available': True, 'models': [{'id': 'ling'}]}
+        longer = service.parse({'backend': 'lmstudio', 'model': 'ling',
+                                'messages': [{'role': 'user', 'content': 'hi'}],
+                                'max_tokens': 2048, 'stream': True})
+        self.assertEqual(longer.max_tokens, 2048)
+        with self.assertRaises(ValueError):
+            service.parse({'backend': 'lmstudio', 'model': 'ling',
+                           'messages': [{'role': 'user', 'content': 'hi'}],
+                           'max_tokens': 8193, 'stream': True})
         def stream(payload):
             self.assertEqual(payload['model'], 'ling')
             self.assertEqual(payload['messages'][0]['content'], 'Bonjour')
+            self.assertEqual(payload['max_tokens'], 2048)
+            yield {'choices': [{'delta': {'reasoning_content': 'Réflexion'}, 'finish_reason': None}]}
             yield {'choices': [{'delta': {'content': 'Salut'}, 'finish_reason': None}]}
             yield {'choices': [], 'usage': {'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5}}
             yield {'choices': [{'delta': {}, 'finish_reason': 'stop'}]}
@@ -379,11 +406,12 @@ class LMStudioProxyTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
         try:
             connection = http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=3)
-            payload = {'backend': 'lmstudio', 'model': 'ling', 'messages': [{'role': 'user', 'content': 'Bonjour'}], 'stream': True}
+            payload = {'backend': 'lmstudio', 'model': 'ling', 'messages': [{'role': 'user', 'content': 'Bonjour'}], 'stream': True, 'max_tokens': 2048}
             connection.request('POST', '/v1/chat/completions', json.dumps(payload), {'Content-Type': 'application/json'})
             response = connection.getresponse(); body = response.read().decode(); connection.close()
             self.assertEqual(response.status, 200)
             self.assertIn('Salut', body)
+            self.assertIn('Réflexion', body)
             chunks = [json.loads(line[6:]) for line in body.splitlines() if line.startswith('data: {')]
             self.assertFalse(chunks[-1]['local_llm']['optimized'])
             self.assertIsNone(chunks[-1]['local_llm']['reused_prompt_tokens'])

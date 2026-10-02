@@ -31,6 +31,7 @@ from .version import __version__
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_TOKENS = 512
+MAX_LMSTUDIO_TOKENS = 8192
 DEFAULT_MAX_CONNECTIONS = 8
 REQUEST_TIMEOUT_SECONDS = 30
 WEB_INDEX = Path(__file__).with_name("web") / "index.html"
@@ -153,7 +154,8 @@ class ChatService:
                  reference: Optional[Path] = None,
                  reference_repo: Optional[Path] = None,
                  max_request_tokens: int = MAX_REQUEST_TOKENS,
-                 model_dirs=None, lm_studio_url: str = "http://127.0.0.1:1234") -> None:
+                 model_dirs=None, lm_studio_url: str = "http://127.0.0.1:1234",
+                 max_lmstudio_tokens: int = MAX_LMSTUDIO_TOKENS) -> None:
         self.telemetry = SystemTelemetry()
         self._generation_lock = threading.RLock()
         self._records = OrderedDict()
@@ -172,6 +174,9 @@ class ChatService:
         self.lmstudio = LMStudioClient(lm_studio_url)
         self.default_max_tokens = default_max_tokens
         self.max_request_tokens = max_request_tokens
+        if max_lmstudio_tokens < 1:
+            raise ValueError("LM Studio token limit must be positive")
+        self.max_lmstudio_tokens = max_lmstudio_tokens
         if not 1 <= self.default_max_tokens <= self.max_request_tokens:
             raise ValueError("default max tokens must not exceed the request token limit")
         self.reference = Path(reference) if reference is not None else None
@@ -242,6 +247,7 @@ class ChatService:
                 "external_reference": self.reference is not None,
                 "reference_chat_available": self.reference_runtime is not None,
                 "max_request_tokens": self.max_request_tokens,
+                "max_lmstudio_tokens": self.max_lmstudio_tokens,
                 "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection"],
                 "retained_cache_bytes": self.prefix_cache.nbytes,
                 "retained_cache_limit_bytes": self.prefix_cache.max_bytes}
@@ -300,7 +306,9 @@ class ChatService:
         return self.reference.name if self.reference is not None else "Recalcul complet"
 
     def parse(self, payload: object) -> ChatRequest:
-        request = parse_chat_request(payload, self.default_max_tokens, self.max_request_tokens)
+        lm = isinstance(payload, dict) and payload.get("backend") == "lmstudio"
+        limit = self.max_lmstudio_tokens if lm else self.max_request_tokens
+        request = parse_chat_request(payload, min(self.default_max_tokens, limit), limit)
         if request.backend == "lmstudio":
             model_id = payload.get("model")
             listing = self.lmstudio.models()
@@ -755,7 +763,8 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                     choice = choices[0]
                     if choice.get("finish_reason"):
                         finish = choice["finish_reason"]
-                    if choice.get("delta", {}).get("content"):
+                    delta = choice.get("delta") or {}
+                    if delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning"):
                         if first is None:
                             first = time.perf_counter()
                 chunk.update(id=response_id, model=request.model_id, backend="lmstudio")
@@ -861,13 +870,14 @@ def create_server(model_path: Optional[Path] = None, host: str = "127.0.0.1", po
                   max_request_tokens: int = MAX_REQUEST_TOKENS,
                   max_connections: int = DEFAULT_MAX_CONNECTIONS,
                   allow_remote: bool = False, model_dirs=None,
-                  lm_studio_url: str = "http://127.0.0.1:1234") -> LocalLLMHTTPServer:
+                  lm_studio_url: str = "http://127.0.0.1:1234",
+                  max_lmstudio_tokens: int = MAX_LMSTUDIO_TOKENS) -> LocalLLMHTTPServer:
     if not 0 <= port <= 65535:
         raise ValueError("port must be between 0 and 65535")
     if host not in {"127.0.0.1", "localhost", "::1"} and not allow_remote:
         raise ValueError("remote binding requires --allow-remote")
     service = ChatService(model_path, default_max_tokens, reference, reference_repo,
-                          max_request_tokens, model_dirs, lm_studio_url)
+                          max_request_tokens, model_dirs, lm_studio_url, max_lmstudio_tokens)
     return LocalLLMHTTPServer((host, port), service, max_connections)
 
 
@@ -877,10 +887,11 @@ def serve(model_path: Optional[Path] = None, host: str = "127.0.0.1", port: int 
           max_request_tokens: int = MAX_REQUEST_TOKENS,
           max_connections: int = DEFAULT_MAX_CONNECTIONS,
           allow_remote: bool = False, model_dirs=None,
-          lm_studio_url: str = "http://127.0.0.1:1234") -> None:
+          lm_studio_url: str = "http://127.0.0.1:1234",
+          max_lmstudio_tokens: int = MAX_LMSTUDIO_TOKENS) -> None:
     server = create_server(model_path, host, port, default_max_tokens,
                            reference, reference_repo, max_request_tokens,
-                           max_connections, allow_remote, model_dirs, lm_studio_url)
+                           max_connections, allow_remote, model_dirs, lm_studio_url, max_lmstudio_tokens)
     address, actual_port = server.server_address[:2]
     print(f"local-llm server listening on http://{address}:{actual_port}")
     print(f"model: {server.service.model_name} | POST /v1/chat/completions")

@@ -191,6 +191,11 @@ les tokens en direct et permet de régler la température et la longueur maximal
 Le bouton carré interrompt une génération. « Nouvelle conversation » crée un
 autre fil ; le précédent reste accessible dans la liste de gauche.
 
+Le sélecteur de modèles permet de rechercher parmi les modèles exécutables par
+local-llm ou disponibles via LM Studio. Les fichiers incompatibles restent dans
+la bibliothèque, sans entrées grisées en double dans le sélecteur. Un voyant
+vert et « En cours » signalent la génération.
+
 Le modèle se choisit dans la barre supérieure. La barre de gauche reste fixe,
 avec une liste paginée de conversations, les onglets et les relevés de la machine.
 Chaque conversation conserve son modèle, ses messages et son brouillon dans le
@@ -259,12 +264,23 @@ Le débit de prefill rapporte uniquement les tokens réellement recalculés au
 temps de préparation ; les tokens réutilisés ne gonflent pas cette mesure.
 
 Les réglages se trouvent dans « Réglages de la discussion ». **Longueur de
-réponse** propose Courte (128 tokens), Standard (256) et Détaillée (512), plus
+réponse** propose Courte (128 tokens), Standard (256) et Détaillée (512) pour le
+moteur natif ; via LM Studio, les plafonds sont 512, 2048 et 4096 tokens, plus
 un plafond personnalisé borné par la configuration du serveur. Il s’agit d’un
 maximum ; EOS peut arrêter la réponse plus tôt. Même en local, la génération
 consomme du calcul et doit tenir dans le contexte. Une explication est intégrée
 à la fenêtre ; si le plafond est atteint, le chat propose de demander la suite
 ou de choisir une réponse plus détaillée.
+
+Les modèles LM Studio peuvent émettre leur réflexion dans `reasoning_content`
+ou `reasoning`, avant le canal de réponse `content`. L’app affiche cette
+réflexion dans un détail replié, la conserve dans l’historique et ne la renvoie
+pas comme texte de réponse dans le contexte suivant. Les tokens de sortie et
+le débit incluent la réflexion comptée par LM Studio. Si le budget est consommé
+avant toute réponse, une explication remplace le message vide. Le plafond LM
+Studio est indépendant du moteur natif : `--max-lmstudio-tokens` vaut 8192 par
+défaut ; `--max-request-tokens` conserve la borne native de 512. Tant qu’un ancien
+serveur tourne, l’interface respecte sa borne et signale qu’il faut le relancer.
 
 **Détection des modèles.** Le chemin du modèle est désormais facultatif :
 

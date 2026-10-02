@@ -158,7 +158,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--max-tokens", type=int, default=128,
                        help="default maximum generated tokens per request")
     serve.add_argument("--max-request-tokens", type=int, default=512,
-                       help="hard generation limit accepted by the HTTP API")
+                       help="hard generation limit for the native HTTP backend")
+    serve.add_argument("--max-lmstudio-tokens", type=int, default=8192,
+                       help="hard generation limit for LM Studio, including reasoning")
     serve.add_argument("--max-connections", type=int, default=8,
                        help="maximum simultaneous HTTP connections")
     serve.add_argument("--allow-remote", action="store_true",
@@ -365,12 +367,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             parser.error("--max-request-tokens must be positive")
         if args.max_tokens > args.max_request_tokens:
             parser.error("--max-tokens must not exceed --max-request-tokens")
+        if args.max_lmstudio_tokens < 1:
+            parser.error("--max-lmstudio-tokens must be positive")
         if not 1 <= args.max_connections <= 128:
             parser.error("--max-connections must be between 1 and 128")
         try:
             serve_http(args.model, args.host, args.port, args.max_tokens,
                        args.reference, args.reference_repo, args.max_request_tokens,
-                       args.max_connections, args.allow_remote, args.model_dir, args.lm_studio)
+                       args.max_connections, args.allow_remote, args.model_dir, args.lm_studio,
+                       args.max_lmstudio_tokens)
         except (FileNotFoundError, KeyError, OSError, TypeError, ValueError) as exc:
             parser.error(str(exc))
         return 0

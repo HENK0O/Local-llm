@@ -905,10 +905,117 @@
         max-width: 460px;
         align-items: center;
       }
-      .model-toolbar select {
-        padding: 8px 10px;
+      .model-choice {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex: 1;
+        padding: 8px 12px;
         min-width: 0;
+        text-align: left;
+        border-radius: 10px;
+      }
+      .model-choice:disabled {
+        opacity: 1;
+      }
+      .model-choice-copy {
+        flex: 1;
+        min-width: 0;
+      }
+      .model-choice-name {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
         font-size: 12px;
+        font-weight: 550;
+      }
+      .model-choice-meta {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--muted);
+        font-size: 10px;
+        margin-top: 4px;
+      }
+      .model-choice.generating .model-choice-meta {
+        color: var(--accent);
+      }
+      .model-choice.generating .dot {
+        box-shadow: 0 0 7px var(--accent);
+      }
+      #modelPicker {
+        inset: auto;
+        margin: 0;
+        width: min(420px, calc(100vw - 24px));
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        color: var(--ink);
+        background: var(--paper);
+        box-shadow: 0 16px 48px #0005;
+      }
+      #modelPicker h2 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 550;
+      }
+      #pickerSearch {
+        width: 100%;
+        margin: 14px 0 4px;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--bg);
+      }
+      #pickerList {
+        overflow-y: auto;
+        max-height: min(360px, 45dvh);
+      }
+      .picker-option {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px;
+        border: 0;
+        background: transparent;
+        text-align: left;
+      }
+      .picker-option.current {
+        background: var(--soft);
+      }
+      .picker-option strong,
+      .picker-option small {
+        display: block;
+        overflow-wrap: anywhere;
+      }
+      .picker-option strong {
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .picker-option small {
+        margin-top: 4px;
+        font-size: 10px;
+        color: var(--muted);
+      }
+      .reasoning {
+        margin: 14px 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .reasoning summary {
+        cursor: pointer;
+      }
+      .reasoning pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        max-height: 240px;
+        overflow-y: auto;
+        font: 12px/1.6 var(--mono);
+        padding: 12px;
+        border-left: 2px solid var(--line);
       }
       .server-update,
       .storage-notice {
@@ -1072,9 +1179,11 @@
         .model-toolbar {
           gap: 2px;
         }
-        .model-toolbar select {
-          font-size: 11px;
+        .model-choice {
           padding: 8px 6px;
+        }
+        .model-choice-name {
+          font-size: 11px;
         }
         .model-toolbar .icon-button {
           width: 28px;
@@ -1269,9 +1378,31 @@
           </button>
           <div class="model-top">
             <div class="model-toolbar">
-              <label for="modelSelect" class="hidden">Modèle à charger</label
-              ><select id="modelSelect" disabled>
-                <option>Recherche des modèles…</option></select
+              <button
+                id="modelSelect"
+                class="model-choice"
+                disabled
+                aria-label="Choisir un modèle"
+                aria-haspopup="dialog"
+                aria-expanded="false"
+                aria-controls="modelPicker"
+              >
+                <span class="model-choice-copy">
+                  <span id="modelSelectName" class="model-choice-name"
+                    >Recherche des modèles…</span
+                  >
+                  <span class="model-choice-meta"
+                    ><span
+                      id="modelStatusDot"
+                      class="dot off"
+                      aria-hidden="true"
+                    ></span
+                    ><span id="modelStatus" role="status"
+                      >Connexion…</span
+                    ></span
+                  >
+                </span>
+                <span aria-hidden="true">⌄</span></button
               ><button
                 class="icon-button"
                 id="libraryButton"
@@ -1487,6 +1618,30 @@
       class="sidebar-backdrop hidden"
       aria-label="Fermer les conversations"
     ></button>
+    <div
+      id="modelPicker"
+      popover="auto"
+      role="dialog"
+      aria-labelledby="modelPickerTitle"
+    >
+      <div class="dialog-head">
+        <h2 id="modelPickerTitle">Choisir un modèle</h2>
+        <button
+          id="closePicker"
+          class="icon-button"
+          aria-label="Fermer le choix de modèle"
+        >
+          ×
+        </button>
+      </div>
+      <input
+        id="pickerSearch"
+        type="search"
+        placeholder="Rechercher un modèle…"
+        aria-label="Rechercher parmi les modèles disponibles"
+      />
+      <div id="pickerList"></div>
+    </div>
     <dialog id="contextDialog" aria-labelledby="contextTitle">
       <div class="dialog-head">
         <h2 id="contextTitle">Contexte de l’IA</h2>
@@ -1607,7 +1762,7 @@
         <option value="512">Détaillée</option>
         <option value="custom">Personnalisée</option>
       </select>
-      <p class="hint">
+      <p class="hint" id="responseLengthHint">
         C’est une borne maximale, pas une longueur imposée. Le modèle s’arrête
         avant s’il a fini sa réponse.
       </p>
@@ -1864,11 +2019,56 @@
         };
       }
 
+      function modelChoices(local, lm) {
+        return [
+          ...local
+            .filter((m) => m.compatible)
+            .map((m) => ({
+              key: m.id,
+              name: m.name,
+              source: "local-llm",
+              quantization: m.quantization,
+            })),
+          ...lm.map((m) => ({
+            key: "lmstudio:" + m.id,
+            name: m.name,
+            source: "LM Studio",
+            quantization: m.quantization,
+          })),
+        ];
+      }
+
+      function streamDelta(chunk) {
+        const delta = chunk.choices?.[0]?.delta || {};
+        return {
+          content: typeof delta.content === "string" ? delta.content : "",
+          reasoning:
+            typeof delta.reasoning_content === "string" &&
+            delta.reasoning_content
+              ? delta.reasoning_content
+              : typeof delta.reasoning === "string"
+                ? delta.reasoning
+                : "",
+        };
+      }
+
+      function completionNote(answer, reasoning, finish, limit) {
+        if (answer.trim()) return "";
+        if (reasoning && finish === "length")
+          return `Le modèle a utilisé ses ${limit} tokens pendant sa réflexion, avant de produire une réponse. Choisissez une réponse plus longue dans les réglages.`;
+        return reasoning
+          ? "Le modèle a terminé sa réflexion sans produire de réponse. Vous pouvez consulter sa réflexion ci-dessus ou reformuler la question."
+          : "Le modèle n’a renvoyé aucun texte de réponse. Réessayez ou vérifiez ses réglages dans LM Studio.";
+      }
+
       if (typeof module !== "undefined")
         module.exports = {
           ConversationStore,
           contextMessages,
           captureContextRequest,
+          modelChoices,
+          streamDelta,
+          completionNote,
         };
     </script>
     <script>
@@ -1985,6 +2185,7 @@
         document
           .querySelectorAll("#modelList button")
           .forEach((b) => (b.disabled = value));
+        updateModelSelection();
         if (changed) refreshContext();
       }
       function showInfo(data) {
@@ -2004,44 +2205,14 @@
         $("composerInfo").textContent = data.loaded
           ? "local-llm · sur cette machine"
           : "Chargez un modèle pour commencer";
-        const limit = data.max_request_tokens || 512;
-        $("maxTokens").max = limit;
-        $("maxTokens").value = Math.min(Number($("maxTokens").value), limit);
-        $("tokenLimitHint").textContent =
-          "Plafond actuel du serveur : " +
-          limit +
-          " tokens. Le contexte du modèle peut imposer une borne plus courte.";
         syncLength();
         setBusy(busy);
       }
       function renderCatalog(data) {
         catalogData = data;
         catalog = data.models;
-        $("modelSelect").replaceChildren();
-        const placeholder = node("option", "", "Choisir un modèle…");
-        placeholder.value = "";
-        placeholder.disabled = true;
-        $("modelSelect").append(placeholder);
-        for (const m of catalog) {
-          const o = node("option", "", m.name);
-          o.value = m.id;
-          o.disabled = !m.compatible;
-          if (!m.compatible) o.textContent += " · moteur externe";
-          $("modelSelect").append(o);
-        }
-        if (lmCatalog.length) {
-          const group = node("optgroup");
-          group.label = "Exécuter avec LM Studio";
-          for (const m of lmCatalog) {
-            const o = node("option", "", m.name);
-            o.value = "lmstudio:" + m.id;
-            group.append(o);
-          }
-          $("modelSelect").append(group);
-        }
-        $("modelSelect").value = activeLM
-          ? "lmstudio:" + activeLM.id
-          : data.current_id || "";
+        renderModelPicker();
+        updateModelSelection();
         $("modelHint").textContent =
           catalog.filter((m) => m.compatible).length +
           " compatibles · " +
@@ -2167,11 +2338,73 @@
           return true;
         } catch (error) {
           $("notice").textContent = error.message;
-          $("modelSelect").value = currentModelKey() || "";
+          updateModelSelection();
           return false;
         } finally {
+          syncLength();
           setBusy(false);
         }
+      }
+      function updateModelSelection() {
+        const name =
+          activeLM?.name || (info.loaded ? info.model : "Choisir un modèle…");
+        $("modelSelectName").textContent = name;
+        $("modelSelect").setAttribute(
+          "aria-label",
+          "Choisir un modèle · " + name,
+        );
+        $("modelSelect").classList.toggle("generating", busy && !!controller);
+        $("modelStatusDot").classList.toggle("off", !ready());
+        $("modelStatus").textContent = busy
+          ? controller
+            ? "En cours"
+            : "Chargement…"
+          : ready()
+            ? (activeLM ? "LM Studio" : "local-llm") + " · Prêt"
+            : "Aucun modèle prêt";
+      }
+      function renderModelPicker() {
+        const query = $("pickerSearch").value.trim().toLowerCase();
+        $("pickerList").replaceChildren();
+        for (const m of modelChoices(catalog, lmCatalog).filter((m) =>
+          (m.name + " " + m.source).toLowerCase().includes(query),
+        )) {
+          const selected = m.key === currentModelKey();
+          const button = node(
+            "button",
+            "picker-option" + (selected ? " current" : ""),
+          );
+          button.disabled = busy;
+          button.setAttribute(
+            "aria-label",
+            "Utiliser " + m.name + " via " + m.source,
+          );
+          button.setAttribute("aria-pressed", String(selected));
+          const copy = node("span");
+          copy.append(
+            node("strong", "", m.name),
+            node(
+              "small",
+              "",
+              [m.source, m.quantization].filter(Boolean).join(" · "),
+            ),
+          );
+          button.append(copy);
+          if (selected) button.append(node("span", "", "✓"));
+          button.onclick = () => {
+            $("modelPicker").hidePopover();
+            loadModel(m.key);
+          };
+          $("pickerList").append(button);
+        }
+        if (!$("pickerList").children.length)
+          $("pickerList").append(
+            node(
+              "p",
+              "hint",
+              "Aucun modèle disponible. Consultez la bibliothèque ou connectez LM Studio.",
+            ),
+          );
       }
       async function lmRefresh() {
         if (busy) return;
@@ -2266,14 +2499,35 @@
         $("performanceTab").setAttribute("aria-selected", String(!chat));
       }
       function syncLength() {
+        const lmLimit =
+          info.max_lmstudio_tokens || info.max_request_tokens || 512;
+        const limit = activeLM ? lmLimit : info.max_request_tokens || 512;
+        $("maxTokens").max = limit;
+        const presets =
+          activeLM && info.max_lmstudio_tokens
+            ? [512, 2048, 4096]
+            : [128, 256, 512];
+        [...$("responseLength").options]
+          .slice(0, 3)
+          .forEach((option, index) => {
+            const selected = option.selected;
+            option.value = String(presets[index]);
+            option.selected = selected;
+          });
         const custom = $("responseLength").value === "custom",
-          limit = Number($("maxTokens").max) || 512;
+          selected = Number($("responseLength").value);
         $("customLength").classList.toggle("hidden", !custom);
-        if (!custom)
-          $("maxTokens").value = Math.min(
-            limit,
-            Number($("responseLength").value),
-          );
+        if (!custom) $("maxTokens").value = Math.min(limit, selected);
+        else
+          $("maxTokens").value = Math.min(Number($("maxTokens").value), limit);
+        $("tokenLimitHint").textContent =
+          `Plafond du serveur : ${limit} tokens.` +
+          (activeLM
+            ? " La réflexion et la réponse partagent ce budget."
+            : " Le contexte du modèle peut imposer une borne plus courte.");
+        $("responseLengthHint").textContent = activeLM
+          ? "La réflexion et la réponse partagent ce budget. Le modèle peut s’arrêter avant ce plafond."
+          : "C’est une borne maximale, pas une longueur imposée. Le modèle s’arrête avant s’il a fini sa réponse.";
         for (const option of $("responseLength").options)
           if (option.value !== "custom")
             option.disabled = Number(option.value) > limit;
@@ -2304,6 +2558,21 @@
         scrollEnd();
         return { wrap, content };
       }
+      function renderReasoning(view, text, running = false, tokens = null) {
+        if (!text) return;
+        let details = view.wrap.querySelector(".reasoning");
+        if (!details) {
+          details = node("details", "reasoning");
+          details.append(node("summary"), node("pre"));
+          view.wrap.insertBefore(details, view.content);
+        }
+        details.querySelector("summary").textContent = running
+          ? "Réflexion en cours…"
+          : Number.isInteger(tokens)
+            ? `Réflexion · ${tokens} tokens`
+            : "Réflexion du modèle";
+        details.querySelector("pre").textContent = text;
+      }
       function scrollEnd() {
         const s = $("scroll");
         s.scrollTop = s.scrollHeight;
@@ -2324,6 +2593,9 @@
             document.createTextNode(" " + label),
           );
           footer.append(stat);
+          if (label === "output tok" && response.stats?.backend === "lmstudio")
+            stat.title =
+              "Tokens générés par LM Studio, réflexion incluse lorsqu’elle est activée.";
         }
         const speed = node(
           "span",
@@ -2364,6 +2636,7 @@
         gain.append(tip);
         footer.append(gain);
         const copy = node("button", "copy-button", "Copier");
+        copy.classList.toggle("hidden", !response.text);
         copy.type = "button";
         copy.onclick = async () => {
           try {
@@ -2709,7 +2982,9 @@
         $("notice").textContent = "Génération en cours…";
         controller = new AbortController();
         setBusy(true);
+        const requestLimit = Number($("maxTokens").value);
         let answer = "",
+          reasoning = "",
           final = null,
           done = false;
         try {
@@ -2721,7 +2996,7 @@
               model: activeLM ? activeLM.id : info.current_id,
               backend: activeLM ? "lmstudio" : "local",
               messages: history,
-              max_tokens: Number($("maxTokens").value),
+              max_tokens: requestLimit,
               temperature: Number($("temperature").value),
               stream: true,
             }),
@@ -2754,9 +3029,12 @@
               }
               const data = JSON.parse(raw);
               if (data.error) throw new Error(data.error.message);
-              const delta = data.choices?.[0]?.delta?.content || "";
-              answer += delta;
-              view.content.textContent = answer;
+              const delta = streamDelta(data);
+              answer += delta.content;
+              reasoning += delta.reasoning;
+              view.content.textContent =
+                answer || (reasoning ? "Le modèle réfléchit…" : "");
+              renderReasoning(view, reasoning, !answer);
               if (data.local_llm) final = data;
               scrollEnd();
             }
@@ -2765,6 +3043,19 @@
           if (!done || !final)
             throw new Error("Flux interrompu avant les statistiques finales");
           view.content.classList.remove("pending");
+          const note = completionNote(
+            answer,
+            reasoning,
+            final.choices?.[0]?.finish_reason,
+            requestLimit,
+          );
+          view.content.textContent = answer || note;
+          renderReasoning(
+            view,
+            reasoning,
+            false,
+            final.usage?.completion_tokens_details?.reasoning_tokens,
+          );
           const wall = (performance.now() - started) / 1000;
           const measurement = {
             id: final.id,
@@ -2781,6 +3072,9 @@
           chat.messages.push({
             role: "assistant",
             content: answer,
+            reasoning,
+            inContext: !!answer,
+            note,
             modelLabel: activeLM ? "LM Studio" : "local-llm",
             metrics: measurement,
           });
@@ -2791,7 +3085,7 @@
           renderChatList();
           updateStorageNotice();
           $("notice").textContent = "";
-          if (final.choices?.[0]?.finish_reason === "length")
+          if (!note && final.choices?.[0]?.finish_reason === "length")
             $("notice").textContent =
               "Le plafond de réponse a été atteint. Vous pouvez demander la suite ou choisir Détaillée dans les réglages.";
         } catch (e) {
@@ -2801,12 +3095,15 @@
           } else {
             chat.lastRequest.status =
               e.name === "AbortError" ? "aborted" : "failed";
-            userMessage.inContext = !!answer;
+            userMessage.inContext = !!(answer || reasoning);
+            renderReasoning(view, reasoning);
             const note =
               e.name === "AbortError" ? "Génération interrompue." : e.message;
+            view.content.textContent = answer || note;
             chat.messages.push({
               role: "assistant",
               content: answer,
+              reasoning,
               inContext: !!answer,
               note,
             });
@@ -3018,15 +3315,29 @@
           bindSuggestions();
         }
         for (const entry of chat.messages) {
-          const view = message(entry.role, entry.content);
+          const fallback =
+            entry.role === "assistant" && !entry.content
+              ? entry.note ||
+                (entry.metrics
+                  ? "Le modèle n’a renvoyé aucun texte de réponse. Essayez avec une réponse plus longue."
+                  : "")
+              : "";
+          const view = message(entry.role, entry.content || fallback);
           view.content.classList.remove("pending");
+          renderReasoning(
+            view,
+            entry.reasoning,
+            false,
+            entry.metrics?.usage?.completion_tokens_details?.reasoning_tokens,
+          );
           if (entry.modelLabel && entry.role === "assistant")
             view.wrap.querySelector(
               ".message-label span:last-child",
             ).textContent = entry.modelLabel;
           if (entry.metrics?.stats && entry.metrics?.usage)
             appendReplyFooter(view.wrap, entry.metrics);
-          if (entry.note) view.wrap.append(node("p", "error", entry.note));
+          if (entry.note && entry.content)
+            view.wrap.append(node("p", "hint", entry.note));
         }
         completions = chat.messages
           .filter((m) => m.metrics?.stats && m.metrics?.usage)
@@ -3245,7 +3556,38 @@
         ($("temperatureValue").value = Number($("temperature").value).toFixed(
           1,
         ));
-      $("modelSelect").onchange = () => loadModel($("modelSelect").value);
+      $("modelSelect").onclick = () => {
+        if ($("modelPicker").matches(":popover-open")) {
+          $("modelPicker").hidePopover();
+          return;
+        }
+        $("pickerSearch").value = "";
+        renderModelPicker();
+        $("modelPicker").showPopover();
+        positionModelPicker();
+        $("pickerSearch").focus();
+      };
+      function positionModelPicker() {
+        if (!$("modelPicker").matches(":popover-open")) return;
+        const anchor = $("modelSelect").getBoundingClientRect();
+        const panel = $("modelPicker").getBoundingClientRect();
+        $("modelPicker").style.left =
+          Math.max(12, Math.min(anchor.left, innerWidth - panel.width - 12)) +
+          "px";
+        $("modelPicker").style.top = anchor.bottom + 8 + "px";
+        $("pickerList").style.maxHeight =
+          Math.max(100, Math.min(360, innerHeight - anchor.bottom - 154)) +
+          "px";
+      }
+      window.addEventListener("resize", positionModelPicker);
+      $("modelPicker").addEventListener("toggle", () =>
+        $("modelSelect").setAttribute(
+          "aria-expanded",
+          String($("modelPicker").matches(":popover-open")),
+        ),
+      );
+      $("closePicker").onclick = () => $("modelPicker").hidePopover();
+      $("pickerSearch").oninput = renderModelPicker;
       $("contextButton").onclick = () => {
         $("contextDialog").showModal();
         refreshContext();

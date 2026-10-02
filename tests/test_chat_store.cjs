@@ -13,8 +13,14 @@ const source = html.match(
 )[1];
 const sandbox = { module: { exports: {} }, crypto: { randomUUID } };
 vm.runInNewContext(source, sandbox);
-const { ConversationStore, contextMessages, captureContextRequest } =
-  sandbox.module.exports;
+const {
+  ConversationStore,
+  contextMessages,
+  captureContextRequest,
+  modelChoices,
+  streamDelta,
+  completionNote,
+} = sandbox.module.exports;
 function storage() {
   const data = new Map();
   return {
@@ -149,4 +155,76 @@ test("last request stays exact after a failure, reply and reload", () => {
     contextMessages(restored, { messageIndices: [-1, "0", 999] }).length,
     0,
   );
+});
+
+test("picker contains usable models without grey external duplicates", () => {
+  const choices = modelChoices(
+    [
+      { id: "native", name: "Local", compatible: true },
+      { id: "ling-file", name: "Ling Q8", compatible: false },
+      { id: "qwen-file", name: "Qwen IQ3", compatible: false },
+    ],
+    [
+      { id: "ling", name: "Ling" },
+      { id: "qwen", name: "Qwen" },
+    ],
+  );
+  assert.equal(
+    JSON.stringify(choices.map((m) => m.key)),
+    JSON.stringify(["native", "lmstudio:ling", "lmstudio:qwen"]),
+  );
+});
+
+test("LM Studio reasoning channels stay separate from the answer", () => {
+  assert.equal(
+    streamDelta({
+      choices: [{ delta: { reasoning_content: "Thinking", content: null } }],
+    }).reasoning,
+    "Thinking",
+  );
+  const alternate = streamDelta({
+    choices: [{ delta: { reasoning: "Thinking too", content: "Answer" } }],
+  });
+  assert.equal(alternate.content, "Answer");
+  assert.equal(alternate.reasoning, "Thinking too");
+  assert.equal(
+    streamDelta({
+      choices: [
+        { delta: { reasoning: "Alias", reasoning_content: "Primary" } },
+      ],
+    }).reasoning,
+    "Primary",
+  );
+  assert.equal(streamDelta({ usage: {} }).content, "");
+  assert.equal(
+    streamDelta({ choices: [{ delta: { content: 123, reasoning: {} } }] })
+      .content,
+    "",
+  );
+});
+
+test("reasoning-only or empty completions explain the missing answer", () => {
+  assert.match(
+    completionNote("", "Thought", "length", 256),
+    /256 tokens pendant sa réflexion/,
+  );
+  assert.match(
+    completionNote("", "Thought", "stop", 256),
+    /sans produire de réponse/,
+  );
+  assert.match(completionNote("", "", "stop", 256), /aucun texte/);
+  assert.equal(completionNote("Answer", "Thought", "length", 256), "");
+  const chat = {
+    messages: [
+      { role: "user", content: "Question" },
+      {
+        role: "assistant",
+        content: "",
+        reasoning: "Thought",
+        inContext: false,
+      },
+    ],
+  };
+  assert.equal(contextMessages(chat).length, 1);
+  assert.equal(contextMessages(chat)[0].content, "Question");
 });
