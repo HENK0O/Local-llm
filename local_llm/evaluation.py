@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
 import sys
@@ -11,9 +10,8 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from .benchmark import model_fingerprint
 from .chat import ChatMessage, format_chat
-from .loading import load_runtime
+from .loading import load_runtime, model_fingerprint
 from .model import LlamaModel
 
 
@@ -54,14 +52,6 @@ class LogitTrace:
     prefill_seconds: float = 0.0
     decode_seconds: float = 0.0
     kv_cache_bytes: int = 0
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        while chunk := handle.read(4 * 1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def capture_trace(
@@ -275,7 +265,7 @@ def capture_external_reference(
     if conversion.is_file():
         with conversion.open("r", encoding="utf-8") as handle:
             source_sha256 = json.load(handle).get("source_sha256")
-        if source_sha256 and source_sha256 != _sha256(reference):
+        if source_sha256 and source_sha256 != model_fingerprint(reference)[0]:
             raise ValueError("reference checkpoint differs from the converted source")
     trace = capture_baguette_reference(reference, repo, prompt_token_ids, tokens)
     return trace, f"Baguette PyTorch: {reference.name}"

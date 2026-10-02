@@ -33,9 +33,6 @@ class KVCache:
     def nbytes(self) -> int:
         return sum(layer.keys.nbytes + layer.values.nbytes for layer in self.layers)
 
-    def reset(self) -> None:
-        self.length = 0
-
 
 class PrefixCache:
     """Retain one bounded prefix between serialized requests, without saving text.

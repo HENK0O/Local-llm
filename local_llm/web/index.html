@@ -42,21 +42,6 @@
         --soft: #23392e;
         --red: #f39a9a;
       }
-      .rec-preview {
-        background: var(--paper);
-        border: 1px solid var(--line);
-        padding: 12px;
-        border-radius: 9px;
-        margin-top: 12px;
-      }
-      .rec-preview strong {
-        display: block;
-        font-size: 13px;
-        margin-bottom: 6px;
-      }
-      .rec-preview p {
-        margin: 0;
-      }
       .rec-list {
         display: grid;
         gap: 12px;
@@ -101,12 +86,6 @@
         border-radius: 6px;
         font-size: 11px;
       }
-      @media (max-width: 650px) {
-        .header-right {
-          flex-wrap: wrap;
-          justify-content: flex-end;
-        }
-      }
       * {
         box-sizing: border-box;
       }
@@ -119,6 +98,7 @@
           BlinkMacSystemFont,
           "Segoe UI",
           sans-serif;
+        overflow: hidden;
       }
       button,
       input,
@@ -154,26 +134,29 @@
       }
       .app {
         display: grid;
-        grid-template-columns: 258px minmax(0, 1fr);
         grid-template-rows: minmax(0, 1fr);
         height: 100dvh;
-        min-height: 560px;
+        min-height: 0;
+        grid-template-columns: 246px minmax(0, 1fr);
       }
       aside {
         background: var(--panel);
         border-right: 1px solid var(--line);
-        padding: 30px 21px;
         display: flex;
         flex-direction: column;
         overflow-y: auto;
+        padding: 20px 16px 12px;
+        overflow: hidden;
+        min-height: 0;
+        gap: 16px;
       }
       .brand {
-        font-size: 22px;
         font-weight: 650;
         letter-spacing: -1.1px;
         display: flex;
         align-items: center;
         gap: 9px;
+        font-size: 20px;
       }
       .mark {
         width: 26px;
@@ -194,32 +177,6 @@
         letter-spacing: 1.6px;
         text-transform: uppercase;
         color: var(--muted);
-      }
-      .brand-note {
-        margin: 9px 0 34px;
-        font-size: 12px;
-        color: var(--muted);
-      }
-      .nav {
-        display: flex;
-        gap: 9px;
-        align-items: center;
-        color: var(--accent);
-        background: var(--soft);
-        padding: 11px 12px;
-        border-radius: 7px;
-        margin-bottom: 31px;
-        font-size: 13px;
-        font-weight: 550;
-      }
-      .nav svg {
-        width: 17px;
-        height: 17px;
-      }
-      .side-section {
-        border-bottom: 1px solid var(--line);
-        padding-bottom: 24px;
-        margin-bottom: 24px;
       }
       .side-heading {
         display: flex;
@@ -289,79 +246,55 @@
       .dot.off {
         background: #a6aaa3;
       }
-      .switch {
-        display: flex;
-        align-items: flex-start;
-        gap: 7px;
-        font-size: 12px;
-        line-height: 1.5;
-        margin-top: 14px;
-      }
-      .switch input {
-        margin: 3px 0 0;
-      }
       .side-bottom {
         margin-top: auto;
         padding-top: 16px;
         color: var(--muted);
         font: 10px var(--mono);
         line-height: 1.8;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: space-between;
+        font-size: 9px;
+        flex: none;
       }
       .side-bottom a {
         color: inherit;
         text-decoration: none;
       }
       .main {
-        min-height: 0;
         min-width: 0;
         display: flex;
         flex-direction: column;
-        height: 100%;
         position: relative;
+        height: 100%;
+        min-height: 0;
       }
       header {
-        height: 77px;
         flex: none;
         border-bottom: 1px solid var(--line);
-        padding: 0 35px;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 20px;
-      }
-      .title {
-        font-size: 13px;
-        font-weight: 550;
+        height: 76px;
+        padding: 12px 24px;
+        gap: 12px;
       }
       .header-model {
-        font-size: 11px;
         color: var(--muted);
-        margin-top: 5px;
-        max-width: 480px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-      }
-      header > div:first-child {
-        min-width: 0;
-        flex: 1;
+        max-width: 460px;
+        margin-top: 5px;
+        font-size: 10px;
       }
       .header-right {
         flex-shrink: 0;
         display: flex;
         align-items: center;
-        gap: 10px;
-      }
-      .badge {
-        font: 10px var(--mono);
-        border: 1px solid var(--line);
-        padding: 6px 8px;
-        border-radius: 5px;
-        color: var(--muted);
-      }
-      .new {
-        font-size: 12px;
-        background: none;
+        gap: 4px;
       }
       .scroll {
         overflow-y: auto;
@@ -458,56 +391,12 @@
           opacity: 0.3;
         }
       }
-      .metrics {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 13px;
-        margin-top: 17px;
-        color: var(--muted);
-        font: 10px var(--mono);
-        padding-top: 13px;
-        border-top: 1px solid var(--line);
-      }
-      .metric-speed {
-        color: var(--accent);
-        font-weight: 600;
-      }
       .compare {
         margin-top: 15px;
         padding: 17px 19px;
         border: 1px solid var(--line);
         border-radius: 9px;
         background: var(--paper);
-      }
-      .compare-title {
-        font-size: 11px;
-        color: var(--muted);
-        display: flex;
-        align-items: center;
-        gap: 7px;
-      }
-      .compare-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr 1fr;
-        gap: 12px;
-        margin-top: 14px;
-      }
-      .compare-grid .eyebrow {
-        letter-spacing: 0.6px;
-        font-size: 9px;
-        display: block;
-        margin-bottom: 6px;
-      }
-      .compare-grid strong {
-        font: 18px var(--mono);
-        font-weight: 500;
-      }
-      .gain {
-        color: var(--accent);
-      }
-      .loss {
-        color: var(--red);
       }
       .compare .hint {
         margin-top: 12px;
@@ -615,8 +504,6 @@
         padding: 25px;
         background: var(--bg);
         color: var(--ink);
-      }
-      dialog {
         max-height: 85dvh;
         overflow-y: auto;
       }
@@ -675,131 +562,18 @@
       .hidden {
         display: none !important;
       }
-      @media (max-width: 850px) {
-        .app {
-          grid-template-columns: 218px minmax(0, 1fr);
-        }
-        aside {
-          padding: 25px 16px;
-        }
-        header {
-          padding: 0 22px;
-        }
-        .header-right .badge {
-          display: none;
-        }
-        .empty {
-          padding-top: 10vh;
-        }
-        .compare-grid strong {
-          font-size: 15px;
-        }
-        .scroll,
-        .bottom {
-          padding-left: 22px;
-          padding-right: 22px;
-        }
-      }
-      @media (max-width: 620px) {
-        .app {
-          display: block;
-          height: auto;
-          min-height: 100dvh;
-        }
-        aside {
-          height: auto;
-          border-right: 0;
-          border-bottom: 1px solid var(--line);
-          padding: 15px 18px;
-          display: block;
-        }
-        .brand {
-          font-size: 18px;
-        }
-        .brand-note,
-        .nav,
-        .side-bottom,
-        aside .parameters,
-        .source-status {
-          display: none;
-        }
-        .side-section {
-          padding: 0;
-          margin: 12px 0 0;
-          border: 0;
-        }
-        .side-heading {
-          margin-bottom: 8px;
-        }
-        .library-section .hint {
-          display: none;
-        }
-        .compare-section {
-          display: none;
-        }
-        header {
-          height: 62px;
-          padding: 0 18px;
-        }
-        .machine-section .rec-preview,
-        .machine-section > .hint {
-          display: none;
-        }
-        .machine-section .side-heading {
-          margin-bottom: 0;
-        }
-        .badge {
-          display: none;
-        }
-        .header-right {
-          gap: 8px;
-        }
-        .main {
-          height: calc(100dvh - 195px);
-          min-height: 400px;
-        }
-        .empty {
-          padding-top: 6vh;
-        }
-        .scroll,
-        .bottom {
-          padding-left: 18px;
-          padding-right: 18px;
-        }
-        .conversation {
-          padding-top: 22px;
-        }
-        .message.user {
-          margin-left: 8%;
-        }
-        .footer span:last-child {
-          display: none;
-        }
-        .compare-grid {
-          gap: 8px;
-        }
-        .compare-grid strong {
-          font-size: 14px;
-        }
-        .new {
-          font-size: 0;
-        }
-        .new:after {
-          content: "Nouvelle";
-          font-size: 11px;
-        }
-      }
       .workspace-tabs {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 6px;
-        margin: 16px 0 20px;
+        margin: 0;
+        flex: none;
       }
       .workspace-tabs button {
         border: 0;
         background: transparent;
-        font-size: 13px;
-        padding: 10px 8px;
+        padding: 9px 4px;
+        font-size: 12px;
       }
       .workspace-tabs button[aria-selected="true"] {
         background: var(--soft);
@@ -861,14 +635,6 @@
         margin: 20px 0 8px;
         font-size: 13px;
       }
-      .settings-link {
-        text-align: left;
-        background: transparent;
-        border: 0;
-        font-size: 12px;
-        padding: 0 0 20px;
-        color: var(--muted);
-      }
       .connection-guide {
         margin-top: 12px;
         font-size: 12px;
@@ -894,28 +660,29 @@
         display: flex;
         justify-content: space-between;
         gap: 8px;
-        font-size: 11px;
-        margin: 16px 0 8px;
+        margin: 4px 0;
+        line-height: 18px;
+        font-size: 10px;
       }
       .machine-reading strong {
         font-weight: 550;
       }
       progress {
         width: 100%;
-        height: 4px;
         accent-color: var(--accent);
-      }
-      .recommendation-link {
-        margin-top: 20px;
+        display: block;
+        height: 3px;
+        margin: 4px 0 8px;
       }
       .reply-footer {
         display: flex;
-        gap: 15px;
-        justify-content: space-between;
         align-items: center;
         margin-top: 14px;
         color: var(--muted);
         font-size: 11px;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        gap: 8px 14px;
       }
       .reply-footer button {
         padding: 4px 8px;
@@ -925,11 +692,6 @@
       #comparisonResult .compare {
         margin-top: 22px;
         background: var(--bg);
-      }
-      .metric-speed {
-        font-size: 11px;
-        color: var(--muted);
-        font-weight: 400;
       }
       #settings input[type="number"] {
         background: var(--paper);
@@ -941,60 +703,12 @@
       #responsePerformance details p {
         line-height: 1.6;
       }
-      @media (max-width: 760px) {
-        .workspace-tabs {
-          margin: 10px 0;
-        }
-        .settings-link {
-          padding: 10px 0 0;
-        }
-        .lm-section,
-        .machine-section {
-          display: none;
-        }
-        .main {
-          height: calc(100dvh - 200px);
-        }
-        .performance-layout {
-          padding: 22px 18px;
-        }
-        .performance-card {
-          padding: 16px;
-        }
-        .performance-metrics {
-          gap: 10px;
-        }
-        .performance-metrics strong {
-          overflow-wrap: anywhere;
-          font-size: 16px;
-        }
-        .header-model {
-          max-width: 180px;
-        }
-      }
-
       /* Fixed sidebar: the chat list is paginated; this column never scrolls. */
-      body {
-        overflow: hidden;
-      }
-      .app {
-        min-height: 0;
-        grid-template-columns: 246px minmax(0, 1fr);
-      }
-      aside {
-        padding: 20px 16px 12px;
-        overflow: hidden;
-        min-height: 0;
-        gap: 16px;
-      }
       .brand-row {
         display: flex;
         justify-content: space-between;
         align-items: center;
         flex: none;
-      }
-      .brand {
-        font-size: 20px;
       }
       .new-chat {
         width: 100%;
@@ -1071,28 +785,10 @@
         flex: none;
         font-size: 16px;
       }
-      .workspace-tabs {
-        margin: 0;
-        flex: none;
-      }
-      .workspace-tabs button {
-        padding: 9px 4px;
-        font-size: 12px;
-      }
       .sidebar-status {
         border-top: 1px solid var(--line);
         padding-top: 12px;
         flex: none;
-      }
-      .machine-reading {
-        margin: 4px 0;
-        line-height: 18px;
-        font-size: 10px;
-      }
-      progress {
-        display: block;
-        height: 3px;
-        margin: 4px 0 8px;
       }
       .lm-status-line {
         display: flex;
@@ -1116,19 +812,6 @@
         font-size: 10px;
         margin: 4px 0 2px;
       }
-      .side-bottom {
-        margin: 0;
-        padding: 0;
-        display: flex;
-        justify-content: space-between;
-        font-size: 9px;
-        flex: none;
-      }
-      header {
-        height: 76px;
-        padding: 12px 24px;
-        gap: 12px;
-      }
       .model-top {
         min-width: 0;
         flex: 1;
@@ -1144,18 +827,6 @@
         min-width: 0;
         font-size: 12px;
       }
-      .header-model {
-        max-width: 460px;
-        margin-top: 5px;
-        font-size: 10px;
-      }
-      .header-right {
-        gap: 4px;
-      }
-      .main {
-        height: 100%;
-        min-height: 0;
-      }
       .server-update,
       .storage-notice {
         flex: none;
@@ -1168,11 +839,6 @@
       }
       .storage-notice {
         color: var(--muted);
-      }
-      .reply-footer {
-        justify-content: flex-start;
-        flex-wrap: wrap;
-        gap: 8px 14px;
       }
       .reply-footer .copy-button {
         margin-left: auto;
@@ -1245,11 +911,34 @@
         display: none;
       }
       @media (max-width: 850px) {
+        .empty {
+          padding-top: 10vh;
+        }
+        .scroll,
+        .bottom {
+          padding-left: 22px;
+          padding-right: 22px;
+        }
         .app {
           grid-template-columns: 218px minmax(0, 1fr);
         }
         aside {
           padding: 16px 12px 10px;
+        }
+      }
+      @media (max-width: 760px) {
+        .performance-layout {
+          padding: 22px 18px;
+        }
+        .performance-card {
+          padding: 16px;
+        }
+        .performance-metrics {
+          gap: 10px;
+        }
+        .performance-metrics strong {
+          overflow-wrap: anywhere;
+          font-size: 16px;
         }
       }
       @media (max-width: 680px) {
@@ -1291,9 +980,6 @@
           z-index: 25;
           width: 100%;
           height: 100%;
-        }
-        .side-bottom {
-          display: flex;
         }
         header {
           height: 78px;
@@ -1338,6 +1024,28 @@
           left: auto;
           right: -20px;
           transform: none;
+        }
+      }
+      @media (max-width: 650px) {
+        .header-right {
+          justify-content: flex-end;
+        }
+      }
+      @media (max-width: 620px) {
+        .source-status {
+          display: none;
+        }
+        .side-heading {
+          margin-bottom: 8px;
+        }
+        .conversation {
+          padding-top: 22px;
+        }
+        .message.user {
+          margin-left: 8%;
+        }
+        .footer span:last-child {
+          display: none;
         }
       }
       @media (max-height: 600px) {
@@ -1992,7 +1700,6 @@
       const $ = (id) => document.getElementById(id);
       let info = {},
         catalog = [],
-        history = [],
         busy = false,
         controller = null,
         epoch = 0;
@@ -2017,7 +1724,6 @@
       const conversations = new ConversationStore(browserStorage);
       const liveCompletions = new Set();
       let chatPage = 0,
-        chatPageSize = 6,
         editingChatId = null,
         draftTimer;
       const currentModelKey = () =>
@@ -2059,13 +1765,12 @@
         if (text !== undefined) e.textContent = text;
         return e;
       }
-      async function api(path, payload, signal) {
+      async function api(path, payload) {
         const r = await fetch(path, {
           method: payload === undefined ? "GET" : "POST",
           headers:
             payload === undefined ? {} : { "Content-Type": "application/json" },
           body: payload === undefined ? undefined : JSON.stringify(payload),
-          signal,
         });
         const data = await r.json();
         if (!r.ok || (data.error && typeof data.error === "object")) {
@@ -2805,7 +2510,7 @@
         }
         const turn = ++epoch;
         const started = performance.now();
-        history = contextMessages(chat);
+        const history = contextMessages(chat);
         history.push({ role: "user", content: text });
         const userMessage = { role: "user", content: text };
         chat.messages.push(userMessage);
@@ -2877,7 +2582,6 @@
           if (!done || !final)
             throw new Error("Flux interrompu avant les statistiques finales");
           view.content.classList.remove("pending");
-          history.push({ role: "assistant", content: answer });
           const wall = (performance.now() - started) / 1000;
           const measurement = {
             id: final.id,
@@ -2968,7 +2672,7 @@
       function renderChatList() {
         const chats = conversations.visible();
         const available = $("chatList").clientHeight;
-        chatPageSize = Math.max(
+        const chatPageSize = Math.max(
           1,
           Math.min(12, Math.floor(available / 45) || 1),
         );
@@ -3018,7 +2722,6 @@
       function renderChat() {
         const chat = conversations.active;
         if (!chat) return;
-        history = contextMessages(chat);
         $("conversation").replaceChildren();
         if (!chat.messages.length) {
           $("conversation").append(emptyBackup.cloneNode(true));
@@ -3354,7 +3057,6 @@
             "Suggestions indisponibles : " + e.message;
         }
       }
-      bindSuggestions();
       recommendations();
       syncLength();
       baselineChanged();

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import platform
@@ -13,7 +12,7 @@ import numpy as np
 
 from .generation import generate
 from .gguf import Q4Matrix, Q8Matrix, q4_backend_name, q8_backend_name
-from .loading import load_runtime
+from .loading import load_runtime, model_fingerprint
 
 
 @dataclass(frozen=True)
@@ -43,31 +42,6 @@ class BenchmarkReport:
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
-
-
-def _model_files(path: Path) -> List[Path]:
-    path = Path(path)
-    if path.is_file():
-        return [path]
-    if path.is_dir():
-        return sorted(item for item in path.rglob("*") if item.is_file())
-    raise FileNotFoundError(f"model path does not exist: {path}")
-
-
-def model_fingerprint(path: Path) -> tuple[str, int]:
-    """Hash filenames and contents so two benchmark reports use identical weights."""
-    root = Path(path)
-    digest = hashlib.sha256()
-    total = 0
-    for model_file in _model_files(root):
-        if root.is_dir():
-            digest.update(str(model_file.relative_to(root)).encode("utf-8"))
-            digest.update(b"\0")
-        with model_file.open("rb") as handle:
-            while chunk := handle.read(4 * 1024 * 1024):
-                total += len(chunk)
-                digest.update(chunk)
-    return digest.hexdigest(), total
 
 
 def _summary(values: List[float]) -> MetricSummary:

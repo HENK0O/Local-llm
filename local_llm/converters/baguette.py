@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import tempfile
@@ -10,6 +9,7 @@ from typing import Dict, Mapping
 import numpy as np
 
 from ..config import ModelConfig
+from ..loading import model_fingerprint
 from ..safetensors import save_file
 
 
@@ -27,14 +27,6 @@ _SPECIAL_IDS = {
     "<think>": 3,
     "</think>": 4,
 }
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _runtime_config(raw: Mapping[str, object]) -> ModelConfig:
@@ -234,7 +226,7 @@ def convert_baguette(checkpoint: Path, tokenizer: Path, output: Path) -> Path:
         with (staging / "conversion.json").open("w", encoding="utf-8") as handle:
             json.dump({
                 "source_checkpoint": checkpoint.name,
-                "source_sha256": _sha256(checkpoint),
+                "source_sha256": model_fingerprint(checkpoint)[0],
                 "stage": checkpoint_data.get("stage"),
                 "step": checkpoint_data.get("step"),
                 "tokens_seen": checkpoint_data.get("tokens_seen"),

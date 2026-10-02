@@ -17,8 +17,7 @@ import types
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from local_llm.generation import generate
-from local_llm.loading import load_runtime
-from local_llm.benchmark import model_fingerprint
+from local_llm.loading import load_runtime, model_fingerprint
 
 
 def historical_module(ref, name):

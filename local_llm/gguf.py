@@ -6,7 +6,7 @@ import struct
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO, Dict, List, Mapping, Optional, Tuple
+from typing import Any, BinaryIO, Dict, Mapping, Optional, Tuple
 
 import numpy as np
 
@@ -376,13 +376,6 @@ class GGUFReader:
         if info.ggml_type in (F16, F32) and float_dtype is not None and raw.dtype != np.dtype(float_dtype):
             return raw.astype(float_dtype)
         return raw
-
-    def load_unquantized_tensors(self) -> Dict[str, np.ndarray]:
-        unsupported = [info for info in self.tensors.values() if info.ggml_type not in _TENSOR_DTYPES]
-        if unsupported:
-            kinds = ", ".join(sorted({info.type_name for info in unsupported}))
-            raise GGUFError(f"quantized tensors are not supported yet: {kinds}")
-        return {name: self.tensor(name) for name in self.tensors}
 
 
 _FIXED_TENSOR_NAMES = {

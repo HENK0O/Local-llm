@@ -64,7 +64,7 @@ commandes reproductibles et la méthodologie sont détaillées plus bas.
 La session du 1er octobre mesure **89,7 → 106,1 tok/s (+18,3 %)** par rapport à
 l’état du moteur au début de cette session, avec les mêmes 64 tokens gloutons
 sur cinq essais. Ce gain ne compare pas local-llm à un moteur tiers ; les
-[rapports bruts et limites](benchmarks/2026-10-01/README.md) sont conservés.
+[rapports bruts et limites](benchmarks/README.md#decode) sont conservés.
 
 ## Démarrage rapide
 
@@ -223,7 +223,7 @@ Les tests comparent les sorties avec et sans réutilisation, y compris après un
 changement de préfixe, un agrandissement du cache et une interruption. Une mesure
 sur SmolLM2 360M Q8, pour la seconde requête d’une conversation de 546 tokens
 d’entrée, réutilise 517 tokens : prefill médian de 2,778 s à 0,159 s, mêmes tokens
-de sortie sur cinq essais alternés. Voir [les mesures](benchmarks/2026-10-02/prefix-cache.json).
+de sortie sur cinq essais alternés. Voir [les mesures](benchmarks/prefix-cache.json).
 Ce résultat porte sur cette machine et ce contexte ; le débit de décodage n’est
 pas accéléré par cette optimisation.
 
@@ -284,7 +284,7 @@ L’API précise `scope: "projection_diagnostic"` et
 `validated_engine_gain: false`. `delta_tokens_per_second` et `speedup` restent
 nuls ; les valeurs techniques sont conservées sous
 `diagnostic_delta_tokens_per_second` et `diagnostic_ratio` pour l’audit.
-Voir [l’audit des mesures du 2 octobre](benchmarks/2026-10-02/README.md).
+Voir [le périmètre des comparaisons](benchmarks/README.md#mesures-dans-linterface).
 
 **Bibliothèque et apparence.** Tous les fichiers détectés sont visibles dans le
 sélecteur et la bibliothèque, y compris les architectures que local-llm ne sait

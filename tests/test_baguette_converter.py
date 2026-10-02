@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 import tempfile
@@ -85,6 +86,9 @@ class BaguetteConverterTests(unittest.TestCase):
             with mock.patch.dict(sys.modules, {"torch": fake_torch}):
                 convert_baguette(source, tokenizer, output)
 
+            metadata = json.loads((output / "conversion.json").read_text())
+            self.assertEqual(metadata["source_sha256"],
+                             hashlib.sha256(b"fake checkpoint").hexdigest())
             model, loaded_tokenizer = load_runtime(output)
             self.assertEqual(model.config.rope_dimension_count, 2)
             self.assertTrue(model.config.qk_norm)

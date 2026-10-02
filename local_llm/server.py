@@ -327,11 +327,6 @@ class ChatService:
             )
         return request
 
-    def _prompt_tokens(self, request: ChatRequest) -> List[int]:
-        prompt = format_chat(request.messages, self.tokenizer,
-                             template_name=request.template_name)
-        return self.tokenizer.encode(prompt)
-
     def iter_completion(self, request: ChatRequest, completion_id: Optional[str] = None) -> Iterator[StreamPiece]:
         self._generation_lock.acquire()
         generator = None

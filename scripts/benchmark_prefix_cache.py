@@ -11,11 +11,10 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from local_llm.benchmark import model_fingerprint
 from local_llm.cache import PrefixCache
 from local_llm.chat import ChatMessage, format_chat
 from local_llm.generation import generate_tokens
-from local_llm.loading import load_runtime
+from local_llm.loading import load_runtime, model_fingerprint
 
 
 FIRST_QUESTION = (

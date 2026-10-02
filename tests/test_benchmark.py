@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -26,6 +27,8 @@ class BenchmarkTests(unittest.TestCase):
             first_path.write_bytes(b"same model bytes")
             second_path.write_bytes(b"same model bytes")
             self.assertEqual(model_fingerprint(first_path), model_fingerprint(second_path))
+            self.assertEqual(model_fingerprint(first_path),
+                             (hashlib.sha256(b"same model bytes").hexdigest(), 16))
 
     def test_report_round_trip_and_comparison(self):
         with tempfile.TemporaryDirectory() as directory:
