@@ -1465,7 +1465,7 @@
         </header>
         <div id="serverUpdate" class="server-update hidden" role="status">
           Le serveur utilise une ancienne version. Relancez-le pour activer les
-          capteurs et la réutilisation du contexte.
+          nouvelles fonctionnalités et la vérification des modèles LM Studio.
         </div>
         <div
           id="storageNotice"
@@ -1640,7 +1640,13 @@
         placeholder="Rechercher un modèle…"
         aria-label="Rechercher parmi les modèles disponibles"
       />
+      <p class="hint">
+        Seuls les modèles chargés dans LM Studio sont prêts à discuter.
+      </p>
       <div id="pickerList"></div>
+      <button id="pickerLibrary" style="width: 100%; margin-top: 12px">
+        Voir les modèles téléchargés
+      </button>
     </div>
     <dialog id="contextDialog" aria-labelledby="contextTitle">
       <div class="dialog-head">
@@ -2029,13 +2035,26 @@
               source: "local-llm",
               quantization: m.quantization,
             })),
-          ...lm.map((m) => ({
-            key: "lmstudio:" + m.id,
-            name: m.name,
-            source: "LM Studio",
-            quantization: m.quantization,
-          })),
+          ...lm.flatMap((m) =>
+            (m.instances || []).map((instance) => ({
+              key: "lmstudio:" + m.id,
+              instanceId: instance.id,
+              instanceLabel: m.instances.length > 1 ? instance.id : null,
+              contextLength: instance.context_length,
+              name: m.name,
+              source: "LM Studio",
+              quantization: m.quantization,
+              loaded: true,
+            })),
+          ),
         ];
+      }
+
+      function selectedLMInstance(model, preferred = null) {
+        const instances = model?.instances || [];
+        if (preferred)
+          return instances.find((i) => i.id === preferred)?.id || null;
+        return instances.length === 1 ? instances[0].id : null;
       }
 
       function streamDelta(chunk) {
@@ -2067,6 +2086,7 @@
           contextMessages,
           captureContextRequest,
           modelChoices,
+          selectedLMInstance,
           streamDelta,
           completionNote,
         };
@@ -2081,6 +2101,7 @@
         epoch = 0;
       let lmCatalog = [],
         activeLM = null,
+        lmConnected = false,
         catalogData = { models: [], roots: [] };
       let completions = [],
         measuring = false,
@@ -2105,7 +2126,11 @@
       const currentModelKey = () =>
         activeLM ? "lmstudio:" + activeLM.id : info.current_id || null;
       const ready = () =>
-        !!(activeLM || info.loaded) &&
+        (activeLM
+          ? !!activeLM.instanceId &&
+            !!selectedLMInstance(activeLM, activeLM.instanceId) &&
+            !!info.features?.includes("lmstudio_instances")
+          : !!info.loaded) &&
         (!conversations.active?.modelKey ||
           conversations.active.modelKey === currentModelKey());
       function updateTheme() {
@@ -2199,7 +2224,8 @@
           "hidden",
           Boolean(
             data.features?.includes("prefix_cache") &&
-              data.features?.includes("system_telemetry"),
+              data.features?.includes("system_telemetry") &&
+              data.features?.includes("lmstudio_instances"),
           ),
         );
         $("composerInfo").textContent = data.loaded
@@ -2273,12 +2299,23 @@
               "",
               "Serveur LM Studio · " +
                 (m.quantization || "") +
-                (m.loaded ? " · chargé" : ""),
+                (m.loaded
+                  ? " · chargé en mémoire"
+                  : " · téléchargé, non chargé"),
             ),
           );
-          const b = node("button", "", "Utiliser via LM Studio");
+          const b = node(
+            "button",
+            "",
+            m.loaded ? "Choisir" : "Charger dans LM Studio",
+          );
           b.disabled = busy;
-          b.onclick = () => loadModel("lmstudio:" + m.id);
+          b.onclick = () => {
+            if (m.loaded) {
+              $("library").close();
+              $("modelSelect").click();
+            } else loadModel("lmstudio:" + m.id, null, true);
+          };
           row.append(desc, b);
           $("modelList").append(row);
         }
@@ -2299,18 +2336,39 @@
         $("modelSelect").disabled =
           busy || (!catalog.length && !lmCatalog.length);
       }
-      async function loadModel(id) {
+      async function loadModel(id, instanceId = null, ensureLoaded = false) {
         if (busy || !id) return false;
         setBusy(true);
         $("notice").textContent = "Chargement du modèle…";
         try {
           if (id.startsWith("lmstudio:")) {
-            const model = lmCatalog.find((m) => m.id === id.slice(9));
-            if (!model)
+            let model = lmCatalog.find((m) => m.id === id.slice(9));
+            if (!model && ensureLoaded)
               throw new Error(
                 "Ce modèle n’est pas disponible via LM Studio. Actualisez sa connexion.",
               );
-            activeLM = model;
+            model ||= {
+              id: id.slice(9),
+              name: conversations.active?.modelName || id.slice(9),
+              instances: [],
+            };
+            if (ensureLoaded) {
+              if (!info.features?.includes("lmstudio_instances"))
+                throw new Error(
+                  "Relancez le serveur local-llm pour activer le chargement et la vérification des modèles LM Studio.",
+                );
+              const result = await api("/v1/lmstudio/load", {
+                model: model.id,
+              });
+              model = result.model;
+              instanceId = result.instance_id;
+              lmConnected = true;
+              lmCatalog = lmCatalog.map((m) => (m.id === model.id ? model : m));
+            }
+            activeLM = {
+              ...model,
+              instanceId: instanceId || selectedLMInstance(model),
+            };
             $("modelName").textContent = model.name;
             $("composerInfo").textContent = "LM Studio · sur cette machine";
             $("engineStatus").textContent = "Exécution par LM Studio";
@@ -2326,6 +2384,7 @@
           if (chat) {
             chat.modelKey = id;
             chat.modelName = activeLM ? activeLM.name : info.model;
+            chat.lmInstanceId = activeLM?.instanceId || null;
             conversations.save();
           }
           renderCatalog(catalogData);
@@ -2333,7 +2392,13 @@
           renderResponsePerformance();
           $("library").close();
           $("notice").textContent = activeLM
-            ? "LM Studio chargera le modèle si nécessaire. L’historique est conservé."
+            ? ready()
+              ? "Modèle chargé dans LM Studio. L’historique est conservé."
+              : !lmConnected
+                ? "LM Studio est hors ligne. Démarrez son serveur local pour retrouver les modèles chargés."
+                : !info.features?.includes("lmstudio_instances")
+                  ? "Relancez le serveur local-llm pour vérifier le modèle LM Studio utilisé."
+                  : "Ce modèle n’est pas chargé. Ouvrez la bibliothèque pour le charger, ou sélectionnez une instance chargée."
             : "Modèle prêt. L’historique est conservé.";
           return true;
         } catch (error) {
@@ -2360,8 +2425,16 @@
             ? "En cours"
             : "Chargement…"
           : ready()
-            ? (activeLM ? "LM Studio" : "local-llm") + " · Prêt"
-            : "Aucun modèle prêt";
+            ? activeLM
+              ? "LM Studio · Chargé"
+              : "local-llm · Prêt"
+            : activeLM
+              ? !lmConnected
+                ? "LM Studio · Hors ligne"
+                : !info.features?.includes("lmstudio_instances")
+                  ? "Serveur à relancer"
+                  : "LM Studio · Non chargé"
+              : "Aucun modèle prêt";
       }
       function renderModelPicker() {
         const query = $("pickerSearch").value.trim().toLowerCase();
@@ -2369,7 +2442,9 @@
         for (const m of modelChoices(catalog, lmCatalog).filter((m) =>
           (m.name + " " + m.source).toLowerCase().includes(query),
         )) {
-          const selected = m.key === currentModelKey();
+          const selected =
+            m.key === currentModelKey() &&
+            (!m.instanceId || m.instanceId === activeLM?.instanceId);
           const button = node(
             "button",
             "picker-option" + (selected ? " current" : ""),
@@ -2386,14 +2461,30 @@
             node(
               "small",
               "",
-              [m.source, m.quantization].filter(Boolean).join(" · "),
+              [
+                m.source,
+                m.quantization,
+                m.loaded ? "Chargé" : "",
+                m.instanceLabel,
+                m.contextLength
+                  ? m.contextLength.toLocaleString("fr-FR") + " tok de contexte"
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" · "),
             ),
           );
           button.append(copy);
+          if (m.loaded) {
+            const indicator = node("span", "dot");
+            indicator.title = "Chargé dans LM Studio";
+            button.append(indicator);
+          }
           if (selected) button.append(node("span", "", "✓"));
+          if (m.instanceId) button.title = "Instance : " + m.instanceId;
           button.onclick = () => {
             $("modelPicker").hidePopover();
-            loadModel(m.key);
+            loadModel(m.key, m.instanceId);
           };
           $("pickerList").append(button);
         }
@@ -2406,27 +2497,43 @@
             ),
           );
       }
-      async function lmRefresh() {
-        if (busy) return;
-        $("lmStatus").textContent = "LM Studio : vérification…";
+      let lmPolling = false;
+      async function lmRefresh(quiet = false) {
+        if (busy || lmPolling) return;
+        lmPolling = true;
+        if (!quiet) $("lmStatus").textContent = "LM Studio : vérification…";
         try {
           const data = await api("/v1/lmstudio/models");
+          if (busy) return;
+          lmConnected = data.available;
+          const catalogChanged =
+            JSON.stringify(lmCatalog) !== JSON.stringify(data.models);
           lmCatalog = data.models;
           $("lmAddress").textContent = data.url || "http://127.0.0.1:1234";
-          if (activeLM && !lmCatalog.some((m) => m.id === activeLM.id)) {
-            activeLM = null;
-            showInfo(info);
-            $("notice").textContent =
-              "Le modèle de cette conversation n’est plus disponible dans LM Studio. Son historique est conservé.";
+          if (activeLM) {
+            const previous = activeLM.instanceId;
+            const wasLoaded = !!selectedLMInstance(activeLM, previous);
+            const fresh = lmCatalog.find((m) => m.id === activeLM.id);
+            activeLM = {
+              ...(fresh || activeLM),
+              instances: fresh?.instances || [],
+              instanceId: previous || selectedLMInstance(fresh),
+            };
+            if (wasLoaded && !selectedLMInstance(activeLM, previous))
+              $("notice").textContent =
+                "Le modèle sélectionné a été déchargé dans LM Studio. Chargez-le dans la bibliothèque ou choisissez un modèle chargé.";
           }
           $("libraryConnection").textContent = data.available
-            ? "Serveur LM Studio connecté : tous ses modèles sont disponibles ci-dessous."
+            ? "Modèles téléchargés dans LM Studio. Chargez un modèle pour le faire apparaître dans le sélecteur. Les architectures incompatibles avec local-llm peuvent être exécutées par LM Studio."
             : "LM Studio hors ligne. Dans LM Studio, ouvrez Developer et démarrez le serveur local, puis cliquez sur Rechercher à nouveau.";
-          renderCatalog(catalogData);
+          if (catalogChanged || !quiet) renderCatalog(catalogData);
           setBusy(busy);
           $("lmDot").classList.toggle("off", !data.available);
           $("lmStatus").textContent = data.available
-            ? data.models.length + " modèles LM Studio"
+            ? lmCatalog.filter((m) => m.loaded).length +
+              " chargés · " +
+              lmCatalog.length +
+              " téléchargés"
             : "LM Studio non connecté";
           $("lmOption").disabled = !data.available || !data.models.length;
           const old = $("lmModel").value;
@@ -2446,7 +2553,12 @@
             : "LM Studio · serveur non connecté";
           baselineChanged();
         } catch (e) {
-          $("lmStatus").textContent = e.message;
+          lmConnected = false;
+          if (activeLM) activeLM = { ...activeLM, instances: [] };
+          setBusy(busy);
+          $("lmStatus").textContent = "LM Studio non connecté";
+        } finally {
+          lmPolling = false;
         }
       }
       function baselineChanged() {
@@ -2871,7 +2983,10 @@
             info.features = health.features;
             $("serverUpdate").classList.toggle(
               "hidden",
-              Boolean(health.features?.includes("prefix_cache")),
+              Boolean(
+                health.features?.includes("prefix_cache") &&
+                  health.features?.includes("lmstudio_instances"),
+              ),
             );
             systemRetryAt = 0;
             setBusy(busy);
@@ -2970,6 +3085,7 @@
           activeLM ? "lmstudio" : "local",
           activeLM ? activeLM.id : info.current_id,
         );
+        chat.lastRequest.modelInstanceId = activeLM?.instanceId || null;
         chat.draft = "";
         conversations.touch(chat);
         chatPage = 0;
@@ -2995,6 +3111,7 @@
             body: JSON.stringify({
               model: activeLM ? activeLM.id : info.current_id,
               backend: activeLM ? "lmstudio" : "local",
+              model_instance_id: activeLM?.instanceId || undefined,
               messages: history,
               max_tokens: requestLimit,
               temperature: Number($("temperature").value),
@@ -3075,9 +3192,21 @@
             reasoning,
             inContext: !!answer,
             note,
-            modelLabel: activeLM ? "LM Studio" : "local-llm",
+            modelLabel: activeLM
+              ? final.local_llm.model_name + " · LM Studio"
+              : "local-llm",
             metrics: measurement,
           });
+          if (final.local_llm.model_instance_id) {
+            chat.lastRequest.modelInstanceId =
+              final.local_llm.model_instance_id;
+            chat.lastRequest.modelName = final.local_llm.model_name;
+            view.wrap.querySelector(
+              ".message-label span:last-child",
+            ).textContent = final.local_llm.model_name + " · LM Studio";
+            view.wrap.querySelector(".message-label").title =
+              "Instance : " + final.local_llm.model_instance_id;
+          }
           chat.lastRequest.status = "complete";
           chat.lastRequest.completionId = final.id;
           statsView(view.wrap, measurement);
@@ -3123,6 +3252,7 @@
           if (turn === epoch) {
             setBusy(false);
             controller = null;
+            if (activeLM) await lmRefresh(true);
             $("prompt").focus();
           }
         }
@@ -3192,7 +3322,16 @@
               : "La dernière requête n’a pas abouti à une réponse complète.");
           return;
         }
-        if (lm) return;
+        if (lm) {
+          if (last && request.modelInstanceId)
+            status.textContent +=
+              " Modèle : " +
+              (request.modelName || request.model) +
+              " · Instance : " +
+              request.modelInstanceId +
+              ".";
+          return;
+        }
         if (busy) {
           status.textContent =
             "Génération en cours : le texte préparé sera actualisé à la fin.";
@@ -3361,8 +3500,12 @@
         epoch++;
         setWorkspace("chat");
         renderChat();
-        if (chat.modelKey && chat.modelKey !== currentModelKey())
-          await loadModel(chat.modelKey);
+        if (
+          chat.modelKey &&
+          (chat.modelKey !== currentModelKey() ||
+            (activeLM && chat.lmInstanceId !== activeLM.instanceId))
+        )
+          await loadModel(chat.modelKey, chat.lmInstanceId || null);
         else if (!chat.modelKey && currentModelKey()) {
           chat.modelKey = currentModelKey();
           chat.modelName = activeLM ? activeLM.name : info.model;
@@ -3383,6 +3526,8 @@
           updateStorageNotice();
           return;
         }
+        conversations.active.lmInstanceId = activeLM?.instanceId || null;
+        conversations.save();
         epoch++;
         chatPage = 0;
         setWorkspace("chat");
@@ -3556,12 +3701,13 @@
         ($("temperatureValue").value = Number($("temperature").value).toFixed(
           1,
         ));
-      $("modelSelect").onclick = () => {
+      $("modelSelect").onclick = async () => {
         if ($("modelPicker").matches(":popover-open")) {
           $("modelPicker").hidePopover();
           return;
         }
         $("pickerSearch").value = "";
+        await lmRefresh(true);
         renderModelPicker();
         $("modelPicker").showPopover();
         positionModelPicker();
@@ -3595,7 +3741,11 @@
       $("closeContext").onclick = () => $("contextDialog").close();
       $("contextMode").onchange = refreshContext;
       $("baseline").onchange = baselineChanged;
-      $("lmRefresh").onclick = lmRefresh;
+      $("lmRefresh").onclick = () => lmRefresh();
+      $("pickerLibrary").onclick = () => {
+        $("modelPicker").hidePopover();
+        $("libraryButton").click();
+      };
       $("libraryButton").onclick = () => {
         $("library").showModal();
         $("modelSearch").focus();
@@ -3705,6 +3855,9 @@
       updateStorageNotice();
       pollSystem();
       setInterval(pollSystem, 3000);
+      setInterval(() => {
+        if (!document.hidden) lmRefresh(true);
+      }, 5000);
       document.addEventListener("visibilitychange", () => {
         if (!document.hidden) pollSystem();
       });
@@ -3715,7 +3868,7 @@
           await lmRefresh();
           const chat = conversations.active;
           if (chat?.modelKey && chat.modelKey !== currentModelKey())
-            await loadModel(chat.modelKey);
+            await loadModel(chat.modelKey, chat.lmInstanceId || null);
           else if (chat && !chat.modelKey) {
             chat.modelKey = currentModelKey();
             chat.modelName = info.model;

@@ -48,18 +48,49 @@ class LMStudioClient:
                 models = [{"id": m["key"], "name": m.get("display_name", m["key"]),
                            "architecture": m.get("architecture"),
                            "quantization": (m.get("quantization") or {}).get("name"),
+                           "instances": [{"id": i["id"], "context_length": (i.get("config") or {}).get("context_length")}
+                                         for i in m.get("loaded_instances", []) if isinstance(i.get("id"), str) and i["id"]],
                            "loaded": bool(m.get("loaded_instances"))}
                           for m in entries if m.get("type") == "llm"]
+                can_load = True
             except HTTPError as exc:
                 if exc.code not in {404, 405}:
                     raise
                 entries = self._request("/api/v0/models").get("data", [])
                 models = [{"id": m["id"], "name": m["id"], "architecture": m.get("arch"),
-                           "quantization": m.get("quantization"), "loaded": m.get("state") == "loaded"}
+                           "quantization": m.get("quantization"), "loaded": m.get("state") == "loaded",
+                           "instances": [{"id": m["id"], "context_length": None}] if m.get("state") == "loaded" else []}
                           for m in entries if m.get("type") == "llm"]
-            return {"available": True, "url": self.url, "models": models, "error": None}
+                can_load = False
+            for model in models:
+                model["loaded"] = bool(model["instances"])
+            return {"available": True, "url": self.url, "models": models, "can_load": can_load, "error": None}
         except (OSError, ValueError, KeyError, TypeError, URLError) as exc:
             return {"available": False, "url": self.url, "models": [], "error": str(exc)}
+
+    def load(self, model_id: str) -> Dict:
+        """Load only an installed LLM, and return its verified instance identity."""
+        listing = self.models()
+        model = next((m for m in listing["models"] if m["id"] == model_id), None)
+        if not listing["available"] or model is None:
+            raise ValueError("Modèle absent du serveur LM Studio. Actualisez la bibliothèque.")
+        instances = model["instances"]
+        if len(instances) == 1:
+            return {"model": model, "instance_id": instances[0]["id"]}
+        if instances:
+            raise ValueError("Plusieurs instances sont chargées. Choisissez-en une dans le sélecteur.")
+        if not listing.get("can_load"):
+            raise ValueError("Chargez ce modèle dans LM Studio, puis actualisez sa connexion.")
+        result = self._request("/api/v1/models/load", {"model": model_id}, timeout=180)
+        instance_id = result.get("instance_id")
+        if result.get("status") != "loaded" or not isinstance(instance_id, str) or not instance_id:
+            raise ValueError("LM Studio n’a pas confirmé le chargement du modèle.")
+        # Never infer a model identity from a display name or a filename prefix.
+        listing = self.models()
+        model = next((m for m in listing["models"] if m["id"] == model_id), None)
+        if model is None or instance_id not in {i["id"] for i in model["instances"]}:
+            raise ValueError("Chargement non vérifié. Actualisez la connexion à LM Studio.")
+        return {"model": model, "instance_id": instance_id}
 
     def iter_chat(self, payload):
         """Relay OpenAI SSE, including usage; close upstream on disconnect."""

@@ -49,6 +49,8 @@ class ChatRequest:
     template_name: Optional[str]
     backend: str
     model_id: Optional[str] = None
+    model_key: Optional[str] = None
+    model_name: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -248,7 +250,7 @@ class ChatService:
                 "reference_chat_available": self.reference_runtime is not None,
                 "max_request_tokens": self.max_request_tokens,
                 "max_lmstudio_tokens": self.max_lmstudio_tokens,
-                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection"],
+                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances"],
                 "retained_cache_bytes": self.prefix_cache.nbytes,
                 "retained_cache_limit_bytes": self.prefix_cache.max_bytes}
 
@@ -314,11 +316,20 @@ class ChatService:
             listing = self.lmstudio.models()
             if not listing["available"]:
                 raise ValueError("Activez le serveur local dans LM Studio, puis actualisez la bibliothèque")
-            if not isinstance(model_id, str) or model_id not in {m["id"] for m in listing["models"]}:
+            model = next((m for m in listing["models"] if m["id"] == model_id), None) if isinstance(model_id, str) else None
+            if model is None:
                 raise ValueError("Modèle absent du serveur LM Studio")
+            instances = model.get("instances", [])
+            instance_id = payload.get("model_instance_id")
+            if instance_id is None and len(instances) == 1:
+                instance_id = instances[0]["id"]
+            if not instances:
+                raise ValueError("Ce modèle est téléchargé mais pas chargé. Chargez-le dans la bibliothèque ou dans LM Studio.")
+            if not isinstance(instance_id, str) or instance_id not in {i["id"] for i in instances}:
+                raise ValueError("L’instance choisie n’est plus chargée. Actualisez puis sélectionnez le modèle dans LM Studio.")
             if not request.stream:
                 raise ValueError("LM Studio nécessite stream=true")
-            return replace(request, model_id=model_id)
+            return replace(request, model_id=instance_id, model_key=model_id, model_name=model.get("name", model_id))
         if self.model is None:
             raise ValueError("Charge un modèle avant de démarrer une conversation")
         model_id = payload.get("model") if isinstance(payload, dict) else None
@@ -657,7 +668,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self._path()
-        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/compare"}:
+        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/lmstudio/load", "/v1/compare"}:
             self._error(404, "route not found")
             return
         if not self._same_origin():
@@ -669,6 +680,11 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_payload()
+            if path == "/v1/lmstudio/load":
+                if not isinstance(payload, dict) or not isinstance(payload.get("model"), str):
+                    raise ValueError("model must be a string")
+                self._send_json(200, self.server.service.lmstudio.load(payload["model"]))
+                return
             if path == "/v1/context":
                 self._send_json(200, self.server.service.context_snapshot(payload))
                 return
@@ -754,8 +770,16 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
         usage = {}
         finish = "stop"
         upstream = self.server.service.lmstudio.iter_chat(payload)
+        verified = False
         try:
             for chunk in upstream:
+                actual = chunk.get("model")
+                if actual is not None:
+                    if actual != request.model_id:
+                        raise ValueError("LM Studio a répondu avec un autre modèle. Réponse rejetée ; actualisez la connexion et sélectionnez le modèle chargé.")
+                    verified = True
+                if chunk.get("choices") and not verified:
+                    raise ValueError("LM Studio n’a pas indiqué le modèle exécuté. Réponse non vérifiée.")
                 if isinstance(chunk.get("usage"), dict):
                     usage = chunk["usage"]
                 choices = chunk.get("choices") or []
@@ -767,14 +791,17 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                     if delta.get("content") or delta.get("reasoning_content") or delta.get("reasoning"):
                         if first is None:
                             first = time.perf_counter()
-                chunk.update(id=response_id, model=request.model_id, backend="lmstudio")
+                chunk.update(id=response_id, backend="lmstudio")
                 self._write_event(chunk)
+            if not verified:
+                raise ValueError("LM Studio n’a pas confirmé le modèle exécuté.")
             seconds = time.perf_counter() - started
             count = usage.get("completion_tokens")
             count = count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else None
             self._write_event({"id": response_id, "model": request.model_id,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
                 "usage": usage, "local_llm": {"backend": "lmstudio", "completion_id": response_id,
+                "model_key": request.model_key, "model_name": request.model_name, "model_instance_id": request.model_id,
                 "decode_tokens_per_second": count / seconds if count is not None and seconds > 0 else None,
                 "prefill_seconds": first - started if first is not None else None,
                 "decode_seconds": seconds, "kv_cache_bytes": None,

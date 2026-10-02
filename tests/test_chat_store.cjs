@@ -18,6 +18,7 @@ const {
   contextMessages,
   captureContextRequest,
   modelChoices,
+  selectedLMInstance,
   streamDelta,
   completionNote,
 } = sandbox.module.exports;
@@ -165,14 +166,27 @@ test("picker contains usable models without grey external duplicates", () => {
       { id: "qwen-file", name: "Qwen IQ3", compatible: false },
     ],
     [
-      { id: "ling", name: "Ling" },
-      { id: "qwen", name: "Qwen" },
+      {
+        id: "ling",
+        name: "Ling",
+        instances: [{ id: "ling-one" }, { id: "ling-two" }],
+      },
+      { id: "qwen", name: "Qwen", loaded: false, instances: [] },
     ],
   );
   assert.equal(
     JSON.stringify(choices.map((m) => m.key)),
-    JSON.stringify(["native", "lmstudio:ling", "lmstudio:qwen"]),
+    JSON.stringify(["native", "lmstudio:ling", "lmstudio:ling"]),
   );
+});
+
+test("an unloaded or ambiguous LM selection never picks another instance", () => {
+  assert.equal(selectedLMInstance({ instances: [] }), null);
+  assert.equal(selectedLMInstance({ instances: [{ id: "one" }] }), "one");
+  const multiple = { instances: [{ id: "one" }, { id: "two" }] };
+  assert.equal(selectedLMInstance(multiple), null);
+  assert.equal(selectedLMInstance(multiple, "two"), "two");
+  assert.equal(selectedLMInstance(multiple, "previously-loaded"), null);
 });
 
 test("LM Studio reasoning channels stay separate from the answer", () => {

@@ -365,7 +365,7 @@ class LMStudioProxyTests(unittest.TestCase):
         with patch('local_llm.server.default_model_roots', return_value=[]):
             service = ChatService(max_lmstudio_tokens=64)
         self.addCleanup(service.telemetry.close)
-        service.lmstudio.models = lambda: {'available': True, 'models': [{'id': 'ling'}]}
+        service.lmstudio.models = lambda: {'available': True, 'models': [{'id': 'ling', 'name': 'Ling', 'instances': [{'id': 'ling-custom'}]}]}
         payload = {'backend': 'lmstudio', 'model': 'ling', 'stream': True,
                    'messages': [{'role': 'user', 'content': 'hi'}], 'max_tokens': 64}
         self.assertEqual(service.parse(payload).max_tokens, 64)
@@ -375,12 +375,38 @@ class LMStudioProxyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'between 1 and 512'):
             service.parse(dict(payload, backend='local', max_tokens=513))
 
+    def test_chat_requires_the_selected_loaded_instance_and_never_falls_back(self):
+        from unittest.mock import patch
+        from local_llm.server import ChatService
+        with patch('local_llm.server.default_model_roots', return_value=[]):
+            service = ChatService()
+        self.addCleanup(service.telemetry.close)
+        model = {'id': 'ling', 'instances': []}
+        service.lmstudio.models = lambda: {'available': True, 'models': [model,
+            {'id': 'qwen', 'instances': [{'id': 'qwen-loaded'}]}]}
+        payload = {'backend': 'lmstudio', 'model': 'ling', 'stream': True,
+                   'messages': [{'role': 'user', 'content': 'hi'}]}
+        with self.assertRaisesRegex(ValueError, 'pas chargé'):
+            service.parse(payload)
+        model['instances'] = [{'id': 'ling-one'}, {'id': 'ling-two'}]
+        with self.assertRaisesRegex(ValueError, 'instance'):
+            service.parse(payload)
+        with self.assertRaisesRegex(ValueError, 'instance'):
+            service.parse(dict(payload, model_instance_id='qwen-loaded'))
+        request = service.parse(dict(payload, model_instance_id='ling-two'))
+        self.assertEqual(request.model_id, 'ling-two')
+        self.assertEqual(request.model_key, 'ling')
+        # Unloading in LM Studio invalidates even a previously valid UI selection.
+        model['instances'] = [{'id': 'ling-one'}]
+        with self.assertRaisesRegex(ValueError, 'instance'):
+            service.parse(dict(payload, model_instance_id='ling-two'))
+
     def test_streaming_chat_works_without_a_native_model_and_is_not_attributed(self):
         from unittest.mock import patch
         from local_llm.server import ChatService
         with patch('local_llm.server.default_model_roots', return_value=[]):
             service = ChatService()
-        service.lmstudio.models = lambda: {'available': True, 'models': [{'id': 'ling'}]}
+        service.lmstudio.models = lambda: {'available': True, 'models': [{'id': 'ling', 'name': 'Ling', 'instances': [{'id': 'ling-custom'}]}]}
         longer = service.parse({'backend': 'lmstudio', 'model': 'ling',
                                 'messages': [{'role': 'user', 'content': 'hi'}],
                                 'max_tokens': 2048, 'stream': True})
@@ -390,10 +416,10 @@ class LMStudioProxyTests(unittest.TestCase):
                            'messages': [{'role': 'user', 'content': 'hi'}],
                            'max_tokens': 8193, 'stream': True})
         def stream(payload):
-            self.assertEqual(payload['model'], 'ling')
+            self.assertEqual(payload['model'], 'ling-custom')
             self.assertEqual(payload['messages'][0]['content'], 'Bonjour')
             self.assertEqual(payload['max_tokens'], 2048)
-            yield {'choices': [{'delta': {'reasoning_content': 'Réflexion'}, 'finish_reason': None}]}
+            yield {'model': 'ling-custom', 'choices': [{'delta': {'reasoning_content': 'Réflexion'}, 'finish_reason': None}]}
             yield {'choices': [{'delta': {'content': 'Salut'}, 'finish_reason': None}]}
             yield {'choices': [], 'usage': {'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5}}
             yield {'choices': [{'delta': {}, 'finish_reason': 'stop'}]}
@@ -418,6 +444,33 @@ class LMStudioProxyTests(unittest.TestCase):
             self.assertGreater(chunks[-1]['local_llm']['decode_tokens_per_second'], 0)
             self.assertEqual(chunks[-1]['local_llm']['timing_kind'], 'observed_total')
             self.assertEqual(chunks[-1]['usage']['completion_tokens'], 2)
+            self.assertEqual(chunks[-1]['model'], 'ling-custom')
+            self.assertEqual(chunks[-1]['local_llm']['model_key'], 'ling')
+            self.assertEqual(chunks[-1]['local_llm']['model_instance_id'], 'ling-custom')
+            for identity in ['qwen', None]:
+                def wrong_stream(payload):
+                    chunk = {'choices': [{'delta': {'content': 'Wrong model text'}}]}
+                    if identity is not None:
+                        chunk['model'] = identity
+                    yield chunk
+                service.lmstudio.iter_chat = wrong_stream
+                connection = http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=3)
+                connection.request('POST', '/v1/chat/completions', json.dumps(payload), {'Content-Type': 'application/json'})
+                failed = connection.getresponse().read().decode(); connection.close()
+                self.assertIn('"error"', failed)
+                self.assertNotIn('Wrong model text', failed)
+                self.assertNotIn('"local_llm"', failed)
+            service.lmstudio.load = lambda key: {'model': {'id': key}, 'instance_id': 'ling-custom'}
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=3)
+            connection.request('POST', '/v1/lmstudio/load', json.dumps({'model': 'ling'}), {'Content-Type': 'application/json'})
+            loaded = connection.getresponse()
+            self.assertEqual(loaded.status, 200)
+            self.assertEqual(json.loads(loaded.read())['instance_id'], 'ling-custom'); connection.close()
+            connection = http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=3)
+            connection.request('POST', '/v1/lmstudio/load', json.dumps({'model': 'ling'}), {
+                'Content-Type': 'application/json', 'Origin': 'http://other.example'})
+            forbidden = connection.getresponse(); self.assertEqual(forbidden.status, 403)
+            forbidden.read(); connection.close()
             self.assertFalse(service._records)
             connection = http.client.HTTPConnection('127.0.0.1', server.server_address[1], timeout=3)
             connection.request('GET', '/v1/recommendations'); response = connection.getresponse()

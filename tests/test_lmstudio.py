@@ -37,6 +37,60 @@ class LMStudioTests(unittest.TestCase):
             self.assertFalse(client.models()['available'])
             self.assertEqual(request.call_count, 1)
 
+    def test_catalog_preserves_instance_ids_and_keeps_downloaded_models_unloaded(self):
+        client = LMStudioClient()
+        with patch.object(client, '_request', return_value={'models': [
+            {'type': 'llm', 'key': 'ling', 'loaded_instances': [
+                {'id': 'ling-custom', 'config': {'context_length': 4096}},
+                {'id': 'ling-second', 'config': {'context_length': 8192}}]},
+            {'type': 'llm', 'key': 'qwen', 'loaded_instances': []},
+        ]}):
+            listing = client.models()
+        self.assertEqual(listing['models'][0]['instances'], [
+            {'id': 'ling-custom', 'context_length': 4096},
+            {'id': 'ling-second', 'context_length': 8192}])
+        self.assertEqual(listing['models'][1]['instances'], [])
+        self.assertFalse(listing['models'][1]['loaded'])
+        self.assertTrue(listing['can_load'])
+
+    def test_explicit_load_verifies_returned_instance_against_catalog(self):
+        client = LMStudioClient()
+        unloaded = {'available': True, 'can_load': True, 'models': [
+            {'id': 'ling', 'instances': []}]}
+        loaded = {'available': True, 'can_load': True, 'models': [
+            {'id': 'ling', 'instances': [{'id': 'custom-instance'}]}]}
+        with patch.object(client, 'models', side_effect=[unloaded, loaded]), patch.object(
+                client, '_request', return_value={'status': 'loaded', 'instance_id': 'custom-instance'}) as request:
+            result = client.load('ling')
+        self.assertEqual(result['instance_id'], 'custom-instance')
+        request.assert_called_once_with('/api/v1/models/load', {'model': 'ling'}, timeout=180)
+        # An acknowledgement alone is insufficient if it belongs to another model.
+        with patch.object(client, 'models', side_effect=[unloaded, unloaded]), patch.object(
+                client, '_request', return_value={'status': 'loaded', 'instance_id': 'qwen'}):
+            with self.assertRaisesRegex(ValueError, 'non vérifié'):
+                client.load('ling')
+
+    def test_load_reuses_existing_instance_and_never_downloads_unknown_models(self):
+        client = LMStudioClient()
+        listing = {'available': True, 'can_load': True, 'models': [
+            {'id': 'ling', 'instances': [{'id': 'ling-custom'}]}]}
+        with patch.object(client, 'models', return_value=listing), patch.object(client, '_request') as request:
+            self.assertEqual(client.load('ling')['instance_id'], 'ling-custom')
+            with self.assertRaisesRegex(ValueError, 'absent'):
+                client.load('unknown')
+            request.assert_not_called()
+        listing['models'][0]['instances'].append({'id': 'second'})
+        with patch.object(client, 'models', return_value=listing), patch.object(client, '_request') as request:
+            with self.assertRaisesRegex(ValueError, 'Plusieurs'):
+                client.load('ling')
+            request.assert_not_called()
+        listing['can_load'] = False
+        listing['models'][0]['instances'] = []
+        with patch.object(client, 'models', return_value=listing), patch.object(client, '_request') as request:
+            with self.assertRaisesRegex(ValueError, 'Chargez'):
+                client.load('ling')
+            request.assert_not_called()
+
     def test_offline_server_returns_actionable_state(self):
         with patch.object(LMStudioClient, '_request', side_effect=URLError('connection refused')):
             result = LMStudioClient().models()

@@ -192,7 +192,7 @@ Le bouton carré interrompt une génération. « Nouvelle conversation » crée 
 autre fil ; le précédent reste accessible dans la liste de gauche.
 
 Le sélecteur de modèles permet de rechercher parmi les modèles exécutables par
-local-llm ou disponibles via LM Studio. Les fichiers incompatibles restent dans
+local-llm ou déjà chargés dans LM Studio. Les fichiers incompatibles restent dans
 la bibliothèque, sans entrées grisées en double dans le sélecteur. Un voyant
 vert et « En cours » signalent la génération.
 
@@ -377,11 +377,32 @@ Un port différent se configure au lancement :
 local-llm serve --lm-studio http://127.0.0.1:1235
 ```
 
-Lorsque son serveur local est actif, les modèles de son API apparaissent dans
-le groupe « Exécuter avec LM Studio » et peuvent être utilisés dans le chat,
-y compris sans modèle natif chargé. Active le serveur dans l’onglet Developer
-de LM Studio, puis actualise la bibliothèque. Le chat est relayé en streaming
-via `/v1/chat/completions` avec `backend: "lmstudio"`, `model` et `stream: true`.
+Lorsque son serveur local est actif, la bibliothèque distingue les modèles
+**téléchargés** de ceux **chargés en mémoire**. Le sélecteur propose uniquement
+les instances chargées dans LM Studio et les modèles compatibles avec le moteur
+natif. Le bouton « Charger dans LM Studio » dans la bibliothèque charge les
+poids déjà installés via `POST /v1/lmstudio/load` (`{"model": "clé-du-modèle"}`),
+sans téléchargement. Les modèles restent en mémoire selon les réglages de
+LM Studio ; passer d’une conversation à une autre ne déclenche pas de chargement
+LM Studio automatique.
+
+L’état est actualisé toutes les cinq secondes lorsque la page est visible,
+à l’ouverture du sélecteur et après chaque réponse. Le chat est relayé en
+streaming via `/v1/chat/completions` avec `backend: "lmstudio"`, `model` (clé du
+catalogue), `model_instance_id` (identifiant exact de l’instance chargée) et
+`stream: true`. Si une seule instance est chargée, les clients API peuvent
+omettre `model_instance_id`. Une instance déchargée ou appartenant à un autre
+modèle est rejetée avant génération. L’identifiant renvoyé dans le flux LM Studio
+est vérifié avant de transmettre le texte ; une réponse d’un autre modèle n’est
+pas affichée. Le nom du modèle confirmé apparaît sur chaque nouvelle réponse.
+Les anciennes réponses conservent leur libellé d’origine.
+
+Un fichier présent sur le PC n’est pas forcément exécutable par notre moteur :
+son architecture, son tokenizer et sa quantification doivent être pris en charge.
+La bibliothèque conserve les fichiers incompatibles avec leur raison précise.
+Ils peuvent être utilisés via LM Studio lorsqu’ils sont exposés comme LLM par
+son serveur. Les modèles d’embeddings ne sont pas des modèles de discussion et
+ne sont pas proposés dans le chat.
 Le débit de ce parcours est le débit global observé, préparation et transport
 inclus, calculé seulement si LM Studio fournit son usage en tokens. Il n’est pas
 assimilé au débit de décodage natif et aucun gain local-llm n’y est attribué.
