@@ -149,8 +149,8 @@ reste entièrement exécutée par `local-llm`.
 
 ```bash
 python -m local_llm convert-baguette \
-  /Users/henko/Documents/Code/LLM/baguette-123m-sft.pt \
-  --tokenizer /Users/henko/Documents/Code/LLM/tokenizer.json \
+  /chemin/baguette-123m-sft.pt \
+  --tokenizer /chemin/tokenizer.json \
   --output models/baguette-123m-sft
 ```
 
@@ -188,19 +188,60 @@ python -m local_llm serve \
 Ouvre ensuite [http://127.0.0.1:8080](http://127.0.0.1:8080) dans un navigateur.
 L'interface permet de discuter avec le modèle, conserve l'historique, affiche
 les tokens en direct et permet de régler la température et la longueur maximale.
-Le bouton carré interrompt une génération et « Nouvelle conversation » efface
-l'historique envoyé au modèle.
+Le bouton carré interrompt une génération. « Nouvelle conversation » crée un
+autre fil ; le précédent reste accessible dans la liste de gauche.
 
-La discussion conserve uniquement les messages, un débit discret et le bouton
-Copier. L’onglet **Performances** rassemble les statistiques des huit dernières
-réponses de la session, les comparaisons manuelles et les mesures de la machine.
+Le modèle se choisit dans la barre supérieure. La barre de gauche reste fixe,
+avec une liste paginée de conversations, les onglets et les relevés de la machine.
+Chaque conversation conserve son modèle, ses messages et son brouillon dans le
+stockage local du navigateur. Revenir à une conversation restitue son contexte ;
+changer de modèle conserve les messages. Les options permettent de renommer ou
+d’archiver un fil, puis de le restaurer depuis les archives. Un export JSON de
+l’historique est disponible dans les archives. Si le navigateur refuse la
+sauvegarde, un message le signale ; les messages restent disponibles en session.
+Les conversations ne sont pas écrites dans le dépôt Git ni envoyées à GitHub.
+
+Sous chaque réponse figurent les **input tok**, **output tok**, le débit global,
+les tokens de contexte réutilisés et le bouton Copier. Les tokens d’entrée
+comprennent le contexte complet et le template, pas uniquement le dernier
+message. L’onglet **Performances** rassemble les statistiques des huit dernières
+réponses du fil, les comparaisons manuelles et les mesures de la machine.
 Aucune comparaison ne démarre automatiquement après une réponse.
+
+**Réutilisation du contexte.** Le moteur natif conserve au maximum un cache KV
+de préfixe, borné à 64 Mio, entre les requêtes. Seuls les tokens identiques sont
+réutilisés ; la fin du prompt est évaluée pour obtenir de nouveaux logits.
+L’API indique `reused_prompt_tokens` et le chiffre vert **+N tok** compte les
+tokens d’entrée dont le recalcul a été évité. Sa bulle précise la méthode : il
+ne s’agit ni de tokens de sortie supplémentaires ni d’une accélération validée
+face à LM Studio. Les réponses relayées vers LM Studio n’attribuent aucun gain
+au moteur local-llm. Les statistiques sauvegardées survivent au rechargement de
+la page, mais un nouvel essai est nécessaire pour comparer une réponse dont le
+serveur ne conserve plus la trace.
+
+Les tests comparent les sorties avec et sans réutilisation, y compris après un
+changement de préfixe, un agrandissement du cache et une interruption. Une mesure
+sur SmolLM2 360M Q8, pour la seconde requête d’une conversation de 546 tokens
+d’entrée, réutilise 517 tokens : prefill médian de 2,778 s à 0,159 s, mêmes tokens
+de sortie sur cinq essais alternés. Voir [les mesures](benchmarks/2026-10-02/prefix-cache.json).
+Ce résultat porte sur cette machine et ce contexte ; le débit de décodage n’est
+pas accéléré par cette optimisation.
+
+**Mémoire du modèle.** Les poids restent chargés entre les réponses. Les GGUF
+utilisent des fichiers mappés en mémoire : les pages lues deviennent résidentes,
+sans forcément copier tous les poids à l’ouverture. Le cache de génération est
+conservé pour réutilisation s’il respecte la borne ci-dessus ; sinon il est libéré
+à la fin de la requête. Le bouton « Décharger le modèle local » dans la bibliothèque
+libère les références aux poids et au cache ; les messages du navigateur restent
+enregistrés. LM Studio conserve et libère ses propres modèles dans son processus.
 
 Le débit visible est **global et observé dans le navigateur** : tokens générés
 / durée de la requête entière. Il inclut préparation, génération et transport.
 Les détails du moteur indiquent séparément le débit de décodage natif :
 `(tokens générés - 1) / temps des passages de décodage`, hors prefill, sampling
 et transport. Les deux nombres ne mesurent donc pas la même durée.
+Le débit de prefill rapporte uniquement les tokens réellement recalculés au
+temps de préparation ; les tokens réutilisés ne gonflent pas cette mesure.
 
 Les réglages se trouvent dans « Réglages de la discussion ». **Longueur de
 réponse** propose Courte (128 tokens), Standard (256) et Détaillée (512), plus
@@ -225,7 +266,8 @@ le séparateur de chemins du système. Le scan est limité en profondeur et à 2
 modèles ; il ne parcourt pas tout le disque et ne télécharge aucun poids.
 Le premier modèle compatible, en privilégiant les petits GGUF Q8, est chargé.
 La bibliothèque affiche aussi les modèles incompatibles avec leur raison. Un
-changement de modèle efface l’historique de l’interface et les mesures précédentes.
+changement de modèle invalide les traces comparatives du serveur et le cache de
+préfixe. L’historique et les statistiques des conversations du navigateur restent.
 Les poids restent à leur emplacement d’origine.
 
 **Diagnostic CPU.** Le témoin NumPy utilise les mêmes poids quantifiés et le
@@ -270,6 +312,9 @@ Aucune température n’est estimée à partir de la charge. Les sources, la mé
 l’heure et le périmètre figurent dans Performances. Le polling se suspend lorsque
 la page est masquée ; si le serveur est hors ligne, les anciennes valeurs sont
 effacées de l’affichage en direct.
+Si un ancien serveur est encore lancé après une mise à jour, l’interface affiche
+« Serveur à relancer » et une explication. Arrête-le puis relance la commande
+habituelle pour charger le nouveau code Python ; actualiser la page ne suffit pas.
 
 **Suggestions pour la machine.** Le bouton « Modèles conseillés » détecte le
 processeur, les cœurs logiques et la mémoire physique du serveur local sur macOS,
@@ -592,8 +637,8 @@ Baguette :
 ```bash
 python -m local_llm evaluate models/baguette-123m-sft \
   --chat --prompt "Bonjour, comment vas-tu ?" --tokens 8 \
-  --reference /Users/henko/Documents/Code/LLM/baguette-123m-sft.pt \
-  --reference-repo /Users/henko/Documents/Code/LLM \
+  --reference /chemin/baguette-123m-sft.pt \
+  --reference-repo /chemin/Baguette \
   --output /tmp/baguette-evaluation.json
 ```
 

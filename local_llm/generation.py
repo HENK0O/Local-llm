@@ -8,6 +8,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from .model import LlamaModel
+from .cache import PrefixCache
 
 
 @dataclass(frozen=True)
@@ -17,10 +18,12 @@ class GenerationStats:
     prefill_seconds: float
     decode_seconds: float
     cache_bytes: int
+    reused_prompt_tokens: int = 0
 
     @property
     def prefill_tokens_per_second(self) -> float:
-        return self.prompt_tokens / self.prefill_seconds if self.prefill_seconds else 0.0
+        processed = self.prompt_tokens - self.reused_prompt_tokens
+        return processed / self.prefill_seconds if self.prefill_seconds else 0.0
 
     @property
     def decode_tokens_per_second(self) -> float:
@@ -83,6 +86,8 @@ def generate_tokens(
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
     seed: Optional[int] = None,
+    *,
+    prefix_cache: Optional[PrefixCache] = None,
 ) -> Iterator[Tuple[int, Optional[GenerationStats]]]:
     """Yield ``(token_id, stats)``; stats is populated only on the final item."""
     if not prompt_tokens:
@@ -101,9 +106,10 @@ def generate_tokens(
     if max_new_tokens == 0:
         return
 
-    cache = model.new_cache(max(capacity, 1))
     prefill_start = time.perf_counter()
-    logits = model.forward(np.asarray(prompt_tokens, dtype=np.int64), cache=cache,
+    cache, reused = (prefix_cache.prepare(model, prompt_tokens, max(capacity, 1))
+                     if prefix_cache is not None else (model.new_cache(max(capacity, 1)), 0))
+    logits = model.forward(np.asarray(prompt_tokens[reused:], dtype=np.int64), cache=cache,
                            last_logits_only=True)
     prefill_seconds = time.perf_counter() - prefill_start
     rng = np.random.default_rng(seed)
@@ -121,7 +127,12 @@ def generate_tokens(
                 prefill_seconds=prefill_seconds,
                 decode_seconds=decode_seconds,
                 cache_bytes=cache.nbytes,
+                reused_prompt_tokens=reused,
             )
+            if prefix_cache is not None:
+                # The final emitted token (EOS or length limit) has not yet
+                # passed through forward; only retain positions with KV data.
+                prefix_cache.store(model, prompt_tokens + emitted[:-1], cache)
             yield token, stats
             return
         yield token, None

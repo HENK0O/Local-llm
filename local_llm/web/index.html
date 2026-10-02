@@ -972,15 +972,436 @@
           max-width: 180px;
         }
       }
+
+      /* Fixed sidebar: the chat list is paginated; this column never scrolls. */
+      body {
+        overflow: hidden;
+      }
+      .app {
+        min-height: 0;
+        grid-template-columns: 246px minmax(0, 1fr);
+      }
+      aside {
+        padding: 20px 16px 12px;
+        overflow: hidden;
+        min-height: 0;
+        gap: 16px;
+      }
+      .brand-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex: none;
+      }
+      .brand {
+        font-size: 20px;
+      }
+      .new-chat {
+        width: 100%;
+        text-align: left;
+        background: var(--soft);
+        color: var(--accent);
+        padding: 10px;
+        font-size: 12px;
+      }
+      .chats-section {
+        flex: 1;
+        min-height: 80px;
+        display: flex;
+        flex-direction: column;
+      }
+      .chats-section .side-heading {
+        margin-bottom: 8px;
+        flex: none;
+      }
+      .chat-list {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .chat-row {
+        display: flex;
+        align-items: center;
+        height: 43px;
+        gap: 4px;
+        border-radius: 7px;
+        margin-bottom: 2px;
+      }
+      .chat-row.current {
+        background: var(--soft);
+      }
+      .chat-row button {
+        border: 0;
+        background: transparent;
+        text-align: left;
+        padding: 10px 8px;
+        font-size: 12px;
+      }
+      .chat-row .chat-select {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+      .chat-row.current .chat-select {
+        color: var(--accent);
+      }
+      .chat-row .chat-menu {
+        padding: 7px;
+        flex: none;
+      }
+      .chat-pages {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 28px;
+        flex: none;
+        color: var(--muted);
+        font-size: 10px;
+      }
+      .icon-button {
+        width: 32px;
+        height: 32px;
+        display: inline-grid;
+        place-items: center;
+        padding: 0;
+        background: none;
+        border-color: transparent;
+        flex: none;
+        font-size: 16px;
+      }
+      .workspace-tabs {
+        margin: 0;
+        flex: none;
+      }
+      .workspace-tabs button {
+        padding: 9px 4px;
+        font-size: 12px;
+      }
+      .sidebar-status {
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+        flex: none;
+      }
+      .machine-reading {
+        margin: 4px 0;
+        line-height: 18px;
+        font-size: 10px;
+      }
+      progress {
+        display: block;
+        height: 3px;
+        margin: 4px 0 8px;
+      }
+      .lm-status-line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 4px;
+        font-size: 11px;
+        margin-top: 10px;
+      }
+      .lm-status-line > span {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        min-width: 0;
+      }
+      .lm-status-line .icon-button {
+        width: 24px;
+        height: 24px;
+      }
+      #sidebarConnectionHelp {
+        font-size: 10px;
+        margin: 4px 0 2px;
+      }
+      .side-bottom {
+        margin: 0;
+        padding: 0;
+        display: flex;
+        justify-content: space-between;
+        font-size: 9px;
+        flex: none;
+      }
+      header {
+        height: 76px;
+        padding: 12px 24px;
+        gap: 12px;
+      }
+      .model-top {
+        min-width: 0;
+        flex: 1;
+      }
+      .model-toolbar {
+        display: flex;
+        gap: 8px;
+        max-width: 460px;
+        align-items: center;
+      }
+      .model-toolbar select {
+        padding: 8px 10px;
+        min-width: 0;
+        font-size: 12px;
+      }
+      .header-model {
+        max-width: 460px;
+        margin-top: 5px;
+        font-size: 10px;
+      }
+      .header-right {
+        gap: 4px;
+      }
+      .main {
+        height: 100%;
+        min-height: 0;
+      }
+      .server-update,
+      .storage-notice {
+        flex: none;
+        padding: 9px 24px;
+        border-bottom: 1px solid var(--line);
+        background: var(--soft);
+        font-size: 12px;
+        line-height: 1.6;
+        color: var(--accent);
+      }
+      .storage-notice {
+        color: var(--muted);
+      }
+      .reply-footer {
+        justify-content: flex-start;
+        flex-wrap: wrap;
+        gap: 8px 14px;
+      }
+      .reply-footer .copy-button {
+        margin-left: auto;
+      }
+      .reply-stat {
+        color: var(--muted);
+        font-size: 10px;
+        white-space: nowrap;
+      }
+      .reply-stat strong {
+        font-weight: 500;
+        color: var(--ink);
+      }
+      .token-gain {
+        position: relative;
+        color: var(--accent);
+        font: 11px var(--mono);
+        border: 0;
+        padding: 0 !important;
+        outline-offset: 4px;
+      }
+      .token-gain.unavailable {
+        color: var(--muted);
+      }
+      .token-gain .tooltip {
+        display: none;
+        position: absolute;
+        bottom: calc(100% + 10px);
+        left: 50%;
+        transform: translateX(-50%);
+        width: 260px;
+        max-width: 70vw;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        box-shadow: 0 8px 24px #0003;
+        padding: 12px;
+        border-radius: 8px;
+        color: var(--ink);
+        font:
+          11px/1.6 -apple-system,
+          sans-serif;
+        text-align: left;
+        white-space: normal;
+        z-index: 5;
+      }
+      .token-gain:hover .tooltip,
+      .token-gain:focus .tooltip {
+        display: block;
+      }
+      .dialog-actions {
+        display: flex;
+        gap: 10px;
+        margin-top: 20px;
+      }
+      #chatTitle {
+        width: 100%;
+        padding: 12px;
+        background: var(--paper);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+      }
+      #connectionDialog .connection-guide {
+        margin: 0;
+      }
+      #connectionDialog .connection-guide > summary {
+        display: none;
+      }
+      .mobile-only,
+      .sidebar-backdrop {
+        display: none;
+      }
+      @media (max-width: 850px) {
+        .app {
+          grid-template-columns: 218px minmax(0, 1fr);
+        }
+        aside {
+          padding: 16px 12px 10px;
+        }
+      }
+      @media (max-width: 680px) {
+        .app {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          height: 100dvh;
+          min-height: 0;
+        }
+        .main {
+          height: 100%;
+          min-height: 0;
+        }
+        aside {
+          position: fixed;
+          inset: 0 auto 0 0;
+          width: min(270px, 85vw);
+          height: 100dvh;
+          z-index: 30;
+          display: flex;
+          padding: 20px 16px 12px;
+          transform: translateX(-100%);
+          border-right: 1px solid var(--line);
+          border-bottom: 0;
+        }
+        aside.open {
+          transform: translateX(0);
+        }
+        .mobile-only {
+          display: inline-grid;
+        }
+        .sidebar-backdrop {
+          display: block;
+          position: fixed;
+          inset: 0;
+          background: #0008;
+          border: 0;
+          border-radius: 0;
+          z-index: 25;
+          width: 100%;
+          height: 100%;
+        }
+        .side-bottom {
+          display: flex;
+        }
+        header {
+          height: 78px;
+          padding: 10px 12px;
+          gap: 5px;
+        }
+        .model-toolbar {
+          gap: 2px;
+        }
+        .model-toolbar select {
+          font-size: 11px;
+          padding: 8px 6px;
+        }
+        .model-toolbar .icon-button {
+          width: 28px;
+        }
+        .header-right {
+          gap: 0;
+          flex-wrap: nowrap;
+        }
+        .header-right .icon-button {
+          width: 28px;
+        }
+        .header-model {
+          max-width: 220px;
+        }
+        .performance-layout {
+          padding: 22px 18px;
+        }
+        .scroll,
+        .bottom {
+          padding-left: 18px;
+          padding-right: 18px;
+        }
+        .empty {
+          padding-top: 5vh;
+        }
+        .reply-footer {
+          gap: 8px 10px;
+        }
+        .token-gain .tooltip {
+          left: auto;
+          right: -20px;
+          transform: none;
+        }
+      }
+      @media (max-height: 600px) {
+        aside {
+          gap: 9px;
+          padding-top: 12px;
+        }
+        .sidebar-status {
+          padding-top: 8px;
+        }
+        .lm-status-line {
+          margin-top: 4px;
+        }
+      }
     </style>
   </head>
   <body>
     <div class="app">
-      <aside>
-        <div class="brand">
-          <span class="mark" aria-hidden="true">↗</span>local<span>/ llm</span>
+      <aside id="sidebar" aria-label="Conversations et état de la machine">
+        <div class="brand-row">
+          <div class="brand">
+            <span class="mark" aria-hidden="true">↗</span>local<span
+              >/ llm</span
+            >
+          </div>
+          <button
+            id="closeSidebar"
+            class="mobile-only icon-button"
+            aria-label="Fermer la barre latérale"
+          >
+            ×
+          </button>
         </div>
-        <p class="brand-note">Un moteur. Vos modèles.</p>
+        <button id="newChat" class="new-chat">＋ Nouvelle conversation</button>
+        <section class="chats-section" aria-label="Vos conversations">
+          <div class="side-heading">
+            <span class="eyebrow">Conversations</span
+            ><button
+              id="showArchives"
+              class="icon-button"
+              aria-label="Voir les conversations archivées"
+              title="Archives"
+            >
+              ▣
+            </button>
+          </div>
+          <div id="chatList" class="chat-list"></div>
+          <div class="chat-pages">
+            <button
+              id="previousChats"
+              class="icon-button"
+              aria-label="Conversations précédentes"
+            >
+              ←</button
+            ><span id="chatPage"></span
+            ><button
+              id="nextChats"
+              class="icon-button"
+              aria-label="Conversations suivantes"
+            >
+              →
+            </button>
+          </div>
+        </section>
         <nav
           class="workspace-tabs"
           role="tablist"
@@ -1003,72 +1424,9 @@
             Performances
           </button>
         </nav>
-        <section class="side-section library-section">
-          <div class="side-heading">
-            <span class="eyebrow">Vos modèles</span
-            ><button class="link-button" id="libraryButton">
-              Bibliothèque ↗
-            </button>
-          </div>
-          <label for="modelSelect" class="hidden">Modèle à charger</label
-          ><select id="modelSelect" disabled>
-            <option>Recherche des modèles…</option>
-          </select>
-          <p class="hint" id="modelHint">
-            Détection dans vos bibliothèques locales.
-          </p>
-          <div class="source-status">
-            <span id="engineDot" class="dot off"></span
-            ><span id="engineStatus">Connexion au moteur…</span>
-          </div>
-        </section>
-        <button id="settingsButton" class="settings-link">
-          Réglages de la discussion ↗
-        </button>
-        <section class="side-section lm-section">
-          <div class="side-heading">
-            <span class="eyebrow">LM Studio</span
-            ><button id="lmRefresh" class="link-button">Actualiser</button>
-          </div>
-          <div class="source-status">
-            <span id="lmDot" class="dot off"></span
-            ><span id="lmStatus">Vérification…</span>
-          </div>
-          <details id="lmGuide" class="connection-guide">
-            <summary>Comment connecter LM Studio ?</summary>
-            <ol>
-              <li>Ouvrez LM Studio sur ce PC.</li>
-              <li>
-                Ouvrez l’onglet <strong>Developer</strong> (icône terminal).
-              </li>
-              <li>
-                Activez <strong>Start server</strong>, avec l’adresse indiquée
-                ci-dessous. Le serveur doit rester sur
-                <strong>localhost</strong>.
-              </li>
-              <li>
-                Cliquez sur <strong>Actualiser</strong> ici. Les modèles
-                apparaîtront dans la bibliothèque, même s’ils ne sont pas encore
-                chargés.
-              </li>
-            </ol>
-            <p id="lmAddress">http://127.0.0.1:1234</p>
-            <p>
-              Si LM Studio exige un jeton, configurez
-              <code>LM_STUDIO_API_TOKEN</code> au lancement de l’application.
-            </p>
-            <a
-              href="https://lmstudio.ai/docs/developer/core/server"
-              target="_blank"
-              rel="noopener noreferrer"
-              >Guide officiel ↗</a
-            >
-          </details>
-        </section>
-        <section class="side-section machine-section">
-          <span class="eyebrow">Cette machine · en direct</span>
+        <div class="sidebar-status">
           <div class="machine-reading">
-            <span>RAM utilisée</span><strong id="ramLive">—</strong>
+            <span>RAM utilisée</span><strong id="ramLive">Lecture…</strong>
           </div>
           <progress
             id="ramBar"
@@ -1077,16 +1435,30 @@
             aria-label="Mémoire utilisée"
           ></progress>
           <div class="machine-reading">
-            <span>Température CPU</span><strong id="tempLive">—</strong>
+            <span>Température CPU</span><strong id="tempLive">Lecture…</strong>
           </div>
           <p class="hint hidden" id="sensorNote"></p>
-          <button id="recommendButton" class="link-button recommendation-link">
-            Modèles conseillés ↗
+          <div class="lm-status-line">
+            <span
+              ><span id="lmDot" class="dot off"></span
+              ><span id="lmStatus">LM Studio : vérification…</span></span
+            ><button
+              id="lmRefresh"
+              class="icon-button"
+              aria-label="Actualiser LM Studio"
+              title="Actualiser LM Studio"
+            >
+              ↻
+            </button>
+          </div>
+          <button id="sidebarConnectionHelp" class="link-button">
+            Comment connecter LM Studio ?
           </button>
-        </section>
+        </div>
         <div class="side-bottom">
-          100 % local · aucun téléchargement<br /><a
-            href="https://github.com/HENK0O/local-llm"
+          <span>Conversations sur cet appareil</span
+          ><a
+            href="https://github.com/HENK0O/Local-llm"
             target="_blank"
             rel="noopener noreferrer"
             >GitHub ↗</a
@@ -1095,17 +1467,59 @@
       </aside>
       <main class="main">
         <header>
-          <div>
-            <div class="title">Playground</div>
-            <div class="header-model" id="modelName">Aucun modèle chargé</div>
+          <button
+            id="openSidebar"
+            class="mobile-only icon-button"
+            aria-label="Ouvrir les conversations"
+            aria-expanded="false"
+            aria-controls="sidebar"
+          >
+            ☰
+          </button>
+          <div class="model-top">
+            <div class="model-toolbar">
+              <label for="modelSelect" class="hidden">Modèle à charger</label
+              ><select id="modelSelect" disabled>
+                <option>Recherche des modèles…</option></select
+              ><button
+                class="icon-button"
+                id="libraryButton"
+                aria-label="Ouvrir la bibliothèque de modèles"
+                title="Bibliothèque de modèles"
+              >
+                ▤
+              </button>
+            </div>
+            <div id="chatName" class="header-model">Nouvelle conversation</div>
+            <span id="modelName" class="hidden">Aucun modèle chargé</span>
           </div>
           <div class="header-right">
-            <button id="themeToggle" aria-label="Passer au thème clair">
-              ☀ Clair</button
-            ><span class="badge" id="contextBadge">CPU LOCAL</span
-            ><button class="new" id="newChat">Nouvelle conversation +</button>
+            <button
+              id="settingsButton"
+              class="icon-button"
+              aria-label="Réglages de la discussion"
+              title="Réglages"
+            >
+              ⚙</button
+            ><button
+              id="themeToggle"
+              class="icon-button"
+              aria-label="Passer au thème clair"
+              title="Changer le thème"
+            >
+              ☀
+            </button>
           </div>
         </header>
+        <div id="serverUpdate" class="server-update hidden" role="status">
+          Le serveur utilise une ancienne version. Relancez-le pour activer les
+          capteurs et la réutilisation du contexte.
+        </div>
+        <div
+          id="storageNotice"
+          class="storage-notice hidden"
+          role="status"
+        ></div>
         <section
           id="chatView"
           class="workspace-pane"
@@ -1137,7 +1551,8 @@
                   </button>
                 </div>
                 <div class="empty-note">
-                  <span class="dot"></span>Poids locaux · CPU · mesures réelles
+                  <span class="dot"></span>Conversations privées · sur cet
+                  appareil
                 </div>
               </div>
             </div>
@@ -1215,7 +1630,12 @@
               <div id="comparisonResult"></div>
             </div>
             <div class="performance-card">
-              <h2>Votre machine</h2>
+              <div class="side-heading">
+                <h2>Votre machine</h2>
+                <button id="recommendButton" class="link-button">
+                  Modèles conseillés ↗
+                </button>
+              </div>
               <p class="hint" id="hardwareHint">Lecture du matériel…</p>
               <div class="performance-metrics">
                 <div>
@@ -1241,6 +1661,11 @@
         </section>
       </main>
     </div>
+    <button
+      id="sidebarBackdrop"
+      class="sidebar-backdrop hidden"
+      aria-label="Fermer les conversations"
+    ></button>
     <dialog id="library">
       <div class="dialog-head">
         <h2>Votre bibliothèque</h2>
@@ -1262,6 +1687,16 @@
         Pour utiliser les modèles hors du moteur local-llm, activez le serveur
         local de LM Studio.
       </p>
+      <p class="hint" id="modelHint"></p>
+      <div class="source-status">
+        <span id="engineDot" class="dot off"></span
+        ><span id="engineStatus">Connexion au moteur…</span>
+      </div>
+      <p class="hint">
+        Le modèle reste chargé entre les réponses. Décharger libère les poids et
+        le cache du moteur local ; LM Studio gère sa mémoire séparément.
+      </p>
+      <button id="unloadModel" disabled>Décharger le modèle local</button>
       <div id="modelList" class="model-list"></div>
       <button id="scanModels">Rechercher à nouveau</button>
       <p class="hint">
@@ -1277,7 +1712,37 @@
           ×
         </button>
       </div>
-      <div id="connectionInstructions"></div>
+      <div id="connectionInstructions">
+        <details id="lmGuide" class="connection-guide">
+          <summary>Comment connecter LM Studio ?</summary>
+          <ol>
+            <li>Ouvrez LM Studio sur ce PC.</li>
+            <li>
+              Ouvrez l’onglet <strong>Developer</strong> (icône terminal).
+            </li>
+            <li>
+              Activez <strong>Start server</strong>, avec l’adresse indiquée
+              ci-dessous. Le serveur doit rester sur <strong>localhost</strong>.
+            </li>
+            <li>
+              Cliquez sur <strong>Actualiser</strong> ici. Les modèles
+              apparaîtront dans la bibliothèque, même s’ils ne sont pas encore
+              chargés.
+            </li>
+          </ol>
+          <p id="lmAddress">http://127.0.0.1:1234</p>
+          <p>
+            Si LM Studio exige un jeton, configurez
+            <code>LM_STUDIO_API_TOKEN</code> au lancement de l’application.
+          </p>
+          <a
+            href="https://lmstudio.ai/docs/developer/core/server"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Guide officiel ↗</a
+          >
+        </details>
+      </div>
     </dialog>
     <dialog id="settings">
       <div class="dialog-head">
@@ -1350,6 +1815,178 @@
         <p id="recommendMethod"></p>
       </details>
     </dialog>
+    <dialog id="chatOptions">
+      <div class="dialog-head">
+        <h2>Cette conversation</h2>
+        <button
+          id="closeChatOptions"
+          aria-label="Fermer les options de conversation"
+        >
+          ×
+        </button>
+      </div>
+      <label class="setting-label" for="chatTitle">Titre</label
+      ><input id="chatTitle" type="text" maxlength="80" />
+      <div class="dialog-actions">
+        <button id="saveChatTitle">Enregistrer le titre</button
+        ><button id="archiveChat">Archiver</button>
+      </div>
+      <p class="hint">
+        Les conversations archivées restent sur cet appareil et peuvent être
+        restaurées.
+      </p>
+    </dialog>
+    <dialog id="archives">
+      <div class="dialog-head">
+        <h2>Conversations archivées</h2>
+        <button id="closeArchives" aria-label="Fermer les archives">×</button>
+      </div>
+      <div id="archiveList" class="model-list"></div>
+      <button id="exportChats">Exporter tout l’historique</button>
+    </dialog>
+    <script id="conversation-store">
+      "use strict";
+
+      // Browser-local conversations. No chat text is stored in the source repository.
+      class ConversationStore {
+        constructor(storage, key = "local-llm-conversations-v1") {
+          this.storage = storage;
+          this.key = key;
+          this.chats = [];
+          this.activeId = null;
+          this.error = null;
+          try {
+            const saved = JSON.parse(storage.getItem(key) || "null");
+            if (saved?.version === 1 && Array.isArray(saved.chats)) {
+              const seen = new Set();
+              this.chats = saved.chats.slice(0, 100).filter((chat) => {
+                if (
+                  !chat ||
+                  typeof chat.id !== "string" ||
+                  seen.has(chat.id) ||
+                  typeof chat.title !== "string" ||
+                  !Array.isArray(chat.messages) ||
+                  chat.messages.length > 500
+                )
+                  return false;
+                if (
+                  !chat.messages.every(
+                    (message) =>
+                      message &&
+                      ["user", "assistant"].includes(message.role) &&
+                      typeof message.content === "string",
+                  )
+                )
+                  return false;
+                seen.add(chat.id);
+                return true;
+              });
+              this.activeId = this.chats.some(
+                (c) => c.id === saved.activeId && !c.archived,
+              )
+                ? saved.activeId
+                : this.visible()[0]?.id || null;
+            }
+          } catch {
+            this.error =
+              "Historique local indisponible. Cette session reste utilisable.";
+          }
+        }
+
+        get active() {
+          return this.chats.find((chat) => chat.id === this.activeId) || null;
+        }
+
+        visible() {
+          return this.chats
+            .filter((chat) => !chat.archived)
+            .sort((a, b) => b.updatedAt - a.updatedAt);
+        }
+
+        create(modelKey, modelName) {
+          if (this.chats.length >= 100) {
+            this.error =
+              "Le stockage contient déjà 100 conversations. Exportez votre historique avant d’en ajouter davantage.";
+            return null;
+          }
+          const chat = {
+            id: crypto.randomUUID(),
+            title: "Nouvelle conversation",
+            customTitle: false,
+            modelKey: modelKey || null,
+            modelName: modelName || null,
+            draft: "",
+            messages: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            archived: false,
+          };
+          this.chats.push(chat);
+          this.activeId = chat.id;
+          this.save();
+          return chat;
+        }
+
+        select(id) {
+          const chat = this.chats.find((c) => c.id === id && !c.archived);
+          if (!chat) return null;
+          this.activeId = chat.id;
+          this.save();
+          return chat;
+        }
+
+        touch(chat) {
+          chat.updatedAt = Date.now();
+          if (!chat.customTitle) {
+            const question = chat.messages.find((m) => m.role === "user");
+            if (question)
+              chat.title = question.content
+                .trim()
+                .replace(/\s+/g, " ")
+                .slice(0, 80);
+          }
+          this.save();
+        }
+
+        archive(id) {
+          const chat = this.chats.find((c) => c.id === id);
+          if (!chat) return;
+          chat.archived = true;
+          if (this.activeId === id)
+            this.activeId = this.visible()[0]?.id || null;
+          this.save();
+        }
+
+        restore(id) {
+          const chat = this.chats.find((c) => c.id === id);
+          if (!chat) return;
+          chat.archived = false;
+          chat.updatedAt = Date.now();
+          this.save();
+        }
+
+        save() {
+          try {
+            this.storage.setItem(
+              this.key,
+              JSON.stringify({
+                version: 1,
+                activeId: this.activeId,
+                chats: this.chats,
+              }),
+            );
+            this.error = null;
+            return true;
+          } catch {
+            this.error =
+              "Historique conservé pour cette session, mais le navigateur ne permet pas sa sauvegarde. Exportez-le avant de fermer la page.";
+            return false;
+          }
+        }
+      }
+
+      if (typeof module !== "undefined") module.exports = { ConversationStore };
+    </script>
     <script>
       "use strict";
       const $ = (id) => document.getElementById(id);
@@ -1364,11 +2001,34 @@
         catalogData = { models: [], roots: [] };
       let completions = [],
         measuring = false,
-        systemPolling = false;
-      const ready = () => activeLM !== null || info.loaded;
+        systemPolling = false,
+        systemRetryAt = 0;
+      let browserStorage;
+      try {
+        browserStorage = localStorage;
+      } catch {
+        browserStorage = {
+          getItem: () => null,
+          setItem: () => {
+            throw new Error("Storage unavailable");
+          },
+        };
+      }
+      const conversations = new ConversationStore(browserStorage);
+      const liveCompletions = new Set();
+      let chatPage = 0,
+        chatPageSize = 6,
+        editingChatId = null,
+        draftTimer;
+      const currentModelKey = () =>
+        activeLM ? "lmstudio:" + activeLM.id : info.current_id || null;
+      const ready = () =>
+        !!(activeLM || info.loaded) &&
+        (!conversations.active?.modelKey ||
+          conversations.active.modelKey === currentModelKey());
       function updateTheme() {
         const dark = document.documentElement.dataset.theme === "dark";
-        $("themeToggle").textContent = dark ? "☀ Clair" : "☾ Sombre";
+        $("themeToggle").textContent = dark ? "☀" : "☾";
         $("themeToggle").setAttribute(
           "aria-label",
           dark ? "Passer au thème clair" : "Passer au thème sombre",
@@ -1408,8 +2068,13 @@
           signal,
         });
         const data = await r.json();
-        if (!r.ok || (data.error && typeof data.error === "object"))
-          throw new Error(data.error?.message || "Erreur HTTP " + r.status);
+        if (!r.ok || (data.error && typeof data.error === "object")) {
+          const error = new Error(
+            data.error?.message || "Erreur HTTP " + r.status,
+          );
+          error.status = r.status;
+          throw error;
+        }
         return data;
       }
       function setBusy(value) {
@@ -1424,6 +2089,11 @@
         $("modelSelect").disabled =
           value || (!catalog.length && !lmCatalog.length);
         $("newChat").disabled = value;
+        $("unloadModel").disabled =
+          value || !info.loaded || !info.features?.includes("model_unload");
+        document
+          .querySelectorAll("#chatList button")
+          .forEach((b) => (b.disabled = value));
         $("completionSelect").disabled = value || !completions.length;
         $("baseline").disabled = value;
         $("lmModel").disabled = value || !lmCatalog.length;
@@ -1438,12 +2108,16 @@
         info = data;
         $("modelName").textContent = data.model;
         $("engineStatus").textContent = data.loaded
-          ? data.engine.includes("native")
-            ? "local-llm · CPU"
-            : "local-llm · CPU"
+          ? "Modèle local chargé en mémoire"
           : "Choisissez un modèle";
         $("engineDot").classList.toggle("off", !data.loaded);
-        $("contextBadge").textContent = "CPU LOCAL";
+        $("serverUpdate").classList.toggle(
+          "hidden",
+          Boolean(
+            data.features?.includes("prefix_cache") &&
+              data.features?.includes("system_telemetry"),
+          ),
+        );
         $("composerInfo").textContent = data.loaded
           ? "local-llm · sur cette machine"
           : "Chargez un modèle pour commencer";
@@ -1461,10 +2135,10 @@
         catalogData = data;
         catalog = data.models;
         $("modelSelect").replaceChildren();
-        if (!catalog.some((m) => m.compatible))
-          $("modelSelect").append(
-            node("option", "", "Aucun modèle compatible"),
-          );
+        const placeholder = node("option", "", "Choisir un modèle…");
+        placeholder.value = "";
+        placeholder.disabled = true;
+        $("modelSelect").append(placeholder);
         for (const m of catalog) {
           const o = node("option", "", m.name);
           o.value = m.id;
@@ -1572,49 +2246,46 @@
           busy || (!catalog.length && !lmCatalog.length);
       }
       async function loadModel(id) {
-        if (busy) return;
-        if (id.startsWith("lmstudio:")) {
-          activeLM = lmCatalog.find((m) => m.id === id.slice(9)) || null;
-          if (!activeLM) return;
-          history = [];
-          clearMeasurements();
-          epoch++;
-          $("conversation").replaceChildren(emptyBackup.cloneNode(true));
-          bindSuggestions();
-          $("modelName").textContent = activeLM.name;
-          $("engineStatus").textContent = "Exécution par LM Studio";
-          $("engineDot").classList.remove("off");
-          $("contextBadge").textContent = "LM STUDIO";
-          $("composerInfo").textContent = "LM Studio · sur cette machine";
-          $("notice").textContent =
-            "LM Studio chargera le modèle si nécessaire. Le premier démarrage peut prendre du temps.";
-          renderCatalog(catalogData);
-          setBusy(false);
-          $("library").close();
-          $("prompt").focus();
-          return;
-        }
+        if (busy || !id) return false;
         setBusy(true);
-        $("notice").textContent = "Chargement du modèle en mémoire…";
+        $("notice").textContent = "Chargement du modèle…";
         try {
-          const loaded = await api("/v1/local-models/load", { id });
-          activeLM = null;
-          showInfo(loaded);
-          history = [];
-          clearMeasurements();
-          $("conversation").replaceChildren(
-            $("empty") || emptyBackup.cloneNode(true),
-          );
-          bindSuggestions();
-          renderCatalog(await api("/v1/local-models"));
+          if (id.startsWith("lmstudio:")) {
+            const model = lmCatalog.find((m) => m.id === id.slice(9));
+            if (!model)
+              throw new Error(
+                "Ce modèle n’est pas disponible via LM Studio. Actualisez sa connexion.",
+              );
+            activeLM = model;
+            $("modelName").textContent = model.name;
+            $("composerInfo").textContent = "LM Studio · sur cette machine";
+            $("engineStatus").textContent = "Exécution par LM Studio";
+          } else {
+            const changed = id !== info.current_id;
+            const loaded = await api("/v1/local-models/load", { id });
+            activeLM = null;
+            if (changed) liveCompletions.clear();
+            showInfo(loaded);
+            catalogData = await api("/v1/local-models");
+          }
+          const chat = conversations.active;
+          if (chat) {
+            chat.modelKey = id;
+            chat.modelName = activeLM ? activeLM.name : info.model;
+            conversations.save();
+          }
+          renderCatalog(catalogData);
+          updateStorageNotice();
+          renderResponsePerformance();
           $("library").close();
-          $("notice").textContent = "Modèle prêt.";
-          $("prompt").focus();
-        } catch (e) {
-          $("notice").textContent = e.message;
-          $("modelSelect").value = activeLM
-            ? "lmstudio:" + activeLM.id
-            : info.current_id || "";
+          $("notice").textContent = activeLM
+            ? "LM Studio chargera le modèle si nécessaire. L’historique est conservé."
+            : "Modèle prêt. L’historique est conservé.";
+          return true;
+        } catch (error) {
+          $("notice").textContent = error.message;
+          $("modelSelect").value = currentModelKey() || "";
+          return false;
         } finally {
           setBusy(false);
         }
@@ -1628,12 +2299,9 @@
           $("lmAddress").textContent = data.url || "http://127.0.0.1:1234";
           if (activeLM && !lmCatalog.some((m) => m.id === activeLM.id)) {
             activeLM = null;
-            history = [];
-            clearMeasurements();
-            epoch++;
-            $("conversation").replaceChildren(emptyBackup.cloneNode(true));
-            bindSuggestions();
             showInfo(info);
+            $("notice").textContent =
+              "Le modèle de cette conversation n’est plus disponible dans LM Studio. Son historique est conservé.";
           }
           $("libraryConnection").textContent = data.available
             ? "Serveur LM Studio connecté : tous ses modèles sont disponibles ci-dessous."
@@ -1685,6 +2353,7 @@
           measuring ||
           !response ||
           response.stats.backend === "lmstudio" ||
+          !liveCompletions.has(response.id) ||
           ($("baseline").value === "lmstudio" && $("lmOption").disabled);
       }
       function selectedCompletion() {
@@ -1712,7 +2381,6 @@
         $("performanceView").classList.toggle("hidden", chat);
         $("chatTab").setAttribute("aria-selected", String(chat));
         $("performanceTab").setAttribute("aria-selected", String(!chat));
-        $("newChat").classList.toggle("hidden", !chat);
       }
       function syncLength() {
         const custom = $("responseLength").value === "custom",
@@ -1757,16 +2425,62 @@
         const s = $("scroll");
         s.scrollTop = s.scrollHeight;
       }
-      function statsView(wrap, response) {
+      function appendReplyFooter(wrap, response) {
         const footer = node("div", "reply-footer");
-        footer.append(
-          node(
-            "span",
-            "metric-speed",
-            fmt(response.observed_speed) + " tok/s · réponse complète",
-          ),
+        for (const [count, label] of [
+          [response.usage?.prompt_tokens, "input tok"],
+          [response.usage?.completion_tokens, "output tok"],
+        ]) {
+          const stat = node("span", "reply-stat");
+          stat.append(
+            node(
+              "strong",
+              "",
+              Number.isInteger(count) ? count.toLocaleString("fr") : "—",
+            ),
+            document.createTextNode(" " + label),
+          );
+          footer.append(stat);
+        }
+        const speed = node(
+          "span",
+          "reply-stat",
+          fmt(response.observed_speed) + " tok/s",
         );
-        const copy = node("button", "", "Copier");
+        speed.title =
+          "Débit global : tokens générés / durée complète de la requête, préparation et transport inclus.";
+        footer.append(speed);
+        const reused = response.stats?.reused_prompt_tokens;
+        const known = Number.isInteger(reused) && reused >= 0;
+        const gain = node(
+          "button",
+          "token-gain" + (known ? "" : " unavailable"),
+          known ? "+" + reused.toLocaleString("fr") + " tok" : "— tok",
+        );
+        gain.type = "button";
+        gain.setAttribute(
+          "aria-label",
+          known
+            ? reused + " tokens de contexte réutilisés grâce à l’optimisation"
+            : "Gain de l’optimisation non mesuré",
+        );
+        const tip = node(
+          "span",
+          "tooltip",
+          known
+            ? "Tokens gagnés grâce à l’optimisation de local-llm : " +
+                reused +
+                " tokens de contexte déjà calculés ont été réutilisés. Cela évite leur recalcul avant cette réponse ; ce ne sont pas des tokens de sortie supplémentaires ni un gain en tok/s face à LM Studio."
+            : response.stats?.backend === "lmstudio"
+              ? "Cette réponse est exécutée par LM Studio. Aucun gain du moteur local-llm n’est mesuré."
+              : "Cette version du serveur ne mesure pas la réutilisation du contexte. Relancez-le pour activer cette mesure.",
+        );
+        tip.id = "gain-" + response.id;
+        tip.setAttribute("role", "tooltip");
+        gain.setAttribute("aria-describedby", tip.id);
+        gain.append(tip);
+        footer.append(gain);
+        const copy = node("button", "copy-button", "Copier");
         copy.type = "button";
         copy.onclick = async () => {
           try {
@@ -1778,16 +2492,26 @@
         };
         footer.append(copy);
         wrap.append(footer);
-        completions.unshift(response);
-        completions = completions.slice(0, 8);
+      }
+      function populateMeasurements() {
         $("completionSelect").replaceChildren();
         for (const item of completions) {
           const option = node("option", "", item.question.slice(0, 65));
           option.value = item.id;
           $("completionSelect").append(option);
         }
-        $("completionSelect").disabled = false;
-        renderResponsePerformance();
+        $("completionSelect").disabled = busy || !completions.length;
+        if (completions.length) renderResponsePerformance();
+        else clearMeasurements();
+      }
+      function statsView(wrap, response) {
+        appendReplyFooter(wrap, response);
+        liveCompletions.add(response.id);
+        while (liveCompletions.size > 8)
+          liveCompletions.delete(liveCompletions.values().next().value);
+        completions.unshift(response);
+        completions = completions.slice(0, 8);
+        populateMeasurements();
       }
       function renderResponsePerformance() {
         const item = selectedCompletion();
@@ -1846,7 +2570,27 @@
               "Cache KV : " + bytes(item.stats.kv_cache_bytes || 0) + ".",
             ),
           );
+        const reused = item.stats.reused_prompt_tokens;
+        if (Number.isInteger(reused))
+          details.append(
+            node(
+              "p",
+              "",
+              reused +
+                " tokens d’entrée réutilisés ; " +
+                (item.usage.prompt_tokens - reused) +
+                " tokens d’entrée réellement recalculés.",
+            ),
+          );
         card.append(details);
+        if (!liveCompletions.has(item.id))
+          card.append(
+            node(
+              "p",
+              "hint",
+              "Statistiques conservées dans cette conversation. Un nouvel essai est nécessaire pour lancer une comparaison sur ce serveur.",
+            ),
+          );
         $("comparisonResult").replaceChildren();
         updateMeasureButton();
       }
@@ -1961,13 +2705,24 @@
         }
       }
       async function pollSystem() {
-        if (systemPolling || document.hidden) return;
+        if (systemPolling || document.hidden || Date.now() < systemRetryAt)
+          return;
         systemPolling = true;
         try {
-          const data = await api("/v1/system"),
-            known =
-              Number.isFinite(data.memory_used_bytes) &&
-              data.memory_total_bytes > 0;
+          const data = await api("/v1/system");
+          if (systemRetryAt) {
+            const health = await api("/health");
+            info.features = health.features;
+            $("serverUpdate").classList.toggle(
+              "hidden",
+              Boolean(health.features?.includes("prefix_cache")),
+            );
+            systemRetryAt = 0;
+            setBusy(busy);
+          }
+          const known =
+            Number.isFinite(data.memory_used_bytes) &&
+            data.memory_total_bytes > 0;
           const ram = known
             ? bytes(data.memory_used_bytes) +
               " / " +
@@ -2002,11 +2757,22 @@
           ]
             .filter(Boolean)
             .join(" ");
-        } catch {
-          $("ramLive").textContent = "Hors ligne";
-          $("tempLive").textContent = "—";
-          $("systemSample").textContent =
-            "Lecture indisponible. Les anciennes valeurs ne sont plus en direct.";
+        } catch (error) {
+          const outdated = error.status === 404;
+          if (outdated) systemRetryAt = Date.now() + 15000;
+          $("serverUpdate").classList.toggle(
+            "hidden",
+            Boolean(!outdated && info.features?.includes("system_telemetry")),
+          );
+          $("ramLive").textContent = outdated
+            ? "Serveur à relancer"
+            : "Indisponible";
+          $("tempLive").textContent = outdated
+            ? "Serveur à relancer"
+            : "Indisponible";
+          $("systemSample").textContent = outdated
+            ? "Le serveur utilise l’ancienne version. Arrêtez-le puis relancez-le pour activer les relevés."
+            : "Lecture indisponible. Vérifiez que le serveur est lancé.";
           $("ramDetail").textContent = "—";
           $("tempDetail").textContent = "—";
           $("processMemory").textContent = "—";
@@ -2030,9 +2796,25 @@
           $("maxTokens").reportValidity();
           return;
         }
+        const chat = conversations.active;
+        if (!chat) return;
+        if (chat.messages.length >= 498) {
+          $("notice").textContent =
+            "Cette conversation est très longue. Commencez une nouvelle discussion pour poursuivre.";
+          return;
+        }
         const turn = ++epoch;
         const started = performance.now();
+        history = contextMessages(chat);
         history.push({ role: "user", content: text });
+        const userMessage = { role: "user", content: text };
+        chat.messages.push(userMessage);
+        chat.draft = "";
+        conversations.touch(chat);
+        chatPage = 0;
+        renderChatList();
+        $("chatName").textContent = chat.title;
+        updateStorageNotice();
         message("user", text);
         const view = message("assistant", "");
         $("prompt").value = "";
@@ -2097,7 +2879,7 @@
           view.content.classList.remove("pending");
           history.push({ role: "assistant", content: answer });
           const wall = (performance.now() - started) / 1000;
-          statsView(view.wrap, {
+          const measurement = {
             id: final.id,
             stats: final.local_llm,
             usage: final.usage || {},
@@ -2108,7 +2890,17 @@
                 : null,
             text: answer,
             question: text,
+          };
+          chat.messages.push({
+            role: "assistant",
+            content: answer,
+            modelLabel: activeLM ? "LM Studio" : "local-llm",
+            metrics: measurement,
           });
+          statsView(view.wrap, measurement);
+          conversations.touch(chat);
+          renderChatList();
+          updateStorageNotice();
           $("notice").textContent = "";
           if (final.choices?.[0]?.finish_reason === "length")
             $("notice").textContent =
@@ -2118,7 +2910,17 @@
           if (final) {
             $("notice").textContent = "Réponse terminée.";
           } else {
-            history.pop();
+            userMessage.inContext = !!answer;
+            const note =
+              e.name === "AbortError" ? "Génération interrompue." : e.message;
+            chat.messages.push({
+              role: "assistant",
+              content: answer,
+              inContext: !!answer,
+              note,
+            });
+            conversations.touch(chat);
+            updateStorageNotice();
             view.wrap.append(
               node(
                 "p",
@@ -2146,6 +2948,274 @@
           };
         });
       }
+
+      function contextMessages(chat) {
+        return chat.messages
+          .filter((m) => m.inContext !== false && m.content)
+          .map(({ role, content }) => ({ role, content }));
+      }
+      function updateStorageNotice() {
+        $("storageNotice").textContent = conversations.error || "";
+        $("storageNotice").classList.toggle("hidden", !conversations.error);
+      }
+      function saveDraft() {
+        clearTimeout(draftTimer);
+        if (conversations.active)
+          conversations.active.draft = $("prompt").value;
+        conversations.save();
+        updateStorageNotice();
+      }
+      function renderChatList() {
+        const chats = conversations.visible();
+        const available = $("chatList").clientHeight;
+        chatPageSize = Math.max(
+          1,
+          Math.min(12, Math.floor(available / 45) || 1),
+        );
+        chatPage = Math.min(
+          chatPage,
+          Math.max(0, Math.ceil(chats.length / chatPageSize) - 1),
+        );
+        $("chatList").replaceChildren();
+        for (const chat of chats.slice(
+          chatPage * chatPageSize,
+          (chatPage + 1) * chatPageSize,
+        )) {
+          const row = node(
+            "div",
+            "chat-row" + (chat.id === conversations.activeId ? " current" : ""),
+          );
+          const select = node("button", "chat-select", chat.title);
+          select.title = chat.title;
+          select.disabled = busy;
+          select.setAttribute(
+            "aria-current",
+            chat.id === conversations.activeId ? "true" : "false",
+          );
+          select.onclick = () => activateChat(chat.id);
+          const menu = node("button", "chat-menu", "⋯");
+          menu.disabled = busy;
+          menu.setAttribute("aria-label", "Options : " + chat.title);
+          menu.onclick = () => {
+            editingChatId = chat.id;
+            $("chatTitle").value = chat.title;
+            $("chatOptions").showModal();
+          };
+          row.append(select, menu);
+          $("chatList").append(row);
+        }
+        $("chatPage").textContent = chats.length
+          ? chatPage * chatPageSize +
+            1 +
+            "–" +
+            Math.min((chatPage + 1) * chatPageSize, chats.length) +
+            " / " +
+            chats.length
+          : "Aucune conversation";
+        $("previousChats").disabled = chatPage === 0;
+        $("nextChats").disabled = (chatPage + 1) * chatPageSize >= chats.length;
+      }
+      function renderChat() {
+        const chat = conversations.active;
+        if (!chat) return;
+        history = contextMessages(chat);
+        $("conversation").replaceChildren();
+        if (!chat.messages.length) {
+          $("conversation").append(emptyBackup.cloneNode(true));
+          bindSuggestions();
+        }
+        for (const entry of chat.messages) {
+          const view = message(entry.role, entry.content);
+          view.content.classList.remove("pending");
+          if (entry.modelLabel && entry.role === "assistant")
+            view.wrap.querySelector(
+              ".message-label span:last-child",
+            ).textContent = entry.modelLabel;
+          if (entry.metrics?.stats && entry.metrics?.usage)
+            appendReplyFooter(view.wrap, entry.metrics);
+          if (entry.note) view.wrap.append(node("p", "error", entry.note));
+        }
+        completions = chat.messages
+          .filter((m) => m.metrics?.stats && m.metrics?.usage)
+          .map((m) => m.metrics)
+          .reverse()
+          .slice(0, 8);
+        populateMeasurements();
+        $("prompt").value = chat.draft || "";
+        $("chatName").textContent = chat.title;
+        $("notice").textContent = "";
+        renderChatList();
+        setBusy(busy);
+        scrollEnd();
+      }
+      async function activateChat(id) {
+        if (busy) return;
+        saveDraft();
+        const chat = conversations.select(id);
+        if (!chat) return;
+        epoch++;
+        setWorkspace("chat");
+        renderChat();
+        if (chat.modelKey && chat.modelKey !== currentModelKey())
+          await loadModel(chat.modelKey);
+        else if (!chat.modelKey && currentModelKey()) {
+          chat.modelKey = currentModelKey();
+          chat.modelName = activeLM ? activeLM.name : info.model;
+          conversations.save();
+        }
+        setBusy(false);
+        closeSidebar();
+      }
+      function newConversation() {
+        if (busy) return;
+        saveDraft();
+        if (
+          !conversations.create(
+            currentModelKey(),
+            activeLM ? activeLM.name : info.model,
+          )
+        ) {
+          updateStorageNotice();
+          return;
+        }
+        epoch++;
+        chatPage = 0;
+        setWorkspace("chat");
+        renderChat();
+        closeSidebar();
+        $("prompt").focus();
+      }
+      function closeSidebar() {
+        $("sidebar").classList.remove("open");
+        $("sidebarBackdrop").classList.add("hidden");
+        $("openSidebar").setAttribute("aria-expanded", "false");
+        $("sidebar").inert = matchMedia("(max-width: 680px)").matches;
+        document.querySelector("main").inert = false;
+      }
+      $("openSidebar").onclick = () => {
+        $("sidebar").inert = false;
+        document.querySelector("main").inert = true;
+        $("sidebar").classList.add("open");
+        $("sidebarBackdrop").classList.remove("hidden");
+        $("openSidebar").setAttribute("aria-expanded", "true");
+        $("closeSidebar").focus();
+        renderChatList();
+      };
+      $("closeSidebar").onclick = closeSidebar;
+      $("sidebarBackdrop").onclick = closeSidebar;
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && $("sidebar").classList.contains("open")) {
+          closeSidebar();
+          $("openSidebar").focus();
+        }
+      });
+      matchMedia("(max-width: 680px)").addEventListener("change", closeSidebar);
+      new ResizeObserver(renderChatList).observe($("chatList"));
+      $("previousChats").onclick = () => {
+        chatPage--;
+        renderChatList();
+      };
+      $("nextChats").onclick = () => {
+        chatPage++;
+        renderChatList();
+      };
+      $("prompt").addEventListener("input", () => {
+        clearTimeout(draftTimer);
+        draftTimer = setTimeout(saveDraft, 300);
+      });
+      window.addEventListener("pagehide", saveDraft);
+      $("closeChatOptions").onclick = () => $("chatOptions").close();
+      $("saveChatTitle").onclick = () => {
+        const chat = conversations.chats.find((c) => c.id === editingChatId);
+        const title = $("chatTitle").value.trim();
+        if (!chat || !title) return;
+        chat.title = title;
+        chat.customTitle = true;
+        conversations.save();
+        renderChatList();
+        $("chatName").textContent =
+          conversations.active?.title || "Nouvelle conversation";
+        $("chatOptions").close();
+        updateStorageNotice();
+      };
+      $("archiveChat").onclick = async () => {
+        if (busy) return;
+        const wasActive = conversations.activeId === editingChatId;
+        saveDraft();
+        conversations.archive(editingChatId);
+        $("chatOptions").close();
+        if (!conversations.active) newConversation();
+        else if (wasActive) {
+          renderChat();
+          await activateChat(conversations.activeId);
+        }
+        renderChatList();
+      };
+      $("showArchives").onclick = () => {
+        $("archiveList").replaceChildren();
+        for (const chat of conversations.chats.filter((c) => c.archived)) {
+          const row = node("div", "model-row");
+          row.append(node("strong", "", chat.title));
+          const restore = node("button", "", "Restaurer");
+          restore.onclick = () => {
+            conversations.restore(chat.id);
+            $("archives").close();
+            chatPage = 0;
+            renderChatList();
+            updateStorageNotice();
+          };
+          row.append(restore);
+          $("archiveList").append(row);
+        }
+        if (!$("archiveList").children.length)
+          $("archiveList").append(
+            node("p", "hint", "Aucune conversation archivée."),
+          );
+        $("archives").showModal();
+      };
+      $("closeArchives").onclick = () => $("archives").close();
+      $("exportChats").onclick = () => {
+        saveDraft();
+        const url = URL.createObjectURL(
+          new Blob(
+            [
+              JSON.stringify(
+                {
+                  version: 1,
+                  activeId: conversations.activeId,
+                  chats: conversations.chats,
+                },
+                null,
+                2,
+              ),
+            ],
+            { type: "application/json" },
+          ),
+        );
+        const link = node("a");
+        link.href = url;
+        link.download = "local-llm-conversations.json";
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      };
+      $("unloadModel").onclick = async () => {
+        if (busy) return;
+        setBusy(true);
+        try {
+          const data = await api("/v1/local-models/unload", {});
+          liveCompletions.clear();
+          showInfo(data);
+          catalogData = await api("/v1/local-models");
+          renderCatalog(catalogData);
+          $("notice").textContent =
+            "Modèle local déchargé. Vos conversations restent enregistrées.";
+        } catch (error) {
+          $("notice").textContent = error.message;
+        } finally {
+          setBusy(false);
+        }
+      };
+
       $("send").addEventListener("click", (e) => {
         if (busy) {
           e.preventDefault();
@@ -2162,22 +3232,20 @@
       $("responseLength").onchange = syncLength;
       $("settingsButton").onclick = () => $("settings").showModal();
       $("closeSettings").onclick = () => $("settings").close();
-      $("chatTab").onclick = () => setWorkspace("chat");
-      $("performanceTab").onclick = () => setWorkspace("performance");
+      $("chatTab").onclick = () => {
+        setWorkspace("chat");
+        closeSidebar();
+      };
+      $("performanceTab").onclick = () => {
+        setWorkspace("performance");
+        closeSidebar();
+      };
       $("completionSelect").onchange = renderResponsePerformance;
       $("runComparison").onclick = comparison;
-      $("connectionHelp").onclick = () => {
-        $("connectionInstructions").replaceChildren(
-          ...Array.from($("lmGuide").children)
-            .filter((e) => e.tagName !== "SUMMARY")
-            .map((e) => {
-              const copy = e.cloneNode(true);
-              copy.removeAttribute("id");
-              return copy;
-            }),
-        );
+      $("lmGuide").open = true;
+      $("connectionHelp").onclick = () => $("connectionDialog").showModal();
+      $("sidebarConnectionHelp").onclick = () =>
         $("connectionDialog").showModal();
-      };
       $("closeConnection").onclick = () => $("connectionDialog").close();
       $("temperature").oninput = () =>
         ($("temperatureValue").value = Number($("temperature").value).toFixed(
@@ -2203,15 +3271,7 @@
           await lmRefresh();
         }
       };
-      $("newChat").onclick = () => {
-        if (busy) return;
-        epoch++;
-        history = [];
-        $("conversation").replaceChildren(emptyBackup.cloneNode(true));
-        bindSuggestions();
-        $("notice").textContent = "";
-        $("prompt").focus();
-      };
+      $("newChat").onclick = newConversation;
       $("modelSearch").oninput = () => renderCatalog(catalogData);
       $("recommendButton").onclick = () => $("recommendations").showModal();
       $("closeRecommendations").onclick = () => $("recommendations").close();
@@ -2298,6 +3358,10 @@
       recommendations();
       syncLength();
       baselineChanged();
+      closeSidebar();
+      if (!conversations.active) conversations.create(null, null);
+      renderChat();
+      updateStorageNotice();
       pollSystem();
       setInterval(pollSystem, 3000);
       document.addEventListener("visibilitychange", () => {
@@ -2307,10 +3371,20 @@
         try {
           showInfo(await api("/health"));
           renderCatalog(await api("/v1/local-models"));
-          lmRefresh();
-        } catch (e) {
+          await lmRefresh();
+          const chat = conversations.active;
+          if (chat?.modelKey && chat.modelKey !== currentModelKey())
+            await loadModel(chat.modelKey);
+          else if (chat && !chat.modelKey) {
+            chat.modelKey = currentModelKey();
+            chat.modelName = info.model;
+            conversations.save();
+          }
+          setBusy(false);
+          updateStorageNotice();
+        } catch (error) {
           $("notice").textContent =
-            "Connexion au serveur impossible : " + e.message;
+            "Connexion au serveur impossible : " + error.message;
           $("engineStatus").textContent = "Moteur indisponible";
         }
       })();

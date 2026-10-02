@@ -36,6 +36,10 @@ class StubChatService:
         return {"loaded": True, "model": "test-model"}
 
     @staticmethod
+    def unload_model():
+        return {"loaded": False, "model": "Aucun modèle chargé", "retained_cache_bytes": 0}
+
+    @staticmethod
     def compare_completion(payload):
         if payload.get("completion_id") != "test-completion":
             raise ValueError("unknown completion")
@@ -47,13 +51,13 @@ class StubChatService:
 
     @staticmethod
     def complete(request, completion_id=None):
-        stats = GenerationStats(3, 2, 0.1, 0.1, 128)
+        stats = GenerationStats(3, 2, 0.1, 0.1, 128, reused_prompt_tokens=2)
         return CompletionResult("Bonjour", [7, 2], 3, stats, "stop")
 
     @staticmethod
     def iter_completion(request, completion_id=None):
         yield StreamPiece("Bon", 7, None)
-        yield StreamPiece("jour", 2, GenerationStats(3, 2, 0.1, 0.1, 128))
+        yield StreamPiece("jour", 2, GenerationStats(3, 2, 0.1, 0.1, 128, reused_prompt_tokens=2))
 
     @staticmethod
     def benchmark(payload):
@@ -166,6 +170,13 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["memory_used_bytes"], 123)
         self.assertIsNone(json.loads(body)["cpu_temperature_celsius"])
 
+    def test_unload_is_available_and_rejects_cross_origin_requests(self):
+        status, _, body = self.request("POST", "/v1/local-models/unload", {})
+        self.assertEqual(status, 200)
+        self.assertFalse(json.loads(body)["loaded"])
+        status, _, _ = self.request("POST", "/v1/local-models/unload", {}, {"Origin": "http://example.com"})
+        self.assertEqual(status, 403)
+
     def test_health_and_models(self):
         status, content_type, body = self.request("GET", "/")
         self.assertEqual(status, 200)
@@ -224,6 +235,7 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(result["usage"]["total_tokens"], 5)
         self.assertEqual(result["local_llm"]["kv_cache_bytes"], 128)
         self.assertEqual(result["local_llm"]["backend"], "local")
+        self.assertEqual(result["local_llm"]["reused_prompt_tokens"], 2)
 
     def test_backend_choice_is_exposed_in_response(self):
         status, _, body = self.request("POST", "/v1/chat/completions", {
@@ -246,6 +258,7 @@ class HTTPServerTests(unittest.TestCase):
         self.assertIn('"content": "jour"', text)
         self.assertIn('"decode_tokens_per_second"', text)
         self.assertIn('"backend": "local"', text)
+        self.assertIn('"reused_prompt_tokens": 2', text)
         self.assertTrue(text.endswith("data: [DONE]\n\n"))
 
     def test_benchmark(self):
@@ -356,6 +369,7 @@ class LMStudioProxyTests(unittest.TestCase):
             self.assertIn('Salut', body)
             chunks = [json.loads(line[6:]) for line in body.splitlines() if line.startswith('data: {')]
             self.assertFalse(chunks[-1]['local_llm']['optimized'])
+            self.assertIsNone(chunks[-1]['local_llm']['reused_prompt_tokens'])
             self.assertGreater(chunks[-1]['local_llm']['decode_tokens_per_second'], 0)
             self.assertEqual(chunks[-1]['local_llm']['timing_kind'], 'observed_total')
             self.assertEqual(chunks[-1]['usage']['completion_tokens'], 2)

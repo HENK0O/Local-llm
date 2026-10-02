@@ -25,3 +25,20 @@ bruts et la tolérance numérique, sans pourcentage d’accélération. Un essai
 Studio reste un écart indicatif tant que les conditions ne sont pas vérifiées.
 Le gain de 18,28 % documenté le 1er octobre compare deux versions du moteur local
 sur cette machine ; c’est une autre comparaison, avec une autre référence.
+
+Une nouvelle optimisation conserve le préfixe KV entre les requêtes, avec une
+borne de 64 Mio. `prefix-cache.json` mesure une conversation en deux tours :
+517 des 546 tokens d’entrée du second tour sont réutilisés. Sur cinq essais
+alternés, le prefill médian passe de 2,778 s à 0,159 s (-94,3 %), et le temps
+total de 3,144 s à 0,533 s. Tous les tokens de sortie sont identiques.
+La référence est le même moteur avec la réutilisation désactivée. Cela accélère
+la préparation d’un contexte déjà calculé ; ce n’est pas une comparaison à
+LM Studio, et aucun gain de décodage universel n’est annoncé.
+
+Pour reproduire le protocole sur le même fichier :
+
+```bash
+.venv/bin/python scripts/benchmark_prefix_cache.py \
+  models/SmolLM2-360M-Instruct.official.Q8_0.gguf \
+  --runs 5 --tokens 32 --output /tmp/prefix-cache.json
+```

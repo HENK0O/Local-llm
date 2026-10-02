@@ -10,3 +10,12 @@ models/
 *.gguf
 *.safetensors
 pytorch_model*.bin
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+local-llm-conversations*.json

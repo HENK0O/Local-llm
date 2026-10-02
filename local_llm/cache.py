@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
@@ -36,3 +36,53 @@ class KVCache:
     def reset(self) -> None:
         self.length = 0
 
+
+class PrefixCache:
+    """Retain one bounded prefix between serialized requests, without saving text.
+
+    Token IDs must match exactly. The last prompt token is always evaluated to
+    produce fresh logits, including when a whole prompt matches an earlier one.
+    The caller owns the returned cache until ``store``; interrupted work cannot
+    leave a partially overwritten prefix available to the next request.
+    """
+
+    def __init__(self, max_bytes: int = 64 * 1024 * 1024) -> None:
+        self.max_bytes = max_bytes
+        self.clear()
+
+    def clear(self) -> None:
+        self.model = None
+        self.tokens: List[int] = []
+        self.cache: Optional[KVCache] = None
+
+    @property
+    def nbytes(self) -> int:
+        return self.cache.nbytes if self.cache is not None else 0
+
+    def prepare(self, model, prompt: List[int], capacity: int) -> Tuple[KVCache, int]:
+        previous = self.cache if self.model is model else None
+        reused = 0
+        if previous is not None:
+            for old, new in zip(self.tokens, prompt[:-1]):
+                if old != new:
+                    break
+                reused += 1
+        self.clear()
+        if previous is not None and previous.capacity >= capacity:
+            cache = previous
+        else:
+            cache = model.new_cache(capacity)
+            if reused:
+                for source, target in zip(previous.layers, cache.layers):
+                    target.keys[:reused] = source.keys[:reused]
+                    target.values[:reused] = source.values[:reused]
+        cache.length = reused
+        return cache, reused
+
+    def store(self, model, tokens: List[int], cache: KVCache) -> None:
+        if cache.nbytes <= self.max_bytes and cache.length == len(tokens):
+            self.model = model
+            self.tokens = list(tokens)
+            self.cache = cache
+        else:
+            self.clear()

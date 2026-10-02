@@ -22,6 +22,7 @@ from .discovery import default_model_roots, discover_models, inspect_model
 from .lmstudio import LMStudioClient
 from .recommendations import recommend_models
 from .telemetry import SystemTelemetry
+from .cache import PrefixCache
 from .gguf import Q4Matrix, Q8Matrix, q4_backend_name, q8_backend_name
 from .loading import load_runtime
 from .reference_runtime import ReferenceRuntime
@@ -156,6 +157,7 @@ class ChatService:
         self.telemetry = SystemTelemetry()
         self._generation_lock = threading.RLock()
         self._records = OrderedDict()
+        self.prefix_cache = PrefixCache()
         self.extra_model_roots = list(model_dirs or [])
         self.model_roots = default_model_roots() + self.extra_model_roots
         self.catalog = {m.id: m for m in discover_models(self.model_roots)}
@@ -218,6 +220,7 @@ class ChatService:
                 self.model_name = item.name
                 self.current_id = item.id
                 self._records.clear()
+                self.prefix_cache.clear()
                 self.reference_runtime = (
                     ReferenceRuntime(self.reference, self.reference_repo, model.config)
                     if self.reference is not None and (self.reference.is_dir() or
@@ -238,7 +241,19 @@ class ChatService:
                 "benchmark_reference": self.reference_name,
                 "external_reference": self.reference is not None,
                 "reference_chat_available": self.reference_runtime is not None,
-                "max_request_tokens": self.max_request_tokens}
+                "max_request_tokens": self.max_request_tokens,
+                "features": ["system_telemetry", "prefix_cache", "model_unload"],
+                "retained_cache_bytes": self.prefix_cache.nbytes,
+                "retained_cache_limit_bytes": self.prefix_cache.max_bytes}
+
+    def unload_model(self) -> Dict:
+        with self._generation_lock:
+            self.prefix_cache.clear()
+            self._records.clear()
+            self.model = self.tokenizer = self.reference_runtime = None
+            self.model_path = self.current_id = None
+            self.model_name = "Aucun modèle chargé"
+            return self.info()
 
     def compare_completion(self, payload: object) -> Dict:
         if not isinstance(payload, dict) or not isinstance(payload.get("completion_id"), str):
@@ -336,6 +351,7 @@ class ChatService:
                 else generate_tokens(
                     self.model, prompt_tokens, request.max_tokens, request.temperature,
                     request.top_k, request.top_p, request.seed,
+                    prefix_cache=self.prefix_cache if request.backend == "local" else None,
                 )
             )
             for token, stats in generator:
@@ -608,7 +624,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self._path()
-        if path not in {"/v1/chat/completions", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/refresh", "/v1/compare"}:
+        if path not in {"/v1/chat/completions", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/compare"}:
             self._error(404, "route not found")
             return
         if not self._same_origin():
@@ -620,6 +636,9 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_payload()
+            if path == "/v1/local-models/unload":
+                self._send_json(200, self.server.service.unload_model())
+                return
             if path == "/v1/local-models/load":
                 self._send_json(200, self.server.service.load_model(payload))
                 return
@@ -671,6 +690,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 "prefill_tokens_per_second": stats.prefill_tokens_per_second,
                 "decode_tokens_per_second": stats.decode_tokens_per_second,
                 "kv_cache_bytes": stats.cache_bytes,
+                "reused_prompt_tokens": stats.reused_prompt_tokens,
             },
         })
 
@@ -721,6 +741,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 "decode_tokens_per_second": count / seconds if count is not None and seconds > 0 else None,
                 "prefill_seconds": first - started if first is not None else None,
                 "decode_seconds": seconds, "kv_cache_bytes": None,
+                "reused_prompt_tokens": None,
                 "timing_kind": "observed_total", "optimized": False}})
             self._write_event("[DONE]")
         except (BrokenPipeError, ConnectionResetError):
@@ -787,6 +808,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                     "prefill_tokens_per_second": final_stats.prefill_tokens_per_second,
                     "decode_tokens_per_second": final_stats.decode_tokens_per_second,
                     "kv_cache_bytes": final_stats.cache_bytes,
+                    "reused_prompt_tokens": final_stats.reused_prompt_tokens,
                 }
             self._write_event(final)
             self._write_event("[DONE]")
