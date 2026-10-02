@@ -13,7 +13,8 @@ const source = html.match(
 )[1];
 const sandbox = { module: { exports: {} }, crypto: { randomUUID } };
 vm.runInNewContext(source, sandbox);
-const { ConversationStore } = sandbox.module.exports;
+const { ConversationStore, contextMessages, captureContextRequest } =
+  sandbox.module.exports;
 function storage() {
   const data = new Map();
   return {
@@ -100,4 +101,52 @@ test("invalid or duplicate saved conversations are rejected without executing co
   const store = new ConversationStore(disk);
   assert.equal(store.visible().length, 1);
   assert.equal(store.active.title, "<script>never execute</script>");
+});
+
+test("context updates after replies and excludes drafts and failed exchanges", () => {
+  const store = new ConversationStore(storage());
+  const chat = store.create("one", "One");
+  chat.draft = "Not sent";
+  chat.messages.push({ role: "user", content: "Remember A" });
+  assert.equal(contextMessages(chat).length, 1);
+  chat.messages.push({ role: "assistant", content: "Answer A" });
+  chat.messages.push({ role: "user", content: "Failed", inContext: false });
+  chat.messages.push({ role: "assistant", content: "", inContext: false });
+  assert.equal(
+    JSON.stringify(contextMessages(chat)),
+    JSON.stringify([
+      { role: "user", content: "Remember A" },
+      { role: "assistant", content: "Answer A" },
+    ]),
+  );
+  const second = store.create("two", "Two");
+  assert.equal(contextMessages(second).length, 0);
+  store.select(chat.id);
+  assert.equal(contextMessages(store.active).length, 2);
+});
+
+test("last request stays exact after a failure, reply and reload", () => {
+  const disk = storage();
+  const store = new ConversationStore(disk);
+  const chat = store.create("one", "One");
+  chat.messages.push(
+    { role: "user", content: "Old failure", inContext: false },
+    { role: "user", content: "Sent question" },
+  );
+  chat.lastRequest = captureContextRequest(chat, "local", "one");
+  // A failure excludes the question from future context, not from what was sent.
+  chat.messages[1].inContext = false;
+  chat.messages.push({ role: "assistant", content: "Later response" });
+  store.touch(chat);
+  const restored = new ConversationStore(disk).active;
+  assert.equal(
+    contextMessages(restored, restored.lastRequest)[0].content,
+    "Sent question",
+  );
+  assert.equal(contextMessages(restored, restored.lastRequest).length, 1);
+  assert.equal(contextMessages(restored)[0].content, "Later response");
+  assert.equal(
+    contextMessages(restored, { messageIndices: [-1, "0", 999] }).length,
+    0,
+  );
 });

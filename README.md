@@ -201,6 +201,21 @@ l’historique est disponible dans les archives. Si le navigateur refuse la
 sauvegarde, un message le signale ; les messages restent disponibles en session.
 Les conversations ne sont pas écrites dans le dépôt Git ni envoyées à GitHub.
 
+Le bouton **Contexte** ouvre une vue séparée des échanges conservés pour la
+prochaine réponse et des messages envoyés à la dernière requête. Elle s’actualise
+à la fin de chaque requête, y compris après un arrêt ou une erreur ; les
+brouillons et les échanges échoués sans réponse sont exclus du contexte futur.
+Pour le moteur natif, le détail affiche les instructions système, les balises du
+modèle et le nombre exact de tokens. Le texte de la dernière requête provient
+de la trace réellement utilisée, conservée parmi les huit dernières traces
+pendant quinze minutes et effacée au changement de modèle. L’aperçu du contexte
+futur est préparé à la demande sans inférence ni modification du cache.
+`POST /v1/context` accepte un corps de requête de chat pour cet aperçu, ou
+`{"completion_id": "…"}` pour consulter une trace. Le moteur ne résume ni ne
+compresse les échanges actuellement ; la réutilisation du cache KV conserve leur
+contenu. Pour LM Studio, seuls les messages transmis sont visibles : ses
+instructions et sa gestion interne du contexte restent hors de portée de l’app.
+
 Sous chaque réponse figurent les **input tok**, **output tok**, le débit global,
 les tokens de contexte réutilisés et le bouton Copier. Les tokens d’entrée
 comprennent le contexte complet et le template, pas uniquement le dernier

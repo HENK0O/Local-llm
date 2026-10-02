@@ -242,7 +242,7 @@ class ChatService:
                 "external_reference": self.reference is not None,
                 "reference_chat_available": self.reference_runtime is not None,
                 "max_request_tokens": self.max_request_tokens,
-                "features": ["system_telemetry", "prefix_cache", "model_unload"],
+                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection"],
                 "retained_cache_bytes": self.prefix_cache.nbytes,
                 "retained_cache_limit_bytes": self.prefix_cache.max_bytes}
 
@@ -327,14 +327,44 @@ class ChatService:
             )
         return request
 
+    def _prepare_context(self, request: ChatRequest) -> Tuple[str, List[int]]:
+        if request.model_id is not None and request.model_id != self.current_id:
+            raise ValueError("Le modèle a changé ; renvoie la requête")
+        prompt = format_chat(request.messages, self.tokenizer, template_name=request.template_name)
+        return prompt, self.tokenizer.encode(prompt)
+
+    def context_snapshot(self, payload: object) -> Dict:
+        """Inspect a prompt without running inference or modifying the KV cache."""
+        if not isinstance(payload, dict):
+            raise ValueError("request body must be a JSON object")
+        if not self._generation_lock.acquire(blocking=False):
+            raise ValueError("Génération en cours ; le contexte sera disponible à la fin")
+        try:
+            if "completion_id" in payload:
+                completion_id = payload["completion_id"]
+                if not isinstance(completion_id, str):
+                    raise ValueError("completion_id must be a string")
+                record = self._records.get(completion_id)
+                if record is None or time.monotonic() - record["created"] > 900:
+                    raise ValueError("Texte exact indisponible : requête expirée ou modèle changé")
+                return {"kind": "request", "prompt": record["prompt"],
+                        "prompt_tokens": len(record["prompt_ids"]),
+                        "model": self.model_name, "compression": "none"}
+            if payload.get("backend", "local") == "lmstudio":
+                raise ValueError("Le contexte interne de LM Studio n’est pas accessible")
+            request = self.parse(payload)
+            prompt, token_ids = self._prepare_context(request)
+            return {"kind": "preview", "prompt": prompt, "prompt_tokens": len(token_ids),
+                    "context_length": self.model.config.max_position_embeddings,
+                    "model": self.model_name, "compression": "none"}
+        finally:
+            self._generation_lock.release()
+
     def iter_completion(self, request: ChatRequest, completion_id: Optional[str] = None) -> Iterator[StreamPiece]:
         self._generation_lock.acquire()
         generator = None
         try:
-            if request.model_id is not None and request.model_id != self.current_id:
-                raise ValueError("Le modèle a changé ; renvoie la requête")
-            prompt = format_chat(request.messages, self.tokenizer, template_name=request.template_name)
-            prompt_tokens = self.tokenizer.encode(prompt)
+            prompt, prompt_tokens = self._prepare_context(request)
             emitted = []
             decoder = codecs.getincrementaldecoder("utf-8")("replace")
             generator = (
@@ -619,7 +649,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self._path()
-        if path not in {"/v1/chat/completions", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/compare"}:
+        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/compare"}:
             self._error(404, "route not found")
             return
         if not self._same_origin():
@@ -631,6 +661,9 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self._read_payload()
+            if path == "/v1/context":
+                self._send_json(200, self.server.service.context_snapshot(payload))
+                return
             if path == "/v1/local-models/unload":
                 self._send_json(200, self.server.service.unload_model())
                 return

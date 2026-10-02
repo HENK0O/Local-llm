@@ -46,6 +46,12 @@ class StubChatService:
         return {"comparable": True, "delta_tokens_per_second": 10}
 
     @staticmethod
+    def context_snapshot(payload):
+        request = parse_chat_request(payload)
+        return {"kind": "preview", "prompt": request.messages[0].content,
+                "prompt_tokens": 3, "compression": "none"}
+
+    @staticmethod
     def parse(payload):
         return parse_chat_request(payload, default_max_tokens=16)
 
@@ -210,6 +216,17 @@ class HTTPServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["delta_tokens_per_second"], 10)
         status, _, _ = self.request("POST", "/v1/compare", {"completion_id": "missing"})
         self.assertEqual(status, 400)
+
+    def test_context_route_validates_payload_and_rejects_cross_origin(self):
+        payload = {"messages": [{"role": "user", "content": "Bonjour"}]}
+        status, _, body = self.request("POST", "/v1/context", payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["prompt"], "Bonjour")
+        status, _, _ = self.request("POST", "/v1/context", {})
+        self.assertEqual(status, 400)
+        status, _, _ = self.request("POST", "/v1/context", payload,
+                                    {"Origin": "https://example.com"})
+        self.assertEqual(status, 403)
 
     def test_model_load_and_comparison_reject_cross_origin(self):
         for path in ("/v1/local-models/load", "/v1/local-models/refresh", "/v1/compare"):

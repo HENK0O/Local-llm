@@ -520,6 +520,73 @@
         font-weight: 500;
         margin: 0;
       }
+      #contextDialog {
+        padding: 0;
+        overflow: hidden;
+        display: none;
+        flex-direction: column;
+      }
+      #contextDialog[open] {
+        display: flex;
+      }
+      #contextDialog .dialog-head,
+      .context-controls {
+        padding: 20px 24px;
+        flex: none;
+      }
+      .context-controls {
+        padding-top: 0;
+        padding-bottom: 14px;
+        border-bottom: 1px solid var(--line);
+      }
+      .context-controls select {
+        width: 100%;
+      }
+      .context-controls .hint {
+        margin-bottom: 0;
+      }
+      .context-body {
+        overflow-y: auto;
+        padding: 20px 24px;
+        min-height: 0;
+      }
+      .context-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 20px;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 20px;
+      }
+      .context-entry {
+        margin: 0 0 20px;
+      }
+      .context-entry h3 {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 500;
+        margin: 0 0 8px;
+      }
+      .context-entry pre,
+      #contextPrompt {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font: 12px/1.7 var(--mono);
+        margin: 0;
+      }
+      #contextRaw {
+        border-top: 1px solid var(--line);
+        padding-top: 16px;
+      }
+      #contextRaw summary {
+        cursor: pointer;
+        font-size: 12px;
+      }
+      #contextPrompt {
+        background: var(--paper);
+        padding: 16px;
+        border-radius: 8px;
+      }
       .model-list {
         margin: 20px 0;
         max-height: 50vh;
@@ -784,6 +851,22 @@
         border-color: transparent;
         flex: none;
         font-size: 16px;
+      }
+      .icon-button.context-button {
+        width: auto;
+        display: inline-flex;
+        gap: 6px;
+        padding: 0 8px;
+        font-size: 12px;
+      }
+      @media (max-width: 850px) {
+        .icon-button.context-button {
+          width: 32px;
+          padding: 0;
+        }
+        .context-label {
+          display: none;
+        }
       }
       .sidebar-status {
         border-top: 1px solid var(--line);
@@ -1203,6 +1286,36 @@
           </div>
           <div class="header-right">
             <button
+              id="contextButton"
+              class="icon-button context-button"
+              aria-label="Voir le contexte de l’IA"
+              title="Voir le contexte de l’IA"
+              aria-haspopup="dialog"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="none"
+                aria-hidden="true"
+              >
+                <rect
+                  x="2.5"
+                  y="1.5"
+                  width="11"
+                  height="13"
+                  rx="2"
+                  stroke="currentColor"
+                />
+                <path
+                  d="M5 5h6M5 8h6M5 11h4"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                />
+              </svg>
+              <span class="context-label">Contexte</span>
+            </button>
+            <button
               id="settingsButton"
               class="icon-button"
               aria-label="Réglages de la discussion"
@@ -1374,6 +1487,34 @@
       class="sidebar-backdrop hidden"
       aria-label="Fermer les conversations"
     ></button>
+    <dialog id="contextDialog" aria-labelledby="contextTitle">
+      <div class="dialog-head">
+        <h2 id="contextTitle">Contexte de l’IA</h2>
+        <button id="closeContext" aria-label="Fermer le contexte">×</button>
+      </div>
+      <div class="context-controls">
+        <label for="contextMode" class="hidden">Contexte à consulter</label>
+        <select id="contextMode">
+          <option value="current">Contexte actuel · prochaine réponse</option>
+          <option value="request">Dernière requête · messages envoyés</option>
+        </select>
+        <p id="contextExplanation" class="hint"></p>
+      </div>
+      <div class="context-body">
+        <div class="context-summary">
+          <span id="contextCount"></span>
+          <span id="contextTokens"></span>
+          <span id="contextCompression"></span>
+        </div>
+        <div id="contextMessages"></div>
+        <p id="contextStatus" class="hint" role="status"></p>
+        <details id="contextRaw" class="hidden">
+          <summary id="contextRawTitle">Texte préparé pour le modèle</summary>
+          <p class="hint" id="contextRawHint"></p>
+          <pre id="contextPrompt"></pre>
+        </details>
+      </div>
+    </dialog>
     <dialog id="library">
       <div class="dialog-head">
         <h2>Votre bibliothèque</h2>
@@ -1693,7 +1834,42 @@
         }
       }
 
-      if (typeof module !== "undefined") module.exports = { ConversationStore };
+      function contextMessages(chat, request = null) {
+        const messages = chat?.messages || [];
+        const selected = request
+          ? (Array.isArray(request.messageIndices)
+              ? request.messageIndices
+              : []
+            )
+              .filter(
+                (index) =>
+                  Number.isInteger(index) &&
+                  index >= 0 &&
+                  index < messages.length,
+              )
+              .map((index) => messages[index])
+          : messages.filter((m) => m.inContext !== false && m.content);
+        return selected.map(({ role, content }) => ({ role, content }));
+      }
+
+      function captureContextRequest(chat, backend, model) {
+        return {
+          messageIndices: chat.messages.flatMap((m, index) =>
+            m.inContext !== false && m.content ? [index] : [],
+          ),
+          backend,
+          model,
+          status: "pending",
+          completionId: null,
+        };
+      }
+
+      if (typeof module !== "undefined")
+        module.exports = {
+          ConversationStore,
+          contextMessages,
+          captureContextRequest,
+        };
     </script>
     <script>
       "use strict";
@@ -1783,6 +1959,7 @@
         return data;
       }
       function setBusy(value) {
+        const changed = busy !== value;
         busy = value;
         $("send").disabled = value ? !controller : !ready();
         $("send").textContent = value
@@ -1808,6 +1985,7 @@
         document
           .querySelectorAll("#modelList button")
           .forEach((b) => (b.disabled = value));
+        if (changed) refreshContext();
       }
       function showInfo(data) {
         info = data;
@@ -2514,6 +2692,11 @@
         history.push({ role: "user", content: text });
         const userMessage = { role: "user", content: text };
         chat.messages.push(userMessage);
+        chat.lastRequest = captureContextRequest(
+          chat,
+          activeLM ? "lmstudio" : "local",
+          activeLM ? activeLM.id : info.current_id,
+        );
         chat.draft = "";
         conversations.touch(chat);
         chatPage = 0;
@@ -2601,6 +2784,8 @@
             modelLabel: activeLM ? "LM Studio" : "local-llm",
             metrics: measurement,
           });
+          chat.lastRequest.status = "complete";
+          chat.lastRequest.completionId = final.id;
           statsView(view.wrap, measurement);
           conversations.touch(chat);
           renderChatList();
@@ -2611,9 +2796,11 @@
               "Le plafond de réponse a été atteint. Vous pouvez demander la suite ou choisir Détaillée dans les réglages.";
         } catch (e) {
           view.content.classList.remove("pending");
-          if (final) {
+          if (chat.lastRequest.status === "complete") {
             $("notice").textContent = "Réponse terminée.";
           } else {
+            chat.lastRequest.status =
+              e.name === "AbortError" ? "aborted" : "failed";
             userMessage.inContext = !!answer;
             const note =
               e.name === "AbortError" ? "Génération interrompue." : e.message;
@@ -2653,10 +2840,113 @@
         });
       }
 
-      function contextMessages(chat) {
-        return chat.messages
-          .filter((m) => m.inContext !== false && m.content)
-          .map(({ role, content }) => ({ role, content }));
+      let contextRevision = 0;
+      async function refreshContext() {
+        const revision = ++contextRevision;
+        if (!$("contextDialog").open) return;
+        const chat = conversations.active;
+        const last = $("contextMode").value === "request";
+        const request = last ? chat?.lastRequest : null;
+        const messages = last && !request ? [] : contextMessages(chat, request);
+        const lm = last ? request?.backend === "lmstudio" : !!activeLM;
+        $("contextExplanation").textContent = last
+          ? "Messages transmis à la dernière requête, avant sa réponse. Le brouillon n’est jamais envoyé."
+          : "Échanges conservés pour la prochaine réponse, y compris la dernière réponse de l’IA. Le brouillon est exclu.";
+        $("contextCount").textContent = messages.length + " messages";
+        $("contextTokens").textContent = "";
+        $("contextCompression").textContent = lm
+          ? "Compression interne LM Studio : inconnue"
+          : "Aucune compression";
+        $("contextMessages").replaceChildren();
+        for (const [index, entry] of messages.entries()) {
+          const section = node("section", "context-entry");
+          section.append(
+            node(
+              "h3",
+              "",
+              `${index + 1} · ${entry.role === "user" ? "Vous" : entry.role === "system" ? "Système" : "IA"}`,
+            ),
+            node("pre", "", entry.content),
+          );
+          $("contextMessages").append(section);
+        }
+        $("contextRaw").classList.add("hidden");
+        $("contextPrompt").textContent = "";
+        const status = $("contextStatus");
+        if (!messages.length) {
+          status.textContent = last
+            ? "Aucune requête enregistrée pour cette conversation."
+            : "Cette conversation ne contient pas encore d’échanges.";
+          return;
+        }
+        const excluded = chat.messages.filter(
+          (m) => m.inContext === false,
+        ).length;
+        status.textContent = lm
+          ? "Ces messages sont transmis à LM Studio. Ses instructions système, son formatage et sa gestion interne du contexte ne sont pas accessibles ici."
+          : !last && excluded
+            ? `${excluded} messages issus de requêtes échouées sont exclus du contexte.`
+            : "";
+        if (last && request.status !== "complete") {
+          status.textContent +=
+            (status.textContent ? " " : "") +
+            (request.status === "pending" && busy
+              ? "Requête en cours : mise à jour automatique à la fin."
+              : "La dernière requête n’a pas abouti à une réponse complète.");
+          return;
+        }
+        if (lm) return;
+        if (busy) {
+          status.textContent =
+            "Génération en cours : le texte préparé sera actualisé à la fin.";
+          return;
+        }
+        if (!info.features?.includes("context_inspection")) {
+          status.textContent +=
+            (status.textContent ? " " : "") +
+            "Relancez le serveur pour voir aussi le texte exact avec les instructions système du modèle.";
+          return;
+        }
+        if (!last && !ready()) {
+          status.textContent =
+            "Chargez le modèle de cette conversation pour voir son texte préparé.";
+          return;
+        }
+        try {
+          const snapshot = await api(
+            "/v1/context",
+            last
+              ? { completion_id: request.completionId }
+              : { messages, model: info.current_id },
+          );
+          if (revision !== contextRevision || !$("contextDialog").open) return;
+          $("contextTokens").textContent =
+            snapshot.prompt_tokens +
+            " tokens de contexte" +
+            (snapshot.context_length ? " / " + snapshot.context_length : "");
+          $("contextRawTitle").textContent = last
+            ? "Texte exact envoyé au modèle"
+            : "Texte préparé pour la prochaine réponse";
+          $("contextRawHint").textContent = last
+            ? "Copie du texte réellement utilisé, avec les instructions système et les balises du modèle."
+            : "Aperçu calculé sans génération. Il inclut les instructions système et les balises du modèle ; votre prochain message viendra s’y ajouter.";
+          $("contextPrompt").textContent = snapshot.prompt;
+          $("contextRaw").classList.remove("hidden");
+          $("contextCompression").textContent =
+            snapshot.compression === "none"
+              ? "Aucune compression"
+              : "Contexte transformé par le moteur";
+          if (
+            snapshot.context_length &&
+            snapshot.prompt_tokens >= snapshot.context_length
+          )
+            status.textContent =
+              "La fenêtre du modèle est atteinte. Ce moteur ne réduit pas automatiquement le contexte.";
+        } catch (error) {
+          if (revision === contextRevision && $("contextDialog").open)
+            status.textContent +=
+              (status.textContent ? " " : "") + error.message;
+        }
       }
       function updateStorageNotice() {
         $("storageNotice").textContent = conversations.error || "";
@@ -2749,6 +3039,7 @@
         $("notice").textContent = "";
         renderChatList();
         setBusy(busy);
+        refreshContext();
         scrollEnd();
       }
       async function activateChat(id) {
@@ -2955,6 +3246,12 @@
           1,
         ));
       $("modelSelect").onchange = () => loadModel($("modelSelect").value);
+      $("contextButton").onclick = () => {
+        $("contextDialog").showModal();
+        refreshContext();
+      };
+      $("closeContext").onclick = () => $("contextDialog").close();
+      $("contextMode").onchange = refreshContext;
       $("baseline").onchange = baselineChanged;
       $("lmRefresh").onclick = lmRefresh;
       $("libraryButton").onclick = () => {
