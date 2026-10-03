@@ -6,11 +6,27 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from local_llm.telemetry import SystemTelemetry, linux_temperature, parse_vm_stat
+from local_llm.telemetry import SystemTelemetry, linux_temperature, parse_vm_stat, macos_memory_pressure
 from local_llm.sensors_macos import KeyData, MacSensors
 
 
 class TelemetryTests(unittest.TestCase):
+    def test_pressure_reads_dispatch_masks_and_never_guesses_on_failure(self):
+        with patch('local_llm.telemetry.platform.system', return_value='Darwin'):
+            for raw, expected in [('1','normal'),('2','warning'),('4','critical'),('0',None),('bad',None)]:
+                with patch('local_llm.telemetry.subprocess.check_output',return_value=raw):
+                    self.assertEqual(macos_memory_pressure(),expected)
+            with patch('local_llm.telemetry.subprocess.check_output',side_effect=OSError):
+                self.assertIsNone(macos_memory_pressure())
+        with patch('local_llm.telemetry.platform.system', return_value='Linux'), patch('local_llm.telemetry.subprocess.check_output') as command:
+            self.assertIsNone(macos_memory_pressure()); command.assert_not_called()
+
+    def test_forced_snapshot_refreshes_even_inside_poll_cache_window(self):
+        with patch('local_llm.telemetry.platform.system', return_value='Darwin'), patch('local_llm.telemetry.detect_hardware', return_value={'memory_bytes':24*1024**3}), patch('local_llm.sensors_macos.MacSensors',side_effect=OSError), patch('local_llm.telemetry.subprocess.check_output',side_effect=OSError) as command:
+            telemetry=SystemTelemetry()
+            telemetry.snapshot();telemetry.snapshot();telemetry.snapshot(refresh=True)
+            self.assertEqual(command.call_count,2)
+
     def test_mac_memory_excludes_reclaimable_files_and_purgeable_pages(self):
         text = '''Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages active: 100.

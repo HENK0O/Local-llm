@@ -46,7 +46,7 @@ class MemoryAndValidationTests(unittest.TestCase):
             runtime.process = Mock(); runtime.process.poll.return_value = None
             previous = runtime.process
             selected = SimpleNamespace(id='ling', name='Ling Tiny', path=str(target), architecture='bailingmoe3')
-            with patch.object(runtime, 'available', return_value={'available':True}), patch('local_llm.accelerator.GGUFReader',return_value=SimpleNamespace(metadata=self.metadata())), patch.object(runtime, '_start') as start:
+            with patch.object(runtime, 'available', return_value={'available':True}), patch('local_llm.accelerator.GGUFReader',return_value=SimpleNamespace(metadata=self.metadata())), patch('local_llm.accelerator.macos_memory_pressure',return_value='warning'), patch.object(runtime, '_start') as start:
                 with self.assertRaisesRegex(ValueError, 'RAM disponible insuffisante'):
                     runtime.load(selected, memory_available=1024**3)
             start.assert_not_called()

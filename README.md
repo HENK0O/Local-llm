@@ -6,6 +6,11 @@
 
 **Une app d’inférence locale avec exécution GPU, calibration mesurée et cache des conversations.**
 
+L’objectif est de **trouver et appliquer les réglages validés pour votre modèle
+et votre PC**. Aucun gain universel n’est promis : une référence déjà rapide
+peut être conservée. Le [premier parcours vérifié sur Ling Tiny](benchmarks/README.md#ling-tiny--chargement-et-absence-de-gain-validé)
+documente le chargement, les réponses et les essais sans accélération retenue.
+
 Le moteur direct utilise **llama.cpp** pour exécuter vos GGUF installés, avec
 Metal sur Apple Silicon ou les périphériques disponibles dans votre build.
 local-llm calibre ses réglages sur votre machine et conserve une configuration
@@ -200,6 +205,21 @@ Si une conversation dépasse la capacité chargée, l’app peut réallouer jusq
 32 768 tokens si le modèle et la RAM le permettent ; les messages sont conservés,
 le cache est vidé et le profil de vitesse est invalidé. Une impossibilité est
 signalée, sans tronquer ni compresser silencieusement la conversation.
+
+Sur macOS, un refus de cette estimation peut déclencher une **tentative contrôlée**
+si la pression mémoire est normale, la géométrie du modèle connue et le plan
+prudent tient dans la RAM physique avec 3 Gio réservés. Le chargement commence à
+2 048 tokens maximum, un seul emplacement, batch 256, ubatch 128, sans cache hôte.
+Le contrôle borne à 2 Gio (ou 10 % de la RAM) la récupération potentielle de mémoire
+par rapport aux poids, états, KV, 512 Mio de calcul et 512 Mio de réserve. Ce budget
+réduit est un seuil de tentative, pas une consommation garantie : l’estimation
+prudente reste visible et les allocations réelles sont lues après chargement.
+Le worker privé est surveillé chaque seconde et arrêté si la pression devient
+critique ou si sa lecture échoue. Aucun autre moteur n’est arrêté. Une pression
+déjà élevée, une architecture inconnue ou un budget trop faible restent bloquants.
+Les agrandissements du contexte passent les mêmes contrôles et ne suppriment
+aucun message. La lecture de RAM précédant une allocation est rafraîchie plutôt
+que reprise du cache de trois secondes des capteurs.
 
 Un **cache KV sur disque de 512 Mio maximum de fichiers retenus**, activé par défaut si le runtime
 expose `--slot-save-path`, conserve les états des réponses terminées dans
@@ -520,11 +540,12 @@ Aucune comparaison ne démarre automatiquement après une réponse.
 **Réutilisation du contexte.** Le moteur natif conserve au maximum un cache KV
 de préfixe, borné selon la RAM disponible (512 Mio maximum), entre les requêtes. Seuls les tokens identiques sont
 réutilisés ; la fin du prompt est évaluée pour obtenir de nouveaux logits.
-L’API indique `reused_prompt_tokens` et le chiffre vert **+N tok** compte les
-tokens d’entrée dont le recalcul a été évité. Sa bulle précise la méthode : il
-ne s’agit ni de tokens de sortie supplémentaires ni d’une accélération validée
-face à LM Studio. Les réponses relayées vers LM Studio n’attribuent aucun gain
-au moteur local-llm. Les statistiques sauvegardées survivent au rechargement de
+L’API indique `reused_prompt_tokens` et le libellé **N tok réutilisés** compte les
+tokens d’entrée dont le recalcul a été évité par le moteur. Ce compteur n’est
+pas présenté comme un gain propre à local-llm et ne prouve aucune accélération
+face à LM Studio. Sans mesure, le chat affiche **Cache non mesuré**. Dans
+Performances, une calibration qui conserve la référence affiche **Aucun gain
+validé**, sans transformer un gain nul en succès. Les statistiques sauvegardées survivent au rechargement de
 la page, mais un nouvel essai est nécessaire pour comparer une réponse dont le
 serveur ne conserve plus la trace.
 

@@ -214,7 +214,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         runtime = Accelerator()
         telemetry = SystemTelemetry()
         def available_memory():
-            memory = telemetry.snapshot()
+            memory = telemetry.snapshot(refresh=True)
             total, used = memory.get('memory_total_bytes'), memory.get('memory_used_bytes')
             return min(total, max(0, total - used) + (runtime._rss() or 0)) if total is not None and used is not None else None
         runtime.memory_probe = available_memory

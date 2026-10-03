@@ -200,7 +200,37 @@ def memory_plan(metadata, weight_bytes, available=None, required=512):
         minimum = working / .9
     if minimum > 20 * 1024 ** 3:
         minimum = working + 2 * 1024 ** 3
-    raise ValueError('RAM disponible insuffisante : {:.1f} Gio disponibles, au moins {:.1f} Gio estimés pour ce checkpoint avec {} tokens de contexte. Déchargez les modèles ouverts dans un autre moteur ou libérez de la RAM, puis réessayez.'.format(available / 1024 ** 3, minimum / 1024 ** 3, minimum_context))
+    raise ValueError('RAM disponible insuffisante selon l’estimation prudente : {:.1f} Gio disponibles, au moins {:.1f} Gio estimés pour ce checkpoint avec {} tokens de contexte. Ce seuil n’est pas une allocation mesurée. Déchargez les modèles ouverts dans un autre moteur ou libérez de la RAM, puis réessayez.'.format(available / 1024 ** 3, minimum / 1024 ** 3, minimum_context))
+
+
+def controlled_memory_plan(metadata, weight_bytes, available, total, pressure, required=512):
+    """Small initial attempt on a healthy Mac, never a claim that memory fits.
+
+    Keep the conservative estimate visible. At batch 256 / ubatch 128, allow
+    at most 2 GiB of potential reclamation against a 512 MiB compute floor.
+    Unknown geometry/pressure and a checkpoint too large for physical RAM
+    remain hard failures. A live monitor is required by the caller.
+    """
+    if pressure != 'normal' or available is None or total is None:
+        return None
+    try:
+        plan = memory_plan(metadata, weight_bytes, total - 3 * 1024 ** 3, required)
+    except ValueError:
+        return None
+    if plan['conservative']:
+        return None
+    capacity = next((n for n in (512,1024,2048,4096,8192,16384,32768) if n >= required),32768)
+    context = min(plan['context'], max(2048, capacity))
+    context_bytes = context * plan['kv_bytes_per_token']
+    floor = weight_bytes + plan['recurrent_budget_bytes'] + context_bytes + 1024 * MIB
+    reclaim = max(0, floor - available)
+    if reclaim > min(2 * 1024 ** 3, total // 10):
+        return None
+    return dict(plan, context=context, available_bytes=available, cache_ram_mib=0,
+                context_bytes=context_bytes, reserve_bytes=512 * MIB,
+                estimated_bytes=weight_bytes + plan['compute_budget_bytes'] + plan['recurrent_budget_bytes'] + context_bytes,
+                controlled_attempt=True, potential_reclaim_bytes=reclaim,
+                fallback_reason='Estimation prudente supérieure à la mémoire disponible. Tentative à batch réduit, sans cache hôte, sous surveillance de la pression mémoire macOS. Aucun ajustement du contexte utilisateur.')
 
 
 def shortlist(screening, limit=6):

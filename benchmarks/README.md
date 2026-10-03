@@ -82,10 +82,58 @@ de décodage n’en est déduit.
 
 Le chat affiche le débit global observé dans le navigateur : tokens générés
 divisés par la durée complète de la requête, préparation et transport inclus.
-Le compteur vert indique les tokens du contexte dont le recalcul a été évité.
+Le libellé « N tok réutilisés » indique les tokens du contexte dont le recalcul
+a été évité par le moteur, sans attribuer ce mécanisme à local-llm ni annoncer
+une accélération face à un autre moteur.
 
 Les comparaisons sont manuelles, dans l’onglet Performances. Le témoin NumPy
 déquantifie les blocs lors de chaque projection ; il peut être très lent et ne
 représente pas un moteur standard. Aucun pourcentage d’accélération n’en est
 déduit. La comparaison LM Studio reste indicative tant que les poids, la
 quantification, le placement CPU/GPU et la définition du débit ne concordent pas.
+
+## Ling Tiny : chargement et absence de gain validé
+
+Le 3 octobre 2026, Ling-3.0-tiny-Heretic-NX-PRIME-Q8_0 (7,83 Gio de fichier)
+charge sur Apple M5 / 24 Gio avec un budget déclaré inférieur à 7,9 Gio. La
+tentative contrôlée utilise 2 048 tokens de contexte, batch 256 / ubatch 128,
+KV F16, un emplacement et aucun cache hôte. Le moteur déclare **8,15 Gio de
+buffers** ; il ne s’agit pas d’une mesure de RAM physique exclusive. Le plan
+prudent estimait environ 10 Gio avant marge système et refusait ce budget.
+
+Le [parcours de chat](ling-direct-lifecycle.json), avec les paramètres de
+raisonnement par défaut et 512 tokens de sortie maximum, vérifie deux réponses
+visibles, le rappel du mot demandé et la reprise après interruption. L’état de
+test est temporaire ; le serveur de l’utilisateur n’est pas utilisé.
+Un essai supplémentaire avec le budget Standard de l’interface (2 048 tokens
+de sortie maximum) vérifie l’agrandissement automatique de 2 048 à 4 096 tokens
+de contexte, puis une réponse visible, sans suppression de message.
+
+La [calibration ciblée](ling-direct-calibration.json) compare trois configurations :
+référence GPU compacte, réglages-1024 et motifs-adaptatifs-64. Les six workloads
+de sélection sont suivis des six workloads indépendants et des contrôles normaux.
+**Aucune variante n’est retenue** : leurs gains sont inférieurs au seuil ou
+négatifs. La référence conservée mesure 52,36 tok/s de décodage agrégé sur la
+validation indépendante ; aucun gain de décodage n’est annoncé. La suite montre
+11,24 % de variation de durée entre passages. Ce résultat est une absence de
+gain sur ces trois configurations, pas une recherche exhaustive ni une mesure
+de supériorité sur LM Studio.
+
+Les trois paires du test de cache retrouvent 1 189 tokens identiques et un délai
+médian avant le premier token de 1,625 s à froid contre 0,035 s en réutilisation.
+C’est le cache de préfixe du même moteur llama.cpp, pas une accélération du
+décodage ni une preuve d’avantage propre à l’application. La calibration ciblée
+a été réalisée sur la version de développement du correctif ; les deux courts
+tours de son parcours utilisent `enable_thinking=false`, tandis que le rapport
+de cycle de vie séparé teste les paramètres par défaut de la version 0.23.0.
+
+Pour reproduire le parcours et cette recherche ciblée depuis la racine du dépôt :
+
+```bash
+.venv/bin/python scripts/verify_direct_runtime.py /chemin/vers/ling.gguf \
+  --available-gib 7.9 --calibrate --output /tmp/ling-verification.json
+```
+
+Le plafond ne peut jamais augmenter la RAM mesurée. Sans `--calibrate`, la
+commande vérifie seulement le parcours de chat. `local-llm calibrate` et le
+bouton Optimiser de l’app restent la recherche complète des candidats disponibles.

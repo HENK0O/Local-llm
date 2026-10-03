@@ -193,6 +193,11 @@ class AcceleratorHTTPTests(unittest.TestCase):
         with patch.object(self.service.telemetry, 'snapshot', return_value={'process_rss_bytes': 2000}), patch.object(self.runtime, '_rss', return_value=None):
             self.assertIsNone(self.service.system_snapshot()['process_rss_bytes'])
 
+    def test_allocation_refreshes_ram_and_only_credits_its_owned_worker(self):
+        with patch.object(self.service.telemetry,'snapshot',return_value={'memory_total_bytes':10000,'memory_used_bytes':9000}) as snapshot:
+            self.assertEqual(self.service._accelerator_memory_available(),2000)
+            snapshot.assert_called_once_with(refresh=True)
+
 
 class DraftSearchTests(unittest.TestCase):
     def test_auto_drafts_are_ranked_bounded_and_fit_spare_memory(self):

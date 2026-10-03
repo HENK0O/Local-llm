@@ -376,7 +376,7 @@ class ChatService:
         return snapshot
 
     def _accelerator_memory_available(self):
-        snapshot = self.telemetry.snapshot()
+        snapshot = self.telemetry.snapshot(refresh=True)
         total, used = snapshot.get('memory_total_bytes'), snapshot.get('memory_used_bytes')
         if total is None or used is None:
             return None

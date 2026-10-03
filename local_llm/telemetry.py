@@ -46,6 +46,19 @@ def linux_temperature(root=Path('/sys/class/hwmon')):
     return max(values) if values else None
 
 
+def macos_memory_pressure():
+    """Read the userspace dispatch pressure mask, not XNU's internal enum."""
+    if platform.system() != 'Darwin':
+        return None
+    try:
+        mask = int(subprocess.check_output(
+            ['sysctl', '-n', 'kern.memorystatus_vm_pressure_level'],
+            text=True, stderr=subprocess.DEVNULL, timeout=1).strip())
+        return {1: 'normal', 2: 'warning', 4: 'critical'}.get(mask)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 class SystemTelemetry:
     def __init__(self):
         self._lock = threading.Lock()
@@ -55,9 +68,9 @@ class SystemTelemetry:
         self._initialized = False
         self._sensor = None
 
-    def snapshot(self):
+    def snapshot(self, refresh=False):
         with self._lock:
-            if self._snapshot is not None and time.monotonic() - self._last < 3:
+            if not refresh and self._snapshot is not None and time.monotonic() - self._last < 3:
                 return dict(self._snapshot)
             system = platform.system()
             if not self._initialized:

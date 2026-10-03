@@ -124,7 +124,8 @@ function profile() {
 }
 test("failed holdout reports zero gain and explains rejection despite faster selection", () => {
   const view = render(profile());
-  assert.match(view.text, /Gain vérifié \+0\.0 tok\/s/);
+  assert.match(view.text, /Résultat Aucun gain validé/);
+  assert.doesNotMatch(view.text, /Gain vérifié \+0\.0 tok\/s/);
   assert.match(view.text, /Sorties différentes sur les prompts indépendants/);
   assert.match(view.text, /229 ms/);
   assert.match(view.text, /14 ms/);

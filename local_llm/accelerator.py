@@ -27,10 +27,12 @@ from .discovery import mtp_head_count
 from .lmstudio import LMStudioClient
 from .loading import model_fingerprint
 from .memory import allocations
+from .telemetry import macos_memory_pressure
+from .recommendations import detect_hardware
 from .kv_store import KVStore, digest
 from .calibration import (TRAIN_PROMPTS, VALIDATION_PROMPTS, CATEGORIES, OUTPUT_LIMITS,
                           TRAIN_PASSES, VALIDATION_PASSES, assess_candidate, summarize,
-                          select_winner, memory_plan, shortlist, verified_profiles, USAGE_PROFILES, speculation_summary)
+                          select_winner, memory_plan, controlled_memory_plan, shortlist, verified_profiles, USAGE_PROFILES, speculation_summary)
 
 
 PROTOCOL = 7
@@ -160,6 +162,9 @@ class Accelerator:
         self.runtime_memory = None
         self._dirty_conversations = set()
         self._fingerprints = {}
+        self._pressure_stop = threading.Event()
+        self._pressure_thread = None
+        self._memory_abort = None
 
     def available(self):
         if self.capabilities is None:
@@ -197,6 +202,10 @@ class Accelerator:
                 'persistent_cache': dict(self.kv_store.describe(), supported='--slot-save-path' in (self.capabilities or {}).get('optional_flags', []))}
 
     def _stop(self):
+        self._pressure_stop.set()
+        if self._pressure_thread is not None:
+            self._pressure_thread.join(timeout=2)
+            self._pressure_thread = None
         process, self.process = self.process, None
         if process is not None:
             if process.poll() is None:
@@ -292,10 +301,15 @@ class Accelerator:
         env = {k: v for k, v in os.environ.items() if not k.startswith('LLAMA_ARG_') and k != 'LM_STUDIO_API_TOKEN'}
         try:
             self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=self.log, stderr=self.log, env=env)
+            self._memory_abort = None
+            if (self.memory or {}).get('controlled_attempt'):
+                self._watch_memory(self.process)
             self.client = LMStudioClient('http://127.0.0.1:' + str(port), token=token)
             deadline = time.monotonic() + 180
             while time.monotonic() < deadline:
                 if self.process.poll() is not None:
+                    if self._memory_abort:
+                        raise ValueError(self._memory_abort)
                     self.log.seek(max(0, self.log.tell() - 4096))
                     raise ValueError('Chargement llama.cpp échoué : ' + self.log.read().decode('utf-8', 'replace')[-2000:])
                 healthy = False
@@ -304,6 +318,8 @@ class Accelerator:
                 except (OSError, ValueError):
                     pass
                 if healthy:
+                    if self._memory_abort:
+                        raise ValueError(self._memory_abort)
                     props = self.client._request('/props')
                     actual_context = props.get('default_generation_settings', {}).get('n_ctx', config.context)
                     if props.get('total_slots', config.slots) != config.slots or actual_context != config.context:
@@ -329,6 +345,40 @@ class Accelerator:
             self._stop()
             raise
 
+    def _watch_memory(self, process):
+        stop = self._pressure_stop = threading.Event()
+        def watch():
+            while not stop.is_set() and process.poll() is None:
+                pressure = macos_memory_pressure()
+                if stop.is_set():
+                    return
+                if pressure in (None, 'critical'):
+                    self._memory_abort = ('Tentative arrêtée : pression mémoire macOS critique.' if pressure else
+                                          'Tentative arrêtée : surveillance mémoire macOS indisponible.')
+                    # Only this instance's private child; never another engine.
+                    if not stop.is_set() and process.poll() is None:
+                        try:
+                            process.terminate()
+                        except OSError:
+                            pass
+                    return
+                stop.wait(1)
+        self._pressure_thread = threading.Thread(target=watch, daemon=True)
+        self._pressure_thread.start()
+
+    def _plan_memory(self, metadata, weight_bytes, available, required=512):
+        try:
+            return memory_plan(metadata, weight_bytes, available, required)
+        except ValueError:
+            pressure = macos_memory_pressure()
+            if pressure != 'normal':
+                raise
+            plan = controlled_memory_plan(metadata, weight_bytes, available,
+                detect_hardware().get('memory_bytes'), pressure, required)
+            if plan is None:
+                raise
+            return plan
+
     def load(self, item, memory_available=None):
         if self.job and self.job['state'] == 'running':
             raise ValueError('Calibration en cours')
@@ -341,7 +391,7 @@ class Accelerator:
             if self.model_id == item.id and self.process is not None and self.process.poll() is None:
                 return self.describe()
             metadata = GGUFReader(path).metadata
-            plan = memory_plan(metadata, path.stat().st_size, memory_available)
+            plan = self._plan_memory(metadata, path.stat().st_size, memory_available)
             self.path, self.model_id, self.model_name = path, item.id, item.name
             self.profile = None
             self.usage_profile = "balanced"
@@ -349,7 +399,9 @@ class Accelerator:
             self.job = None
             self.memory = plan
             try:
-                config = ExecutionConfig(context=plan['context'], slots=plan['slots'], cache_ram_mib=plan.get('cache_ram_mib', 0))
+                config = ExecutionConfig(context=plan['context'], slots=plan['slots'], cache_ram_mib=plan.get('cache_ram_mib', 0),
+                    batch=256 if plan.get('controlled_attempt') else 2048,
+                    ubatch=128 if plan.get('controlled_attempt') else None)
                 while True:
                     try:
                         self._start(config)
@@ -482,11 +534,17 @@ class Accelerator:
             if preview['prompt_tokens'] + payload['max_tokens'] > self.config.context:
                 required = preview['prompt_tokens'] + payload['max_tokens']
                 available = self.memory_probe() if self.memory_probe else None
-                plan = memory_plan(GGUFReader(self.path).metadata, self.path.stat().st_size, available, required)
+                metadata, weight_bytes = GGUFReader(self.path).metadata, self.path.stat().st_size
+                plan = self._plan_memory(metadata, weight_bytes, available, required)
                 original = self.config
+                previous_memory = self.memory
                 try:
-                    self._start(replace(original, context=plan['context'], slots=plan['slots'], cache_ram_mib=plan.get('cache_ram_mib', 0)))
+                    self.memory = plan
+                    self._start(replace(original, context=plan['context'], slots=plan['slots'], cache_ram_mib=plan.get('cache_ram_mib', 0),
+                        batch=256 if plan.get('controlled_attempt') else original.batch,
+                        ubatch=128 if plan.get('controlled_attempt') else original.ubatch))
                 except Exception:
+                    self.memory = previous_memory
                     self._start(original)
                     raise
                 self.memory = plan
@@ -511,6 +569,8 @@ class Accelerator:
             timings = {}
             try:
                 for chunk in upstream:
+                    if self._memory_abort:
+                        raise ValueError(self._memory_abort)
                     timings = chunk.get('timings') or timings
                     yield chunk
                 completed = True
@@ -521,6 +581,10 @@ class Accelerator:
                     expected = (self.memory or {}).get('kv_bytes_per_token', 256 * 1024) * tokens + (self.memory or {}).get('recurrent_budget_bytes', 0)
                     if expected <= self.kv_store.budget:
                         self.kv_store.save(self.client, slot, conversation, self.cache_binding, payload['messages'], timings)
+            except Exception:
+                if self._memory_abort:
+                    raise ValueError(self._memory_abort) from None
+                raise
             finally:
                 upstream.close()
                 if not completed:
@@ -738,12 +802,15 @@ class Accelerator:
                     trials[name]['error'] = str(exc)
 
     def _candidate_configs(self, original, drafts):
+        compact = (self.memory or {}).get('controlled_attempt')
         base = replace(original, threads=0, threads_batch=0, ubatch=None, backend_sampling=False,
                        batch=2048, flash='auto', speculative='none', draft_path=None, kv_type='f16', draft_p_min=0.0)
+        if compact:
+            base = replace(base, batch=256, ubatch=128, cache_ram_mib=0)
         half = max(1, (os.cpu_count() or 4) // 2)
         tuned = replace(base, threads=half, threads_batch=os.cpu_count() or 4, batch=1024, flash='on')
         configs = {'standard': base, 'réglages-1024': tuned, 'réglages-256': replace(tuned, batch=256),
-                   'prefill-256': replace(base, ubatch=256), 'prefill-1024': replace(base, ubatch=1024),
+                   'prefill-256': replace(base, ubatch=256), 'prefill-1024': replace(base, batch=max(1024, base.batch), ubatch=1024),
                    'threads-décodage': replace(base, threads=half),
                    'threads-préparation': replace(base, threads_batch=half),
                    'cache-q8': replace(tuned, kv_type='q8_0')}
@@ -848,7 +915,7 @@ class Accelerator:
                         os.unlink(filename)
                 self.profile = report
                 self.usage_profile = "balanced"
-                self.job.update(progress=100, message='Configuration validée sur des prompts indépendants' if winner != 'standard' else 'La configuration standard reste la meilleure', result=report)
+                self.job.update(progress=100, message='Configuration validée sur des prompts indépendants' if winner != 'standard' else 'Aucun gain validé sur la suite complète ; réglage standard conservé.', result=report)
             except Exception as exc:
                 self.profile, chosen, self.usage_profile = original_profile, original, original_usage
                 terminal = 'cancelled' if self.cancelled.is_set() else 'failed'

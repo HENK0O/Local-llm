@@ -68,6 +68,49 @@ class CalibrationTests(unittest.TestCase):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_memory_abort_is_reported_and_partial_context_is_not_reused(self):
+        runtime=self.runtime()
+        runtime._memory_abort='Tentative arrêtée : pression mémoire macOS critique.'
+        runtime.client.iter_chat.return_value=(chunk for chunk in [{'choices':[{'delta':{'content':'partial'}}]}])
+        with self.assertRaisesRegex(ValueError,'pression mémoire macOS critique'):
+            list(runtime.iter_chat({'model':'target','messages':[],'max_tokens':64},'pressure-failure'))
+        self.assertNotIn('pressure-failure',runtime.slots.entries)
+        self.assertIn('pressure-failure',runtime._dirty_conversations)
+
+    def test_controlled_worker_stops_on_critical_or_unknown_pressure(self):
+        for pressure in ('critical',None):
+            with tempfile.TemporaryDirectory() as folder:
+                runtime=Accelerator(executable='mock',state_dir=folder)
+                child=Mock();child.poll.return_value=None
+                def terminate(): child.poll.return_value=0
+                child.terminate.side_effect=terminate
+                runtime.process=child
+                with patch('local_llm.accelerator.macos_memory_pressure',return_value=pressure):
+                    runtime._watch_memory(child)
+                    runtime._pressure_thread.join(timeout=3)
+                self.assertIsNotNone(runtime._memory_abort)
+                child.terminate.assert_called_once()
+                runtime.close()
+
+    def test_controlled_load_uses_small_batches_and_standard_has_same_capacity(self):
+        metadata={'general.architecture':'llama','llama.block_count':1,'llama.context_length':4096,
+                  'llama.attention.head_count':8,'llama.attention.head_count_kv':1,'llama.embedding_length':1024}
+        from types import SimpleNamespace
+        gib=1024**3
+        with tempfile.TemporaryDirectory() as folder:
+            runtime=Accelerator(executable='mock',state_dir=folder)
+            target=Mock(spec=Path);target.suffix='.gguf';target.stat.return_value.st_size=int(7.83*gib)
+            item=SimpleNamespace(path='/tmp/ling.gguf',architecture='llama',id='ling',name='Ling')
+            def start(config):runtime.config=config
+            with patch('local_llm.accelerator.Path',return_value=target), patch('local_llm.accelerator.GGUFReader',return_value=SimpleNamespace(metadata=metadata)), patch.object(runtime,'available',return_value={'available':True}), patch('local_llm.accelerator.detect_hardware',return_value={'memory_bytes':24*gib}), patch('local_llm.accelerator.macos_memory_pressure',return_value='normal'), patch.object(runtime,'_start',side_effect=start), patch.object(runtime,'_restore_profile'):
+                runtime.load(item,int(7.9*gib))
+            self.assertTrue(runtime.memory['controlled_attempt'])
+            self.assertEqual((runtime.config.context,runtime.config.batch,runtime.config.ubatch),(2048,256,128))
+            runtime.path=None
+            base=runtime._candidate_configs(runtime.config,[])['standard']
+            self.assertEqual((base.context,base.slots,base.batch,base.ubatch),(2048,1,256,128))
+            self.assertEqual(base.speculative,'none')
+
     def test_missing_or_old_dependency_is_explicit(self):
         runtime = Accelerator(executable='/nonexistent/llama-server')
         self.assertFalse(runtime.available()['available'])

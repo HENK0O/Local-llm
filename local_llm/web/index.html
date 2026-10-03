@@ -1091,18 +1091,15 @@
         font-weight: 500;
         color: var(--ink);
       }
-      .token-gain {
+      .token-reuse {
         position: relative;
-        color: var(--accent);
+        color: var(--muted);
         font: 11px var(--mono);
         border: 0;
         padding: 0 !important;
         outline-offset: 4px;
       }
-      .token-gain.unavailable {
-        color: var(--muted);
-      }
-      .token-gain .tooltip {
+      .token-reuse .tooltip {
         display: none;
         position: absolute;
         bottom: calc(100% + 10px);
@@ -1123,8 +1120,8 @@
         white-space: normal;
         z-index: 5;
       }
-      .token-gain:hover .tooltip,
-      .token-gain:focus .tooltip {
+      .token-reuse:hover .tooltip,
+      .token-reuse:focus .tooltip {
         display: block;
       }
       .dialog-actions {
@@ -1261,7 +1258,7 @@
         .reply-footer {
           gap: 8px 10px;
         }
-        .token-gain .tooltip {
+        .token-reuse .tooltip {
           left: auto;
           right: -20px;
           transform: none;
@@ -1518,10 +1515,13 @@
             <div class="conversation" id="conversation">
               <div class="empty" id="empty">
                 <div class="eyebrow">L’inférence, chez vous</div>
-                <h1>Une conversation.<br /><span>Tout simplement.</span></h1>
+                <h1>
+                  Trouvez le bon réglage.<br /><span>Pour votre modèle.</span>
+                </h1>
                 <p class="intro">
-                  Un espace simple pour parler à vos modèles et faire tourner
-                  votre IA sur cette machine.
+                  Chargez un modèle local, puis comparez ses réglages dans
+                  Performances. L’app applique une optimisation seulement si les
+                  essais valident un gain ; sinon elle conserve le standard.
                 </p>
                 <div class="suggestions">
                   <button
@@ -2916,7 +2916,7 @@
                     ? (gpuInfo.profile.profiles?.[
                         gpuInfo.usage_profile || "balanced"
                       ]?.winner || gpuInfo.profile.winner) === "standard"
-                      ? "La configuration standard reste la meilleure sur les essais réalisés."
+                      ? "Aucun gain validé sur cet usage. Le réglage standard est conservé."
                       : "Optimisation validée pour " +
                         activeGPU.model_name +
                         "."
@@ -3025,6 +3025,9 @@
                 (memory.conservative
                   ? " Estimation prudente pour cette architecture hybride."
                   : "") +
+                (memory.controlled_attempt
+                  ? " Tentative à batch réduit sous surveillance de la pression mémoire macOS ; cette estimation n’est pas une allocation mesurée."
+                  : "") +
                 " La RAM réellement observée reste affichée dans les capteurs.",
             ),
           );
@@ -3113,7 +3116,9 @@
                 code: "Code",
                 long_context: "Contexte long",
               }[usage] +
-              ". Gain vérifié " +
+              (profile.winner === "standard"
+                ? ". Référence conservée "
+                : ". Gain vérifié ") +
               (profile.category
                 ? "pour les requêtes de type « " +
                   profile.category +
@@ -3131,7 +3136,12 @@
         for (const [label, value] of [
           ["Décodage standard", fmt(baseline.decode_tps) + " tok/s"],
           ["Décodage retenu", fmt(winner.decode_tps) + " tok/s"],
-          ["Gain vérifié", (delta >= 0 ? "+" : "") + fmt(delta) + " tok/s"],
+          [
+            profile.winner === "standard" ? "Résultat" : "Gain vérifié",
+            profile.winner === "standard"
+              ? "Aucun gain validé"
+              : (delta >= 0 ? "+" : "") + fmt(delta) + " tok/s",
+          ],
           [
             profile.category
               ? "Requête indépendante · standard"
@@ -3674,12 +3684,13 @@
           $("maxTokens").value = Math.min(Number($("maxTokens").value), limit);
         $("tokenLimitHint").textContent =
           `Plafond du serveur : ${limit} tokens.` +
-          (activeLM
+          (activeLM || activeGPU
             ? " La réflexion et la réponse partagent ce budget."
             : " Le contexte du modèle peut imposer une borne plus courte.");
-        $("responseLengthHint").textContent = activeLM
-          ? "La réflexion et la réponse partagent ce budget. Le modèle peut s’arrêter avant ce plafond."
-          : "C’est une borne maximale, pas une longueur imposée. Le modèle s’arrête avant s’il a fini sa réponse.";
+        $("responseLengthHint").textContent =
+          activeLM || activeGPU
+            ? "La réflexion et la réponse partagent ce budget. Le modèle peut s’arrêter avant ce plafond."
+            : "C’est une borne maximale, pas une longueur imposée. Le modèle s’arrête avant s’il a fini sa réponse.";
         for (const option of $("responseLength").options)
           if (option.value !== "custom")
             option.disabled = Number(option.value) > limit;
@@ -3729,6 +3740,22 @@
         const s = $("scroll");
         s.scrollTop = s.scrollHeight;
       }
+      function contextReusePresentation(stats) {
+        const count = stats?.reused_prompt_tokens;
+        const known = Number.isInteger(count) && count >= 0;
+        return {
+          known,
+          text: known
+            ? count.toLocaleString("fr") + " tok réutilisés"
+            : "Cache non mesuré",
+          tooltip: known
+            ? count +
+              " tokens du contexte ont été réutilisés par le moteur au lieu d’être recalculés. Ce compteur ne mesure pas une accélération et ne prouve aucun gain face à un autre moteur."
+            : stats?.backend === "lmstudio"
+              ? "LM Studio ne fournit pas de mesure de réutilisation du contexte pour cette réponse."
+              : "La réutilisation du contexte n’a pas été mesurée pour cette réponse.",
+        };
+      }
       function appendReplyFooter(wrap, response) {
         const footer = node("div", "reply-footer");
         for (const [count, label] of [
@@ -3745,9 +3772,9 @@
             document.createTextNode(" " + label),
           );
           footer.append(stat);
-          if (label === "output tok" && response.stats?.backend === "lmstudio")
+          if (label === "output tok")
             stat.title =
-              "Tokens générés par LM Studio, réflexion incluse lorsqu’elle est activée.";
+              "Tokens générés par le moteur, réflexion incluse lorsqu’elle est activée. Le débit porte sur tous ces tokens, pas seulement sur le texte visible.";
         }
         const speed = node(
           "span",
@@ -3757,36 +3784,16 @@
         speed.title =
           "Débit global : tokens générés / durée complète de la requête, préparation et transport inclus.";
         footer.append(speed);
-        const reused = response.stats?.reused_prompt_tokens;
-        const known = Number.isInteger(reused) && reused >= 0;
-        const gain = node(
-          "button",
-          "token-gain" + (known ? "" : " unavailable"),
-          known ? "+" + reused.toLocaleString("fr") + " tok" : "— tok",
-        );
-        gain.type = "button";
-        gain.setAttribute(
-          "aria-label",
-          known
-            ? reused + " tokens de contexte réutilisés grâce à l’optimisation"
-            : "Gain de l’optimisation non mesuré",
-        );
-        const tip = node(
-          "span",
-          "tooltip",
-          known
-            ? "Tokens gagnés grâce à l’optimisation de local-llm : " +
-                reused +
-                " tokens de contexte déjà calculés ont été réutilisés. Cela évite leur recalcul avant cette réponse ; ce ne sont pas des tokens de sortie supplémentaires ni un gain en tok/s face à LM Studio."
-            : response.stats?.backend === "lmstudio"
-              ? "Cette réponse est exécutée par LM Studio. Aucun gain du moteur local-llm n’est mesuré."
-              : "Cette version du serveur ne mesure pas la réutilisation du contexte. Relancez-le pour activer cette mesure.",
-        );
-        tip.id = "gain-" + response.id;
+        const reuse = contextReusePresentation(response.stats);
+        const cacheStat = node("button", "token-reuse", reuse.text);
+        cacheStat.type = "button";
+        cacheStat.setAttribute("aria-label", reuse.text);
+        const tip = node("span", "tooltip", reuse.tooltip);
+        tip.id = "reuse-" + response.id;
         tip.setAttribute("role", "tooltip");
-        gain.setAttribute("aria-describedby", tip.id);
-        gain.append(tip);
-        footer.append(gain);
+        cacheStat.setAttribute("aria-describedby", tip.id);
+        cacheStat.append(tip);
+        footer.append(cacheStat);
         const copy = node("button", "copy-button", "Copier");
         copy.classList.toggle("hidden", !response.text);
         copy.type = "button";

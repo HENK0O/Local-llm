@@ -1,0 +1,134 @@
+{
+  "app_version": "0.23.0",
+  "model": "Ling-3.0-tiny-Heretic-NX-PRIME-Q8_0.gguf",
+  "scope": "Private direct worker, public prompts, no external-engine speedup claim",
+  "calibration_search": null,
+  "load": {
+    "plan": {
+      "kv_bytes_per_token": 6912,
+      "mtp_kv_bytes_per_token": 6912,
+      "recurrent_state_bytes": 20201472,
+      "geometry": "hybrid-kda-mla",
+      "conservative": false,
+      "context": 2048,
+      "slots": 1,
+      "available_bytes": 8482560409,
+      "cache_ram_mib": 0,
+      "reserve_bytes": 536870912,
+      "weight_bytes": 8409487552,
+      "compute_budget_bytes": 2218768422,
+      "recurrent_budget_bytes": 80805888,
+      "context_bytes": 14155776,
+      "estimated_bytes": 10723217638,
+      "controlled_attempt": true,
+      "potential_reclaim_bytes": 1095630631,
+      "fallback_reason": "Estimation prudente supérieure à la mémoire disponible. Tentative à batch réduit, sans cache hôte, sous surveillance de la pression mémoire macOS. Aucun ajustement du contexte utilisateur."
+    },
+    "allocations": {
+      "buffers": [
+        {
+          "device": "CPU_Mapped",
+          "kind": "model",
+          "bytes": 256523633
+        },
+        {
+          "device": "MTL0_Mapped",
+          "kind": "model",
+          "bytes": 8402973491
+        },
+        {
+          "device": "CPU",
+          "kind": "output",
+          "bytes": 629146
+        },
+        {
+          "device": "MTL0",
+          "kind": "kv",
+          "bytes": 14155776
+        },
+        {
+          "device": "MTL0",
+          "kind": "rs",
+          "bytes": 20206060
+        },
+        {
+          "device": "MTL0",
+          "kind": "compute",
+          "bytes": 53886321
+        },
+        {
+          "device": "CPU",
+          "kind": "compute",
+          "bytes": 2097152
+        }
+      ],
+      "declared_buffer_bytes": 8750471579,
+      "kind": "runtime_buffer_allocations",
+      "physical_ram": false
+    }
+  },
+  "turns": [
+    {
+      "prompt": "Réponds uniquement Bonjour.",
+      "answer": "Bonjour",
+      "seconds": 2.036995375,
+      "timings": [
+        {
+          "cache_n": 0,
+          "prompt_n": 36,
+          "prompt_ms": 194.96,
+          "prompt_per_token_ms": 5.415555555555556,
+          "prompt_per_second": 184.65326220763234,
+          "predicted_n": 137,
+          "predicted_ms": 1822.945,
+          "predicted_per_token_ms": 13.404007352941177,
+          "predicted_per_second": 74.6045547177781
+        }
+      ]
+    },
+    {
+      "prompt": "Quel est le mot que je viens de te demander de dire ?",
+      "answer": "Bonjour",
+      "seconds": 1.0805780420000008,
+      "timings": [
+        {
+          "cache_n": 32,
+          "prompt_n": 34,
+          "prompt_ms": 164.29,
+          "prompt_per_token_ms": 4.832058823529412,
+          "prompt_per_second": 206.95112301418226,
+          "predicted_n": 68,
+          "predicted_ms": 899.145,
+          "predicted_per_token_ms": 13.420074626865672,
+          "predicted_per_second": 74.51523391666528
+        }
+      ]
+    }
+  ],
+  "interrupt_resume": true,
+  "passed": true,
+  "standard_ui_budget_check": {
+    "passed": true,
+    "before_context": 2048,
+    "after_context": 4096,
+    "answer": "Bonjour",
+    "requested_output_tokens": 2048,
+    "memory_plan": {
+      "kv_bytes_per_token": 6912,
+      "mtp_kv_bytes_per_token": 6912,
+      "recurrent_state_bytes": 20201472,
+      "geometry": "hybrid-kda-mla",
+      "conservative": false,
+      "context": 4096,
+      "slots": 1,
+      "available_bytes": 12139036672,
+      "cache_ram_mib": 128,
+      "reserve_bytes": 1213903667,
+      "weight_bytes": 8409487552,
+      "compute_budget_bytes": 2218768422,
+      "recurrent_budget_bytes": 80805888,
+      "context_bytes": 28311552,
+      "estimated_bytes": 10871591142
+    }
+  }
+}

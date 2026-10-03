@@ -1,10 +1,34 @@
 import unittest
 
-from local_llm.calibration import memory_plan
+from local_llm.calibration import memory_plan, controlled_memory_plan
 from local_llm.memory import allocations, geometry
 
 
 class ArchitectureMemoryTests(unittest.TestCase):
+    def test_controlled_mac_attempt_bounds_reclamation_and_preserves_honest_estimate(self):
+        m = {'general.architecture': 'bailingmoe3', 'bailingmoe3.context_length':32768, 'bailingmoe3.block_count': 24,
+             'bailingmoe3.attention.head_count': 16, 'bailingmoe3.attention.head_count_kv': [0, 0, 0, 1] * 6,
+             'bailingmoe3.attention.key_length': 576, 'bailingmoe3.attention.value_length': 128,
+             'bailingmoe3.kda.head_dim': 128, 'bailingmoe3.ssm.conv_kernel': 4}
+        gib = 1024**3
+        with self.assertRaises(ValueError): memory_plan(m, int(7.83*gib), int(7.9*gib))
+        plan = controlled_memory_plan(m, int(7.83*gib), int(7.9*gib), 24*gib, 'normal')
+        self.assertTrue(plan['controlled_attempt'])
+        self.assertEqual(plan['context'], 2048)
+        self.assertEqual(plan['cache_ram_mib'], 0)
+        self.assertEqual(plan['available_bytes'], int(7.9*gib))
+        self.assertGreater(plan['estimated_bytes'], plan['available_bytes'])
+        self.assertLessEqual(plan['potential_reclaim_bytes'], 2*gib)
+        grown=controlled_memory_plan(m,int(7.83*gib),int(7.9*gib),24*gib,'normal',required=5000)
+        self.assertGreaterEqual(grown['context'],5000)
+        capped=controlled_memory_plan(dict(m,**{'bailingmoe3.context_length':1500}),int(7.83*gib),int(7.9*gib),24*gib,'normal',required=1400)
+        self.assertEqual(capped['context'],1500)
+        for pressure in ('warning', 'critical', None):
+            self.assertIsNone(controlled_memory_plan(m, int(7.83*gib), 8*gib, 24*gib, pressure))
+        for available, total in ((4*gib,24*gib),(8*gib,10*gib),(None,24*gib),(8*gib,None)):
+            self.assertIsNone(controlled_memory_plan(m, int(7.83*gib), available, total, 'normal'))
+        self.assertIsNone(controlled_memory_plan({'general.architecture':'unknown'}, gib, 2*gib, 24*gib, 'normal'))
+
     def test_ling_mla_and_kda_are_separate_from_per_token_dense_kv(self):
         m = {'general.architecture': 'bailingmoe3', 'bailingmoe3.block_count': 24,
              'bailingmoe3.attention.head_count': 16, 'bailingmoe3.attention.head_count_kv': [0, 0, 0, 1] * 6,
