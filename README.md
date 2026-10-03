@@ -19,6 +19,54 @@ couche local-llm apporte la calibration, le choix de la spéculation, le suivi d
 contexte et des conversations. Relayer une requête à LM Studio n’accélère pas
 ses calculs.
 
+## Checkpoints existants, sans serveur LM Studio
+
+Les GGUF détectés dans la bibliothèque LM Studio, son dossier personnalisé ou
+le cache Hugging Face sont chargés **sur place par le moteur direct**. Aucun
+poids n’est copié et LM Studio peut rester fermé. Une bibliothèque contient des
+fichiers ; un moteur doit encore les charger en RAM et exécuter leurs calculs.
+local-llm gère son propre worker privé llama.cpp automatiquement ; il n’est pas
+nécessaire de démarrer un second serveur à la main.
+
+Dans **Bibliothèque**, « Ajouter un checkpoint existant » accepte le chemin
+absolu d’un GGUF ou d’un dossier natif. Seul ce chemin est enregistré dans
+`LOCAL_LLM_STATE_DIR/library.json` (par défaut `~/.cache/local-llm`), jamais les
+poids. Les liens symboliques des snapshots Hugging Face conservent leur nom et
+pointent vers le même fichier de cache. `POST /v1/local-models/import` reçoit
+`{"path":"/chemin/existant/modele.gguf"}` ; il applique la protection de même
+origine des autres mutations. Les anciennes conversations LM Studio passent au
+moteur direct seulement si leur clé correspond exactement à un unique fichier
+détecté, sans association par nom d’affichage.
+
+**Performances → Une variante mieux adaptée ?** vérifie automatiquement les
+quantifications du checkpoint sélectionné dans son dépôt Hugging Face. La
+recherche conserve le nom précis du modèle, sa taille et sa variante fine-tunée.
+Elle exclut les projecteurs, les auxiliaires et les fichiers partiels. Chaque
+lien correspond à un fichier réel vérifié via l’API publique, fixé à sa révision
+Git. Un dépôt inconnu ou inaccessible ne produit aucune recommandation devinée.
+Aucun téléchargement n’est lancé. Le lien identifie le dépôt déjà installé ou
+une origine connue ; il ne certifie pas son auteur ni la qualité de ses poids.
+
+Les suggestions distinguent RAM disponible maintenant et RAM totale après
+réserve système, pour le contexte affiché. Elles indiquent l’économie de poids
+ou la précision à comparer ; **une autre quantification n’est pas une promesse
+de tok/s** et peut changer les réponses. Les gains de calibration du checkpoint
+actuel ne sont jamais transférés à d’autres poids. Le matériel, les chemins et
+les messages restent locaux ; seul l’identifiant du dépôt est envoyé à
+`huggingface.co`. Deux recherches au maximum tournent en arrière-plan ; le
+catalogue vérifié est mis en cache six heures ; un échec réseau peut être retenté
+après trente secondes avec « Actualiser les conseils ». En cas de panne réseau, l’inférence locale
+continue. `GET /v1/model-advice?model_id=identifiant-du-catalogue` expose cet état.
+
+Les **têtes MTP déjà intégrées au GGUF** sont détectées par leurs métadonnées et
+leurs tenseurs. Si le build llama.cpp expose `draft-mtp`, la calibration teste
+les profondeurs 2, 4, 8 et 16 avec les mêmes vérifications de sortie et de gain
+indépendant que les autres candidats. Le runtime partage les poids du modèle
+principal : aucun deuxième checkpoint à stocker, mais un contexte supplémentaire
+consomme de la RAM. Aucun gain MTP n’est déclaré avant validation. Le protocole
+6 invalide les anciens profils pour permettre cette nouvelle recherche.
+Voir la [documentation officielle de la spéculation llama.cpp](https://github.com/ggml-org/llama.cpp/blob/master/docs/speculative.md).
+
 ## Moteur GPU et optimisation automatique
 
 Sur macOS, installez le runtime officiel, puis démarrez l’app :
@@ -510,8 +558,8 @@ nuls ; les valeurs techniques sont conservées sous
 Voir [le périmètre des comparaisons](benchmarks/README.md#mesures-dans-linterface).
 
 **Bibliothèque et apparence.** Tous les fichiers détectés sont visibles dans le
-sélecteur et la bibliothèque, y compris les architectures que local-llm ne sait
-pas exécuter. La recherche permet de retrouver Ling, Qwen et les autres modèles
+bibliothèque ; le sélecteur conserve uniquement les choix exécutables par un
+moteur disponible. La recherche permet de retrouver Ling, Qwen et les autres modèles
 par nom. Les modèles hors du moteur restent explicitement indiqués ; ils ne
 sont jamais chargés silencieusement avec des opérations manquantes. Le dossier
 personnalisé `downloadsFolder` de LM Studio est également recherché et relu lors
@@ -553,15 +601,15 @@ explicitement inconnue ; les gros modèles au-delà du budget sont exclus.
 Les fiches officielles de [SmolLM2 360M](https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct),
 [SmolLM2 1.7B](https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct) et
 [Qwen3 8B GGUF](https://huggingface.co/Qwen/Qwen3-8B-GGUF) sont accessibles depuis
-les cartes. Choisir Q8_0 pour les SmolLM2 avec local-llm ; les Q4_K_M ne sont pas
-pris en charge par ce moteur. Qwen est proposé pour LM Studio. Aucun modèle
+les cartes. Choisir Q8_0 pour les SmolLM2 avec local-llm ; les Q4_K_M et Qwen sont utilisables avec le moteur direct llama.cpp. Le moteur
+Python natif garde son périmètre Llama F32/F16/BF16/Q8_0/Q4_0. Aucun modèle
 n’est téléchargé automatiquement. `GET /v1/recommendations` expose le matériel,
 le budget et les suggestions avec leurs limites.
 
 **LM Studio.** Le serveur détecte sa bibliothèque locale même lorsque l’application
 est arrêtée. Pour voir les modèles via son API et mesurer un écart face à son
 runtime, active son serveur local (port 1234 par défaut), puis clique sur
-« Actualiser » sous LM Studio. Le tutoriel juste sous son statut explique les
+« Actualiser » dans **Bibliothèque → Connexion LM Studio optionnelle**. Le tutoriel y explique les
 étapes. Choisis les mêmes poids et la même quantification dans les deux moteurs.
 Un port différent se configure au lancement :
 
@@ -571,14 +619,15 @@ local-llm serve --lm-studio http://127.0.0.1:1235
 
 Lorsque son serveur local est actif, la bibliothèque distingue les modèles
 **téléchargés** de ceux **chargés en mémoire**. Le sélecteur propose uniquement
-les instances chargées dans LM Studio et les modèles compatibles avec le moteur
-natif. Le bouton « Charger dans LM Studio » dans la bibliothèque charge les
+les checkpoints utilisables par le moteur direct, les modèles natifs et les
+instances chargées dans LM Studio après ouverture de sa connexion optionnelle. Le bouton « Charger dans LM Studio » dans la bibliothèque charge les
 poids déjà installés via `POST /v1/lmstudio/load` (`{"model": "clé-du-modèle"}`),
 sans téléchargement. Les modèles restent en mémoire selon les réglages de
 LM Studio ; passer d’une conversation à une autre ne déclenche pas de chargement
 LM Studio automatique.
 
-L’état est actualisé toutes les cinq secondes lorsque la page est visible,
+L’état LM Studio est actualisé toutes les cinq secondes lorsque la page est visible
+et que cette connexion est utilisée (conversation externe, panneau optionnel ou comparaison),
 à l’ouverture du sélecteur et après chaque réponse. Le chat est relayé en
 streaming via `/v1/chat/completions` avec `backend: "lmstudio"`, `model` (clé du
 catalogue), `model_instance_id` (identifiant exact de l’instance chargée) et

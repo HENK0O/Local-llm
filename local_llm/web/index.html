@@ -1358,21 +1358,8 @@
             <span>Température CPU</span><strong id="tempLive">Lecture…</strong>
           </div>
           <p class="hint hidden" id="sensorNote"></p>
-          <div class="lm-status-line">
-            <span
-              ><span id="lmDot" class="dot off"></span
-              ><span id="lmStatus">LM Studio : vérification…</span></span
-            ><button
-              id="lmRefresh"
-              class="icon-button"
-              aria-label="Actualiser LM Studio"
-              title="Actualiser LM Studio"
-            >
-              ↻
-            </button>
-          </div>
-          <button id="sidebarConnectionHelp" class="link-button">
-            Comment connecter LM Studio ?
+          <button id="localLibraryStatus" class="link-button">
+            Bibliothèque sur ce PC
           </button>
         </div>
         <div class="side-bottom">
@@ -1566,6 +1553,21 @@
               discussion.
             </p>
             <div class="performance-card">
+              <h2>Une variante mieux adaptée ?</h2>
+              <p id="modelAdviceStatus" class="hint" role="status">
+                Choisissez un checkpoint local pour vérifier ses variantes.
+              </p>
+              <button id="refreshAdvice" class="link-button">
+                Actualiser les conseils
+              </button>
+              <div id="modelAdviceList"></div>
+              <p id="mtpAdvice" class="hint"></p>
+              <details>
+                <summary>Comment ces suggestions sont vérifiées</summary>
+                <p id="modelAdviceMethod" class="hint"></p>
+              </details>
+            </div>
+            <div class="performance-card">
               <h2>Optimiser ce modèle</h2>
               <p id="optimizationStatus" class="hint" role="status">
                 Choisissez un modèle dans le moteur direct pour le calibrer.
@@ -1583,7 +1585,9 @@
                 vocabulaire. Un auxiliaire spécialisé doit être déclaré pour les
                 poids précis de la cible. L’app teste plusieurs méthodes et
                 profondeurs de spéculation, puis vérifie chaque profil sur des
-                prompts différents. Aucun modèle n’est téléchargé.
+                prompts différents. Les têtes MTP intégrées sont aussi testées
+                si elles sont présentes et prises en charge. Aucun modèle n’est
+                téléchargé.
               </p>
               <button id="optimizeModel" disabled>Optimiser ce modèle</button>
               <button id="cancelOptimization" class="hidden">
@@ -1716,7 +1720,8 @@
         aria-label="Rechercher parmi les modèles disponibles"
       />
       <p class="hint">
-        Seuls les modèles chargés dans LM Studio sont prêts à discuter.
+        Les checkpoints sur ce PC sont chargés à la sélection, sans copie ni
+        serveur LM Studio.
       </p>
       <div id="pickerList"></div>
       <button id="pickerLibrary" style="width: 100%; margin-top: 12px">
@@ -1769,8 +1774,8 @@
         />
       </div>
       <p class="hint" id="libraryConnection">
-        Pour utiliser les modèles hors du moteur local-llm, activez le serveur
-        local de LM Studio.
+        Les modèles de LM Studio sont lus directement depuis sa bibliothèque.
+        Son serveur n’est pas nécessaire ; aucun fichier n’est copié.
       </p>
       <p class="hint" id="modelHint"></p>
       <div class="source-status">
@@ -1784,10 +1789,45 @@
       <button id="unloadModel" disabled>Décharger le modèle local</button>
       <div id="modelList" class="model-list"></div>
       <button id="scanModels">Rechercher à nouveau</button>
-      <p class="hint">
-        Pour ajouter un dossier, démarrez avec
-        <code>--model-dir /chemin/models</code>.
+      <label for="checkpointPath">Ajouter un checkpoint existant</label>
+      <div class="library-tools">
+        <input
+          id="checkpointPath"
+          type="text"
+          placeholder="/chemin/vers/modele.gguf ou dossier"
+          autocomplete="off"
+        />
+        <button id="importCheckpoint">Ajouter sans copier</button>
+      </div>
+      <p id="importStatus" class="hint" role="status">
+        Le fichier reste à son emplacement. Seul son chemin est enregistré sur
+        ce PC.
       </p>
+      <details id="optionalLM">
+        <summary>Connexion LM Studio optionnelle</summary>
+        <p class="hint">
+          Pour comparer les moteurs ou utiliser un modèle via LM Studio. La
+          lecture directe des checkpoints fonctionne sans cette connexion.
+          Déchargez le modèle dans LM Studio pour éviter que les deux moteurs
+          occupent la RAM en même temps.
+        </p>
+        <div class="lm-status-line">
+          <span
+            ><span id="lmDot" class="dot off"></span
+            ><span id="lmStatus">LM Studio · connexion optionnelle</span></span
+          ><button
+            id="lmRefresh"
+            class="icon-button"
+            aria-label="Actualiser LM Studio"
+            title="Actualiser LM Studio"
+          >
+            ↻
+          </button>
+        </div>
+        <button id="sidebarConnectionHelp" class="link-button">
+          Comment connecter LM Studio ?
+        </button>
+      </details>
       <div class="library-roots" id="libraryRoots"></div>
     </dialog>
     <dialog id="connectionDialog">
@@ -2107,7 +2147,7 @@
             .map((m) => ({
               key: "llamacpp:" + m.id,
               name: m.name,
-              source: "local-llm · llama.cpp",
+              source: "Sur ce PC · moteur direct",
               quantization: m.quantization,
             })),
           ...local
@@ -2135,6 +2175,29 @@
             })),
           ),
         ];
+      }
+
+      function directModelKey(key, local, acceleratorAvailable) {
+        if (!key?.startsWith("lmstudio:") || !acceleratorAvailable) return key;
+        const matches = local.filter(
+          (m) => m.accelerator_candidate && m.lmstudio_key === key.slice(9),
+        );
+        return matches.length === 1 ? "llamacpp:" + matches[0].id : key;
+      }
+      function verifiedHubLink(value) {
+        try {
+          const url = new URL(value);
+          return url.protocol === "https:" &&
+            url.hostname === "huggingface.co" &&
+            !url.port &&
+            !url.username &&
+            !url.password &&
+            /^\/[^/]+\/[^/]+\/blob\/[a-f0-9]{40}\//.test(url.pathname)
+            ? url.href
+            : null;
+        } catch {
+          return null;
+        }
       }
 
       function selectedLMInstance(model, preferred = null) {
@@ -2174,6 +2237,8 @@
           captureContextRequest,
           modelChoices,
           selectedLMInstance,
+          directModelKey,
+          verifiedHubLink,
           streamDelta,
           completionNote,
         };
@@ -2365,6 +2430,8 @@
           catalog.length +
           " fichiers détectés" +
           (lmCatalog.length ? " · " + lmCatalog.length + " via LM Studio" : "");
+        $("localLibraryStatus").textContent =
+          catalog.length + " checkpoints sur ce PC";
         $("modelList").replaceChildren();
         const query = $("modelSearch").value.trim().toLowerCase();
         for (const m of catalog.filter((m) =>
@@ -2380,7 +2447,10 @@
               m.source + " · " + bytes(m.size_bytes) + " · " + modelQuant(m),
             ),
           );
-          if (!m.compatible) {
+          if (
+            !m.compatible &&
+            !(gpuInfo.available && m.accelerator_candidate)
+          ) {
             desc.append(node("small", "", "Détecté · " + m.reason));
             desc.append(
               node(
@@ -2393,13 +2463,13 @@
             );
           }
           row.append(desc);
-          if (m.accelerator_candidate) {
+          if (m.accelerator_candidate && gpuInfo.available) {
             const gpuButton = node("button", "", "Charger dans local-llm");
             gpuButton.disabled = busy;
             gpuButton.onclick = () => loadModel("llamacpp:" + m.id);
             row.append(gpuButton);
           }
-          if (m.compatible) {
+          if (m.compatible && !(m.accelerator_candidate && gpuInfo.available)) {
             const b = node(
               "button",
               "",
@@ -2468,6 +2538,9 @@
       }
       async function loadModel(id, instanceId = null, ensureLoaded = false) {
         if (busy || !id) return false;
+        id = directModelKey(id, catalog, gpuInfo.available);
+        if (id.startsWith("lmstudio:") && !lmCatalog.length)
+          await lmRefresh(true);
         setBusy(true);
         $("notice").textContent = "Chargement du modèle…";
         try {
@@ -2541,6 +2614,7 @@
           renderCatalog(catalogData);
           updateStorageNotice();
           renderResponsePerformance();
+          refreshModelAdvice();
           $("library").close();
           $("notice").textContent = activeGPU
             ? "Modèle prêt dans le moteur direct. Ouvrez Performances pour le calibrer sur votre machine."
@@ -2675,7 +2749,7 @@
         const off = node(
           "option",
           "",
-          "Sans modèle auxiliaire · motifs seulement",
+          "Sans fichier auxiliaire · motifs et MTP intégré",
         );
         off.value = "off";
         $("draftModel").append(off);
@@ -2804,7 +2878,7 @@
           );
         if (!profile) return;
         if (
-          profile.protocol !== 5 ||
+          profile.protocol !== 6 ||
           !profile.validation ||
           !profile.training_summaries
         ) {
@@ -2941,9 +3015,11 @@
             "Spéculation : " +
               (profile.config.speculative === "none"
                 ? "désactivée"
-                : profile.config.speculative.startsWith("draft-")
-                  ? "auxiliaire validé"
-                  : "motifs du contexte validés") +
+                : profile.config.speculative === "draft-mtp"
+                  ? "MTP intégré validé"
+                  : profile.config.speculative.startsWith("draft-")
+                    ? "auxiliaire validé"
+                    : "motifs du contexte validés") +
               (profile.config.speculative !== "none"
                 ? " · jusqu’à " +
                   profile.config.draft_tokens +
@@ -3094,6 +3170,7 @@
               gpuInfo.job?.message || "Calibration terminée.";
           }
           renderOptimization();
+          refreshModelAdvice();
           updateModelSelection();
           if (previousAvailable !== gpuInfo.available)
             renderCatalog(catalogData);
@@ -3157,7 +3234,8 @@
       async function lmRefresh(quiet = false) {
         if (busy || lmPolling) return;
         lmPolling = true;
-        if (!quiet) $("lmStatus").textContent = "LM Studio : vérification…";
+        if (!quiet)
+          $("lmStatus").textContent = "LM Studio · connexion optionnelle";
         try {
           const data = await api("/v1/lmstudio/models");
           if (busy) return;
@@ -3179,9 +3257,7 @@
               $("notice").textContent =
                 "Le modèle sélectionné a été déchargé dans LM Studio. Chargez-le dans la bibliothèque ou choisissez un modèle chargé.";
           }
-          $("libraryConnection").textContent = data.available
-            ? "Modèles téléchargés dans LM Studio. Chargez un modèle pour le faire apparaître dans le sélecteur. Les architectures incompatibles avec local-llm peuvent être exécutées par LM Studio."
-            : "LM Studio hors ligne. Dans LM Studio, ouvrez Developer et démarrez le serveur local, puis cliquez sur Rechercher à nouveau.";
+          // External connection status stays inside its optional panel.
           if (catalogChanged || !quiet) renderCatalog(catalogData);
           setBusy(busy);
           $("lmDot").classList.toggle("off", !data.available);
@@ -4429,7 +4505,6 @@
           return;
         }
         $("pickerSearch").value = "";
-        await lmRefresh(true);
         renderModelPicker();
         $("modelPicker").showPopover();
         positionModelPicker();
@@ -4482,9 +4557,135 @@
           $("notice").textContent = e.message;
         } finally {
           setBusy(false);
-          await lmRefresh();
         }
       };
+      $("localLibraryStatus").onclick = () => $("libraryButton").click();
+      $("optionalLM").ontoggle = () => {
+        if ($("optionalLM").open) lmRefresh();
+      };
+      $("importCheckpoint").onclick = async () => {
+        if (busy) return;
+        setBusy(true);
+        try {
+          renderCatalog(
+            await api("/v1/local-models/import", {
+              path: $("checkpointPath").value,
+            }),
+          );
+          $("importStatus").textContent =
+            "Checkpoint ajouté sans copie. Vous pouvez le charger dans la bibliothèque.";
+          $("checkpointPath").value = "";
+        } catch (e) {
+          $("importStatus").textContent = e.message;
+        } finally {
+          setBusy(false);
+        }
+      };
+      let adviceKey = null,
+        adviceTimer = null,
+        adviceEpoch = 0;
+      function renderModelAdvice(data) {
+        $("modelAdviceStatus").textContent = data.message;
+        $("mtpAdvice").textContent = data.mtp?.message || "";
+        if (data.mtp?.embedded && !data.mtp.supported)
+          $("mtpAdvice").textContent +=
+            " Cette version de llama.cpp ne prend pas en charge le MTP intégré.";
+        $("modelAdviceMethod").textContent = data.method || "";
+        const list = $("modelAdviceList");
+        list.replaceChildren();
+        if (data.state !== "ready") return;
+        if (data.current?.now.fits === false)
+          list.append(
+            node(
+              "p",
+              "hint",
+              "Le checkpoint actuel ne tient pas dans la RAM disponible estimée pour ce contexte. Déchargez les modèles ouverts dans un autre moteur avant de le charger ici.",
+            ),
+          );
+        if (data.current && !data.variants?.length)
+          list.append(
+            node(
+              "p",
+              "hint",
+              "Gardez ce fichier et calibrez le moteur : une autre quantification n’est pas automatiquement plus rapide.",
+            ),
+          );
+        for (const variant of (data.variants || []).slice(0, 3)) {
+          const href = variant.verified_file && verifiedHubLink(variant.url);
+          if (!href) continue;
+          const row = node("div", "model-row"),
+            text = node("div");
+          text.append(
+            node("strong", "", variant.quantization + " · " + variant.benefit),
+          );
+          text.append(
+            node(
+              "small",
+              "",
+              bytes(variant.size_bytes) +
+                (variant.saved_bytes
+                  ? " · " + bytes(variant.saved_bytes) + " de poids en moins"
+                  : ""),
+            ),
+          );
+          text.append(
+            node(
+              "small",
+              "",
+              variant.now.fits === true
+                ? "RAM disponible estimée suffisante · contexte " + data.context
+                : variant.machine.fits === true && variant.now.fits === false
+                  ? "Compatible avec la RAM totale estimée · libérez de la mémoire avant chargement"
+                  : "RAM inconnue · compatibilité mémoire à vérifier",
+            ),
+          );
+          text.append(node("small", "", variant.tradeoff));
+          const link = node("a", "link-button", "Voir sur Hugging Face ↗");
+          link.href = href;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          row.append(text, link);
+          list.append(row);
+        }
+      }
+      $("refreshAdvice").onclick = () => refreshModelAdvice(true);
+      function refreshModelAdvice(force = false) {
+        const modelId = activeLM
+          ? null
+          : activeGPU?.model_id || info.current_id;
+        const key = modelId
+          ? modelId + ":" + (activeGPU?.context_length || 4096)
+          : null;
+        if (key === adviceKey && !force) return;
+        adviceKey = key;
+        clearTimeout(adviceTimer);
+        const requestEpoch = ++adviceEpoch;
+        if (!modelId || !info.features?.includes("model_advice")) {
+          renderModelAdvice({
+            message:
+              "Choisissez un checkpoint local pour vérifier ses variantes.",
+          });
+          return;
+        }
+        let attempts = 0;
+        const lookup = async () => {
+          try {
+            const data = await api(
+              "/v1/model-advice?model_id=" + encodeURIComponent(modelId),
+            );
+            if (requestEpoch !== adviceEpoch) return;
+            renderModelAdvice(data);
+            if (["pending", "busy"].includes(data.state) && ++attempts < 15)
+              adviceTimer = setTimeout(lookup, 2000);
+          } catch (e) {
+            if (requestEpoch === adviceEpoch)
+              renderModelAdvice({
+                message: "Suggestions indisponibles : " + e.message,
+              });
+          }
+        };
+        lookup();
+      }
       $("newChat").onclick = newConversation;
       $("modelSearch").oninput = () => renderCatalog(catalogData);
       $("recommendButton").onclick = () => $("recommendations").showModal();
@@ -4578,7 +4779,13 @@
       pollSystem();
       setInterval(pollSystem, 3000);
       setInterval(() => {
-        if (!document.hidden) lmRefresh(true);
+        if (
+          !document.hidden &&
+          (activeLM ||
+            $("optionalLM").open ||
+            $("baseline").value === "lmstudio")
+        )
+          lmRefresh(true);
       }, 5000);
       document.addEventListener("visibilitychange", () => {
         if (!document.hidden) pollSystem();
@@ -4593,8 +4800,15 @@
             await loadDraftChoices();
             syncLength();
           }
-          await lmRefresh();
           const chat = conversations.active;
+          if (chat?.modelKey) {
+            chat.modelKey = directModelKey(
+              chat.modelKey,
+              catalog,
+              gpuInfo.available,
+            );
+            conversations.save();
+          }
           if (
             gpuInfo.available &&
             catalog.some(
@@ -4613,6 +4827,7 @@
           }
           setBusy(false);
           updateStorageNotice();
+          refreshModelAdvice();
         } catch (error) {
           $("notice").textContent =
             "Connexion au serveur impossible : " + error.message;

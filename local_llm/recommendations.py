@@ -19,7 +19,7 @@ MODELS = [
          download_url="https://huggingface.co/bartowski/SmolLM2-1.7B-Instruct-GGUF/blob/main/SmolLM2-1.7B-Instruct-Q8_0.gguf",
          url="https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct"),
     dict(name="Qwen3 8B", family="Qwen3-8B", memory_gib=8.0,
-         runtime="LM Studio", format="GGUF Q4_K_M", purpose="Modèle polyvalent plus exigeant",
+         runtime="local-llm", format="GGUF Q4_K_M", purpose="Modèle polyvalent plus exigeant",
          download_url="https://huggingface.co/Qwen/Qwen3-8B-GGUF/blob/main/Qwen3-8B-Q4_K_M.gguf",
          url="https://huggingface.co/Qwen/Qwen3-8B-GGUF"),
 ]
@@ -57,7 +57,7 @@ def detect_hardware():
     return dict(cpu=cpu, logical_cores=os.cpu_count(), system=platform.system(),
                 architecture=platform.machine(), memory_bytes=total,
                 available_memory_bytes=available,
-                gpu_note="Le moteur local-llm utilise le CPU. Le GPU de LM Studio n’est pas évalué.")
+                gpu_note="Le moteur direct utilise les accélérateurs disponibles via llama.cpp. Les variantes doivent être mesurées sur cette machine.")
 
 
 def recommend_models(hardware=None, installed=()):
@@ -71,7 +71,7 @@ def recommend_models(hardware=None, installed=()):
         item["fits"] = None if budget is None else item["memory_gib"] * GIB <= budget
         item["installed_id"] = next((m.id for m in installed if
             item["family"].lower() in m.name.lower() and m.compatible and
-            ("Q8_0" in m.quantization if item["runtime"] == "local-llm" else True)), None)
+            (item["format"].split()[-1] in m.quantization)), None)
         if item["fits"] is not False:
             items.append(item)
     local = [m for m in items if m["runtime"] == "local-llm"]

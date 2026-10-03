@@ -87,7 +87,7 @@ function profile() {
     categories: { discussion: { decode_tps: 100, seconds: 1 } },
   };
   return {
-    protocol: 5,
+    protocol: 6,
     winner: "standard",
     candidate: "motifs-4",
     config: { speculative: "none" },

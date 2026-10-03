@@ -11,7 +11,7 @@ const html = readFileSync(
 const source = html.match(
   /<script id="conversation-store">([\s\S]*?)<\/script>/,
 )[1];
-const sandbox = { module: { exports: {} }, crypto: { randomUUID } };
+const sandbox = { module: { exports: {} }, crypto: { randomUUID }, URL };
 vm.runInNewContext(source, sandbox);
 const {
   ConversationStore,
@@ -19,6 +19,8 @@ const {
   captureContextRequest,
   modelChoices,
   selectedLMInstance,
+  directModelKey,
+  verifiedHubLink,
   streamDelta,
   completionNote,
 } = sandbox.module.exports;
@@ -214,7 +216,7 @@ test("direct GGUF choices include unsupported native quantizations without dupli
     JSON.stringify(choices.map((m) => m.key)),
     JSON.stringify(["llamacpp:q8", "llamacpp:iq3", "directory"]),
   );
-  assert.equal(choices[0].source, "local-llm · llama.cpp");
+  assert.equal(choices[0].source, "Sur ce PC · moteur direct");
 });
 
 test("GPU request identity survives conversation reload without mixing other contexts", () => {
@@ -287,4 +289,44 @@ test("reasoning-only or empty completions explain the missing answer", () => {
   };
   assert.equal(contextMessages(chat).length, 1);
   assert.equal(contextMessages(chat)[0].content, "Question");
+});
+
+test("legacy LM chats map only an exact installed file key to direct execution", () => {
+  const local = [
+    {
+      id: "exact",
+      accelerator_candidate: true,
+      lmstudio_key: "owner/repo/file.gguf",
+    },
+  ];
+  assert.equal(
+    directModelKey("lmstudio:owner/repo/file.gguf", local, true),
+    "llamacpp:exact",
+  );
+  assert.equal(directModelKey("lmstudio:file", local, true), "lmstudio:file");
+  assert.equal(
+    directModelKey("lmstudio:owner/repo/file.gguf", local, false),
+    "lmstudio:owner/repo/file.gguf",
+  );
+  assert.equal(
+    directModelKey(
+      "lmstudio:owner/repo/file.gguf",
+      [...local, { ...local[0], id: "duplicate" }],
+      true,
+    ),
+    "lmstudio:owner/repo/file.gguf",
+  );
+});
+test("variant links allow only direct revision pinned Hugging Face pages", () => {
+  const good =
+    "https://huggingface.co/owner/repo/blob/" + "a".repeat(40) + "/model.gguf";
+  assert.equal(verifiedHubLink(good), good);
+  for (const bad of [
+    "javascript:alert(1)",
+    "https://huggingface.co.evil.test/a",
+    good.replace("huggingface.co", "user:token@huggingface.co"),
+    good.replace("https:", "http:"),
+    good.replace("a".repeat(40), "main"),
+  ])
+    assert.equal(verifiedHubLink(bad), null);
 });

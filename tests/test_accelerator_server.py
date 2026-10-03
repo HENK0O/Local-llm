@@ -113,6 +113,20 @@ class AcceleratorHTTPTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as error: self.request('/v1/accelerator/profile', payload)
             self.assertEqual(error.exception.code,400)
 
+    def test_model_advice_accepts_only_catalog_ids_and_import_is_same_origin(self):
+        selected = SimpleNamespace(id='target')
+        self.service.catalog = {'target': selected}
+        with patch.object(self.service.advisor, 'get', return_value={'state':'ready','model_id':'target'}) as advice:
+            with self.request('/v1/model-advice?model_id=target') as response:
+                self.assertEqual(json.load(response)['state'],'ready')
+            self.assertIs(advice.call_args[0][0], selected)
+        for query in ('', '?model_id=/private/file.gguf', '?model_id=unknown'):
+            with self.assertRaises(HTTPError) as error: self.request('/v1/model-advice' + query)
+            self.assertEqual(error.exception.code,400)
+        with self.assertRaises(HTTPError) as error:
+            self.request('/v1/local-models/import', {'path':'/private/model.gguf'}, 'https://evil.invalid')
+        self.assertEqual(error.exception.code,403)
+
     def test_unloaded_wrong_model_nonstream_and_calibration_never_silently_route_elsewhere(self):
         payload = {'backend': 'llamacpp', 'model': 'target', 'stream': True,
                    'messages': [{'role': 'user', 'content': 'Question'}]}

@@ -7,6 +7,8 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
+from urllib.parse import urlsplit
+import re
 
 from .config import ModelConfig
 from .gguf import GGUFReader, model_config
@@ -23,6 +25,9 @@ class DiscoveredModel:
     reason: Optional[str]
     architecture: Optional[str]
     quantization: str
+    repository: Optional[str] = None
+    lmstudio_key: Optional[str] = None
+    mtp_heads: int = 0
 
     def to_dict(self):
         return asdict(self)
@@ -58,17 +63,66 @@ def default_model_roots() -> List[Path]:
     return roots
 
 
+def valid_repository(value):
+    return isinstance(value, str) and bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,95}/[A-Za-z0-9][A-Za-z0-9_.-]{0,95}", value)) and ".." not in value
+
+
+def repository_url(value):
+    if not isinstance(value, str):
+        return None
+    parsed = urlsplit(value)
+    repo = parsed.path.strip("/")
+    return repo if parsed.scheme == "https" and parsed.netloc == "huggingface.co" and not parsed.query and not parsed.fragment and valid_repository(repo) else None
+
+
+def mtp_head_count(reader):
+    """Only advertise embedded MTP with both metadata and actual head tensors."""
+    architecture = reader.metadata.get("general.architecture")
+    count = reader.metadata.get(str(architecture) + ".nextn_predict_layers", 0)
+    return count if type(count) is int and 0 < count <= 16 and any(".nextn.eh_proj." in name for name in reader.tensors) else 0
+
+
+def file_provenance(path):
+    # Preserve exact fine-tune repository and filename; model metadata may omit it.
+    for configured in lmstudio_model_roots(Path.home()):
+        for root in dict.fromkeys((configured.expanduser().absolute(), configured.resolve())):
+            try:
+                relative = path.relative_to(root)
+            except ValueError:
+                continue
+            if len(relative.parts) >= 3:
+                repo = "/".join(relative.parts[:2])
+                if valid_repository(repo):
+                    return repo, relative.as_posix()
+    for part in path.parts:
+        if part.startswith("models--"):
+            repo = part[len("models--"):].replace("--", "/", 1)
+            if valid_repository(repo):
+                return repo, None
+    known = {
+        "smollm2-360m-instruct": "HuggingFaceTB/SmolLM2-360M-Instruct-GGUF",
+        "smollm2-1.7b-instruct": "bartowski/SmolLM2-1.7B-Instruct-GGUF",
+    }
+    stem = re.split(r"[.-](?:Q[2-8]_|F16|BF16)", path.stem, flags=re.I)[0].replace(".official", "").lower()
+    return known.get(stem), None
+
+
 def inspect_model(path: Path, source: str = "local") -> DiscoveredModel:
-    path = path.resolve()
+    # HF snapshots use symlinks into extensionless blobs. Keep the lexical name.
+    path = path.expanduser().absolute()
     architecture = None
     quantization = "F32/F16"
     reason = None
     size = 0
+    repository, studio_key = file_provenance(path)
+    mtp_heads = 0
     try:
         if path.is_file():
             size = path.stat().st_size
             reader = GGUFReader(path)
             architecture = reader.metadata.get("general.architecture")
+            mtp_heads = mtp_head_count(reader)
+            repository = repository or repository_url(reader.metadata.get("general.base_model.0.repo_url"))
             quantization = "/".join(sorted({t.type_name for t in reader.tensors.values()}))
             if architecture != "llama":
                 raise ValueError("Architecture non prise en charge : " + str(architecture))
@@ -101,7 +155,7 @@ def inspect_model(path: Path, source: str = "local") -> DiscoveredModel:
         reason = str(exc)
     return DiscoveredModel(hashlib.sha256(str(path).encode()).hexdigest()[:20],
                            path.stem if path.is_file() else path.name, str(path), source,
-                           size, reason is None, reason, architecture, quantization)
+                           size, reason is None, reason, architecture, quantization, repository, studio_key, mtp_heads)
 
 
 def discover_models(roots: Optional[Iterable[Path]] = None, limit: int = 256) -> List[DiscoveredModel]:

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from .gguf import GGUFReader
+from .discovery import mtp_head_count
 from .lmstudio import LMStudioClient
 from .loading import model_fingerprint
 from .calibration import (TRAIN_PROMPTS, VALIDATION_PROMPTS, CATEGORIES, OUTPUT_LIMITS,
@@ -30,7 +31,7 @@ from .calibration import (TRAIN_PROMPTS, VALIDATION_PROMPTS, CATEGORIES, OUTPUT_
                           select_winner, memory_plan, shortlist, verified_profiles, USAGE_PROFILES, speculation_summary)
 
 
-PROTOCOL = 5
+PROTOCOL = 6
 
 
 @dataclass(frozen=True)
@@ -59,9 +60,9 @@ class ExecutionConfig:
             raise ValueError("Invalid context or attention configuration")
         if self.kv_type not in {"f16", "q8_0"} or self.draft_tokens not in {2, 4, 8, 16, 32, 48, 64}:
             raise ValueError("Invalid cache precision or speculative depth")
-        if self.speculative not in {"none", "ngram-simple", "ngram-map-k", "ngram-mod", "draft-simple", "draft-eagle3", "draft-dflash", "draft-dspark"}:
+        if self.speculative not in {"none", "ngram-simple", "ngram-map-k", "ngram-mod", "draft-simple", "draft-eagle3", "draft-dflash", "draft-dspark", "draft-mtp"}:
             raise ValueError("Unsupported speculative configuration")
-        if self.speculative.startswith("draft-") != bool(self.draft_path):
+        if (self.speculative.startswith("draft-") and self.speculative != "draft-mtp") != bool(self.draft_path):
             raise ValueError("A draft model is required for this speculative method")
         if (not 0 <= self.threads_batch <= 256 or
                 (self.ubatch is not None and (self.ubatch not in {128, 256, 512, 1024, 2048} or self.ubatch > self.batch)) or
@@ -168,7 +169,7 @@ class Accelerator:
                                         for line in devices.splitlines() if ': ' in line and 'srv ' not in line)
                     self.capabilities = {'available': True, 'version': version,
                                          'optional_flags': [flag for flag in ('--backend-sampling', '--spec-ngram-map-k-size-m', '--spec-ngram-mod-n-max') if flag in help_text],
-                                         'specialized_methods': [method for method in ('draft-eagle3', 'draft-dflash', 'draft-dspark') if method in help_text],
+                                         'specialized_methods': [method for method in ('draft-eagle3', 'draft-dflash', 'draft-dspark', 'draft-mtp') if method in help_text],
                                          'devices': devices, 'gpu': any(x in devices for x in ('MTL', 'CUDA', 'Vulkan', 'ROCm', 'SYCL'))}
                 except (OSError, subprocess.SubprocessError, ValueError) as exc:
                     self.capabilities = {'available': False, 'error': str(exc)}
@@ -221,6 +222,14 @@ class Accelerator:
             self.job = None
 
     def _start(self, config):
+        if config.speculative == 'draft-mtp' and self.memory_probe:
+            available = self.memory_probe()
+            if available is not None:
+                plan = memory_plan(GGUFReader(self.path).metadata, self.path.stat().st_size, available, required=config.context)
+                # MTP shares weights but allocates another context and compute buffers.
+                needed = plan['estimated_bytes'] + config.context * plan['kv_bytes_per_token'] + 256 * 1024 ** 2
+                if needed > available - (plan.get('reserve_bytes') or 0):
+                    raise ValueError('RAM disponible insuffisante pour le contexte MTP supplémentaire ; standard conservé.')
         self._stop()
         if self.closed:
             raise ValueError('Runtime fermé')
@@ -244,6 +253,8 @@ class Accelerator:
             command += ['--backend-sampling']
         if config.draft_path:
             command += ['--spec-draft-model', config.draft_path, '--spec-draft-ngl', 'all', '--spec-draft-n-max', str(config.draft_tokens)]
+        if config.speculative == 'draft-mtp':
+            command += ['--spec-draft-n-max', str(config.draft_tokens)]
         if config.speculative == 'ngram-simple':
             command += ['--spec-ngram-simple-size-m', str(config.draft_tokens), '--spec-ngram-simple-size-n', str(config.ngram_lookup)]
         elif config.speculative == 'ngram-map-k':
@@ -338,6 +349,8 @@ class Accelerator:
             # Bind every selectable profile, not only the balanced winner.
             for profile in profiles.values():
                 item_config = ExecutionConfig(**profile['config'])
+                if item_config.speculative == 'draft-mtp' and ('draft-mtp' not in self.available().get('specialized_methods', []) or not mtp_head_count(GGUFReader(self.path))):
+                    return
                 if item_config.draft_path:
                     path = Path(item_config.draft_path)
                     if (draft_method(self.path, path) != item_config.speculative or
@@ -580,6 +593,9 @@ class Accelerator:
             configs['motifs-map-32'] = replace(tuned, speculative='ngram-map-k', draft_tokens=32, ngram_lookup=8)
         if '--spec-ngram-mod-n-max' in flags:
             configs['motifs-adaptatifs-64'] = replace(tuned, speculative='ngram-mod', draft_tokens=64, ngram_lookup=24)
+        if self.path and 'draft-mtp' in capabilities.get('specialized_methods', []) and mtp_head_count(GGUFReader(self.path)):
+            for depth in (2, 4, 8, 16):
+                configs['mtp-intégré-' + str(depth)] = replace(tuned, speculative='draft-mtp', draft_tokens=depth)
         paths = [drafts] if isinstance(drafts, (str, Path)) else drafts or []
         for index, path in enumerate(paths):
             method = draft_method(self.path, Path(path))

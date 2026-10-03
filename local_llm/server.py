@@ -12,7 +12,7 @@ from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs
 
 from .chat import ChatMessage, format_chat, require_chat_template
 from .evaluation import capture_external_reference, capture_trace, compare_traces
@@ -21,6 +21,7 @@ from .comparison import compare_cached
 from .discovery import default_model_roots, discover_models, inspect_model
 from .lmstudio import LMStudioClient
 from .recommendations import recommend_models
+from .model_advisor import ModelAdvisor
 from .telemetry import SystemTelemetry
 from .cache import PrefixCache
 from .accelerator import Accelerator, draft_method
@@ -173,9 +174,15 @@ class ChatService:
         self.accelerator = Accelerator()
         self.accelerator.memory_probe = self._accelerator_memory_available
         self._accelerator_records = OrderedDict()
+        self.advisor = ModelAdvisor()
+        self.imported_model_paths = self._read_imported_paths()
         self.extra_model_roots = list(model_dirs or [])
         self.model_roots = default_model_roots() + self.extra_model_roots
         self.catalog = {m.id: m for m in discover_models(self.model_roots)}
+        for path in self.imported_model_paths:
+            if Path(path).exists():
+                item = inspect_model(Path(path))
+                self.catalog[item.id] = item
         if model_path is not None:
             explicit = inspect_model(Path(model_path))
             self.catalog[explicit.id] = explicit
@@ -227,6 +234,10 @@ class ChatService:
             if refresh:
                 self.model_roots = default_model_roots() + self.extra_model_roots
                 items = {m.id: m for m in discover_models(self.model_roots)}
+                for path in self.imported_model_paths:
+                    if Path(path).exists():
+                        item = inspect_model(Path(path))
+                        items[item.id] = item
                 if self.current_id and self.current_id in self.catalog:
                     items[self.current_id] = self.catalog[self.current_id]
                 if self.accelerator.model_id in self.catalog:
@@ -240,6 +251,61 @@ class ChatService:
             return {"models": models, "accelerator": self.accelerator.describe(),
                     "current_id": self.current_id,
                     "roots": [str(Path(p).expanduser()) for p in self.model_roots]}
+
+    def _read_imported_paths(self):
+        if not hasattr(self.accelerator, 'state_dir'):
+            return []
+        path = self.accelerator.state_dir / 'library.json'
+        try:
+            if not path.is_file() or path.stat().st_size > 256 * 1024:
+                return []
+            paths = json.loads(path.read_text())
+            if not isinstance(paths, list) or len(paths) > 256:
+                return []
+            return [p for p in paths if isinstance(p, str) and len(p) <= 4096 and Path(p).is_absolute()]
+        except (OSError, ValueError):
+            return []
+
+    def import_model(self, payload):
+        value = payload.get('path') if isinstance(payload, dict) else None
+        if not isinstance(value, str) or not value.strip() or len(value) > 4096:
+            raise ValueError('Chemin de checkpoint requis')
+        path = Path(value.strip()).expanduser()
+        if not path.is_absolute() or not path.exists():
+            raise ValueError('Choisissez un fichier ou dossier existant avec son chemin absolu.')
+        if not (path.is_file() and path.suffix.lower() == '.gguf' or path.is_dir() and (path / 'config.json').is_file() and (path / 'tokenizer.json').is_file()):
+            raise ValueError('Un fichier GGUF ou dossier avec config.json et tokenizer.json est requis.')
+        item = inspect_model(path)
+        if not item.architecture:
+            raise ValueError('Checkpoint illisible : ' + str(item.reason))
+        with self._generation_lock:
+            if len(self.imported_model_paths) >= 256 and str(path) not in self.imported_model_paths:
+                raise ValueError('Bibliothèque limitée à 256 chemins ajoutés.')
+            paths = list(dict.fromkeys(self.imported_model_paths + [str(path)]))
+            directory = self.accelerator.state_dir
+            directory.mkdir(parents=True, exist_ok=True)
+            destination = directory / 'library.json'
+            temporary = directory / ('library-' + uuid.uuid4().hex + '.tmp')
+            try:
+                temporary.write_text(json.dumps(paths))
+                temporary.chmod(0o600)
+                temporary.replace(destination)
+            finally:
+                temporary.unlink(missing_ok=True)
+            self.imported_model_paths = paths
+            self.catalog[item.id] = item
+            return self.available_models()
+
+    def model_advice(self, model_id):
+        item = self.catalog.get(model_id)
+        if item is None:
+            raise ValueError('Modèle absent de la bibliothèque')
+        snapshot = self.telemetry.snapshot()
+        runtime = self.accelerator.describe()
+        context = runtime.get('context_length', 4096) if runtime.get('model_id') == item.id else 4096
+        return self.advisor.get(item, total=snapshot.get('memory_total_bytes'),
+            available=self._accelerator_memory_available(), context=context,
+            mtp_supported='draft-mtp' in self.accelerator.available().get('specialized_methods', []))
 
     def load_model(self, payload: object) -> Dict:
         if not isinstance(payload, dict) or not isinstance(payload.get("id"), str):
@@ -293,7 +359,7 @@ class ChatService:
                 "max_lmstudio_tokens": self.max_lmstudio_tokens,
                 "max_accelerator_tokens": MAX_ACCELERATOR_TOKENS,
                 "accelerator": self.accelerator.describe(),
-                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory", "usage_profiles"],
+                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory", "usage_profiles", "direct_library", "model_advice", "embedded_mtp"],
                 "retained_cache_bytes": self.prefix_cache.nbytes,
                 "retained_cache_limit_bytes": self.prefix_cache.max_bytes}
 
@@ -742,6 +808,15 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             service = self.server.service
             self._send_json(200, service.system_snapshot() if hasattr(service, 'system_snapshot') else service.telemetry.snapshot())
             return
+        if path == "/v1/model-advice":
+            try:
+                model_id = parse_qs(urlsplit(self.path).query).get("model_id", [None])[0]
+                if not isinstance(model_id, str) or len(model_id) > 128:
+                    raise ValueError("Identifiant de modèle requis")
+                self._send_json(200, self.server.service.model_advice(model_id))
+            except (OSError, ValueError) as exc:
+                self._error(400, str(exc))
+            return
         if path == "/v1/recommendations":
             self._send_json(200, recommend_models(installed=self.server.service.catalog.values()))
             return
@@ -827,7 +902,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self._path()
-        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/lmstudio/load", "/v1/accelerator/load", "/v1/accelerator/unload", "/v1/accelerator/optimize", "/v1/accelerator/cancel", "/v1/accelerator/profile", "/v1/compare"}:
+        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/local-models/import", "/v1/lmstudio/load", "/v1/accelerator/load", "/v1/accelerator/unload", "/v1/accelerator/optimize", "/v1/accelerator/cancel", "/v1/accelerator/profile", "/v1/compare"}:
             self._error(404, "route not found")
             return
         if not self._same_origin():
@@ -872,6 +947,9 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/v1/local-models/load":
                 self._send_json(200, self.server.service.load_model(payload))
+                return
+            if path == "/v1/local-models/import":
+                self._send_json(200, self.server.service.import_model(payload))
                 return
             if path == "/v1/local-models/refresh":
                 self._send_json(200, self.server.service.available_models(refresh=True))

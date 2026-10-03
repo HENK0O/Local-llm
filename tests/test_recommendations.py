@@ -14,7 +14,7 @@ class RecommendationTests(unittest.TestCase):
         self.assertEqual(next(m['family'] for m in small['models'] if m['recommended']), 'SmolLM2-360M')
         large = recommend_models({'memory_bytes': 32 * GIB, 'logical_cores': 10})
         self.assertEqual(len(large['models']), 3)
-        self.assertEqual(next(m['family'] for m in large['models'] if m['recommended']), 'SmolLM2-1.7B')
+        self.assertEqual(next(m['family'] for m in large['models'] if m['recommended']), 'Qwen3-8B')
 
     def test_unknown_memory_is_explicit_and_no_speed_is_invented(self):
         report = recommend_models({'memory_bytes': None})
