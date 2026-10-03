@@ -28,6 +28,14 @@ fichiers ; un moteur doit encore les charger en RAM et exécuter leurs calculs.
 local-llm gère son propre worker privé llama.cpp automatiquement ; il n’est pas
 nécessaire de démarrer un second serveur à la main.
 
+Si un chargement échoue, le sélecteur conserve le modèle demandé, affiche la
+raison et propose « Réessayer le chargement ». La discussion reste bloquée pour
+éviter d’envoyer le message au modèle précédent. L’intention est conservée dans
+la conversation, y compris après rechargement de la page. Une erreur de RAM
+indique le budget disponible et l’estimation minimale avec son contexte ; les
+modèles chargés dans un autre moteur doivent être déchargés par leur application.
+Les réponses d’un ancien polling sont ignorées pendant un changement de modèle.
+
 Dans **Bibliothèque**, « Ajouter un checkpoint existant » accepte le chemin
 absolu d’un GGUF ou d’un dossier natif. Seul ce chemin est enregistré dans
 `LOCAL_LLM_STATE_DIR/library.json` (par défaut `~/.cache/local-llm`), jamais les

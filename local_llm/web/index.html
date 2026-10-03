@@ -1518,6 +1518,16 @@
           </div>
           <div class="bottom">
             <p class="notice" id="notice" role="status" aria-live="polite"></p>
+            <div
+              id="modelLoadFailure"
+              class="performance-card hidden"
+              role="alert"
+            >
+              <p id="modelLoadFailureMessage" class="hint"></p>
+              <button id="retryModelLoad" type="button">
+                Réessayer le chargement
+              </button>
+            </div>
             <form class="composer" id="chatForm">
               <label class="hidden" for="prompt">Votre message</label
               ><textarea
@@ -2260,6 +2270,8 @@
         calibrationRunning = false,
         gpuPolling = false,
         catalogData = { models: [], roots: [] };
+      let modelSelection = null,
+        modelSelectionEpoch = 0;
       let completions = [],
         measuring = false,
         systemPolling = false,
@@ -2287,6 +2299,7 @@
             ? "lmstudio:" + activeLM.id
             : info.current_id || null;
       const ready = () =>
+        !modelSelection &&
         (activeGPU
           ? activeGPU.loaded &&
             gpuInfo.loaded &&
@@ -2539,13 +2552,41 @@
       async function loadModel(id, instanceId = null, ensureLoaded = false) {
         if (busy || !id) return false;
         id = directModelKey(id, catalog, gpuInfo.available);
-        if (id.startsWith("lmstudio:") && !lmCatalog.length)
-          await lmRefresh(true);
+        const choice = modelChoices(
+          catalog,
+          lmCatalog,
+          !!gpuInfo.available,
+        ).find((m) => m.key === id);
+        modelSelection = {
+          key: id,
+          name: choice?.name || conversations.active?.modelName || id,
+          instanceId,
+          ensureLoaded,
+          state: "loading",
+          error: null,
+        };
+        ++modelSelectionEpoch;
+        const chat = conversations.active;
+        if (chat) {
+          chat.modelKey = id;
+          chat.modelName = modelSelection.name;
+          chat.lmInstanceId = instanceId;
+          conversations.save();
+        }
         setBusy(true);
         $("notice").textContent = "Chargement du modèle…";
         try {
+          if (id.startsWith("lmstudio:") && !lmCatalog.length)
+            await lmRefresh(true, true);
           if (id.startsWith("llamacpp:")) {
-            gpuInfo = await api("/v1/accelerator/load", { id: id.slice(9) });
+            const loaded = await api("/v1/accelerator/load", {
+              id: id.slice(9),
+            });
+            if (!loaded.loaded || loaded.model_id !== id.slice(9))
+              throw new Error(
+                "Le moteur n’a pas confirmé le chargement du modèle sélectionné.",
+              );
+            gpuInfo = loaded;
             activeGPU = gpuInfo;
             activeLM = null;
             info = await api("/health");
@@ -2555,7 +2596,11 @@
               " · cache des conversations actif";
             $("modelName").textContent = gpuInfo.model_name;
             $("engineStatus").textContent = "Exécution directe par local-llm";
-            await loadDraftChoices();
+            try {
+              await loadDraftChoices();
+            } catch {
+              draftChoices = [];
+            }
             renderOptimization();
           } else if (id.startsWith("lmstudio:")) {
             if (gpuInfo.loaded)
@@ -2600,7 +2645,7 @@
             showInfo(loaded);
             catalogData = await api("/v1/local-models");
           }
-          const chat = conversations.active;
+          modelSelection = null;
           if (chat) {
             chat.modelKey = id;
             chat.modelName = activeGPU
@@ -2627,9 +2672,20 @@
                     ? "Relancez le serveur local-llm pour vérifier le modèle LM Studio utilisé."
                     : "Ce modèle n’est pas chargé. Ouvrez la bibliothèque pour le charger, ou sélectionnez une instance chargée."
               : "Modèle prêt. L’historique est conservé.";
+          ++modelSelectionEpoch;
           return true;
         } catch (error) {
-          $("notice").textContent = error.message;
+          modelSelection = {
+            ...modelSelection,
+            key: id,
+            name: choice?.name || chat?.modelName || id,
+            instanceId,
+            ensureLoaded,
+            state: "failed",
+            error: error.message,
+          };
+          $("notice").textContent =
+            "Chargement de " + modelSelection.name + " impossible.";
           if (info.features?.includes("gpu_runtime"))
             await refreshAccelerator();
           updateModelSelection();
@@ -2641,6 +2697,7 @@
       }
       function updateModelSelection() {
         const name =
+          modelSelection?.name ||
           activeGPU?.model_name ||
           activeLM?.name ||
           (info.loaded ? info.model : "Choisir un modèle…");
@@ -2651,29 +2708,45 @@
         );
         $("modelSelect").classList.toggle("generating", busy && !!controller);
         $("modelStatusDot").classList.toggle("off", !ready());
-        $("modelStatus").textContent = busy
-          ? controller
-            ? "En cours"
-            : calibrationRunning
-              ? "Optimisation…"
-              : "Chargement…"
-          : ready()
-            ? activeGPU
-              ? gpuInfo.profile?.winner !== "standard" && gpuInfo.profile
-                ? "Optimisation active"
-                : gpuInfo.profile
-                  ? "Calibré · configuration standard"
-                  : "Moteur direct · prêt"
-              : activeLM
-                ? "LM Studio · Chargé"
-                : "local-llm · Prêt"
-            : activeLM
-              ? !lmConnected
-                ? "LM Studio · Hors ligne"
-                : !info.features?.includes("lmstudio_instances")
-                  ? "Serveur à relancer"
-                  : "LM Studio · Non chargé"
-              : "Aucun modèle prêt";
+        $("modelLoadFailure").classList.toggle(
+          "hidden",
+          modelSelection?.state !== "failed",
+        );
+        $("modelLoadFailureMessage").textContent =
+          modelSelection?.state === "failed"
+            ? "Chargement de " +
+              name +
+              " impossible. " +
+              modelSelection.error +
+              " La discussion attend ce modèle."
+            : "";
+        $("retryModelLoad").disabled = busy;
+        $("modelStatus").textContent =
+          modelSelection?.state === "failed"
+            ? "Chargement échoué"
+            : busy
+              ? controller
+                ? "En cours"
+                : calibrationRunning
+                  ? "Optimisation…"
+                  : "Chargement…"
+              : ready()
+                ? activeGPU
+                  ? gpuInfo.profile?.winner !== "standard" && gpuInfo.profile
+                    ? "Optimisation active"
+                    : gpuInfo.profile
+                      ? "Calibré · configuration standard"
+                      : "Moteur direct · prêt"
+                  : activeLM
+                    ? "LM Studio · Chargé"
+                    : "local-llm · Prêt"
+                : activeLM
+                  ? !lmConnected
+                    ? "LM Studio · Hors ligne"
+                    : !info.features?.includes("lmstudio_instances")
+                      ? "Serveur à relancer"
+                      : "LM Studio · Non chargé"
+                  : "Aucun modèle prêt";
       }
       function renderModelPicker() {
         const query = $("pickerSearch").value.trim().toLowerCase();
@@ -2686,7 +2759,7 @@
           (m.name + " " + m.source).toLowerCase().includes(query),
         )) {
           const selected =
-            m.key === currentModelKey() &&
+            m.key === (modelSelection?.key || currentModelKey()) &&
             (!m.instanceId || m.instanceId === activeLM?.instanceId);
           const button = node(
             "button",
@@ -3149,11 +3222,19 @@
         output.append(details);
       }
       async function refreshAccelerator() {
-        if (gpuPolling || !info.features?.includes("gpu_runtime")) return;
+        if (
+          gpuPolling ||
+          modelSelection?.state === "loading" ||
+          !info.features?.includes("gpu_runtime")
+        )
+          return;
+        const selectionEpoch = modelSelectionEpoch;
         gpuPolling = true;
         try {
           const previousAvailable = gpuInfo.available;
-          gpuInfo = await api("/v1/accelerator");
+          const fresh = await api("/v1/accelerator");
+          if (selectionEpoch !== modelSelectionEpoch) return;
+          gpuInfo = fresh;
           if (activeGPU)
             activeGPU = {
               ...activeGPU,
@@ -3167,7 +3248,9 @@
           else if (wasRunning && !controller) {
             setBusy(false);
             $("notice").textContent =
-              gpuInfo.job?.message || "Calibration terminée.";
+              modelSelection?.state === "failed"
+                ? "Chargement de " + modelSelection.name + " impossible."
+                : gpuInfo.job?.message || "Calibration terminée.";
           }
           renderOptimization();
           refreshModelAdvice();
@@ -3176,7 +3259,8 @@
             renderCatalog(catalogData);
           if (!busy) setBusy(false);
         } catch (error) {
-          $("optimizationStatus").textContent = error.message;
+          if (selectionEpoch === modelSelectionEpoch)
+            $("optimizationStatus").textContent = error.message;
         } finally {
           gpuPolling = false;
         }
@@ -3231,14 +3315,14 @@
       }, 2000);
 
       let lmPolling = false;
-      async function lmRefresh(quiet = false) {
-        if (busy || lmPolling) return;
+      async function lmRefresh(quiet = false, duringLoad = false) {
+        if ((busy && !duringLoad) || lmPolling) return;
         lmPolling = true;
         if (!quiet)
           $("lmStatus").textContent = "LM Studio · connexion optionnelle";
         try {
           const data = await api("/v1/lmstudio/models");
-          if (busy) return;
+          if (busy && !duringLoad) return;
           lmConnected = data.available;
           const catalogChanged =
             JSON.stringify(lmCatalog) !== JSON.stringify(data.models);
@@ -4284,12 +4368,15 @@
         saveDraft();
         const chat = conversations.select(id);
         if (!chat) return;
+        modelSelection = null;
+        ++modelSelectionEpoch;
         epoch++;
         setWorkspace("chat");
         renderChat();
         if (
           chat.modelKey &&
           (chat.modelKey !== currentModelKey() ||
+            !ready() ||
             (activeLM && chat.lmInstanceId !== activeLM.instanceId))
         )
           await loadModel(chat.modelKey, chat.lmInstanceId || null);
@@ -4310,12 +4397,13 @@
         saveDraft();
         if (
           !conversations.create(
-            currentModelKey(),
-            activeGPU
-              ? activeGPU.model_name
-              : activeLM
-                ? activeLM.name
-                : info.model,
+            modelSelection?.key || currentModelKey(),
+            modelSelection?.name ||
+              (activeGPU
+                ? activeGPU.model_name
+                : activeLM
+                  ? activeLM.name
+                  : info.model),
           )
         ) {
           updateStorageNotice();
@@ -4650,9 +4738,12 @@
       }
       $("refreshAdvice").onclick = () => refreshModelAdvice(true);
       function refreshModelAdvice(force = false) {
-        const modelId = activeLM
-          ? null
-          : activeGPU?.model_id || info.current_id;
+        const requestedId = modelSelection?.key.startsWith("llamacpp:")
+          ? modelSelection.key.slice(9)
+          : null;
+        const modelId =
+          requestedId ||
+          (activeLM ? null : activeGPU?.model_id || info.current_id);
         const key = modelId
           ? modelId + ":" + (activeGPU?.context_length || 4096)
           : null;
@@ -4686,6 +4777,14 @@
         };
         lookup();
       }
+      $("retryModelLoad").onclick = () => {
+        if (modelSelection?.state === "failed")
+          loadModel(
+            modelSelection.key,
+            modelSelection.instanceId,
+            modelSelection.ensureLoaded,
+          );
+      };
       $("newChat").onclick = newConversation;
       $("modelSearch").oninput = () => renderCatalog(catalogData);
       $("recommendButton").onclick = () => $("recommendations").showModal();

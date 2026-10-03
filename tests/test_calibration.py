@@ -32,6 +32,27 @@ class MemoryAndValidationTests(unittest.TestCase):
         self.assertEqual(hybrid['slots'], 1)
         self.assertTrue(hybrid['conservative'])
 
+    def test_memory_failure_reports_budget_minimum_and_context(self):
+        with self.assertRaisesRegex(ValueError, r'1.0 Gio disponibles, au moins .* Gio estimés.*512 tokens'):
+            memory_plan(self.metadata(), 1024**3, 1024**3)
+
+    def test_failed_memory_preflight_keeps_actual_runtime_and_does_not_start_another_model(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder) / 'ling.gguf'; target.write_bytes(b'fixture')
+            runtime = Accelerator(executable='mock', state_dir=folder)
+            runtime.path = Path(folder) / 'smol.gguf'
+            runtime.model_id, runtime.model_name = 'smol', 'Smol'
+            runtime.process = Mock(); runtime.process.poll.return_value = None
+            previous = runtime.process
+            selected = SimpleNamespace(id='ling', name='Ling Tiny', path=str(target), architecture='bailingmoe3')
+            with patch.object(runtime, 'available', return_value={'available':True}), patch('local_llm.accelerator.GGUFReader',return_value=SimpleNamespace(metadata=self.metadata())), patch.object(runtime, '_start') as start:
+                with self.assertRaisesRegex(ValueError, 'RAM disponible insuffisante'):
+                    runtime.load(selected, memory_available=1024**3)
+            start.assert_not_called()
+            self.assertIs(runtime.process, previous)
+            self.assertEqual(runtime.model_id, 'smol')
+
     def test_regression_in_one_category_cannot_hide_behind_faster_other_workloads(self):
         base = {'samples': samples()}
         rows = samples(.4, 200)

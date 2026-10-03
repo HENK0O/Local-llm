@@ -161,7 +161,15 @@ def memory_plan(metadata, weight_bytes, available=None, required=512):
                 'cache_ram_mib': cache_mib,
                 'estimated_bytes': fixed + context * kv_per_token + cache_mib * MIB,
                 'kv_bytes_per_token': kv_per_token, 'reserve_bytes': reserve, 'conservative': not dense}
-    raise ValueError('Mémoire disponible insuffisante pour les poids et ce contexte. Déchargez les modèles inutilisés dans LM Studio ou choisissez un modèle plus petit.')
+    minimum_context = min(n for n in choices if n >= required)
+    working = fixed + minimum_context * kv_per_token
+    # Solve working + the same bounded reserve used above; exclude optional cache.
+    minimum = working + 512 * MIB
+    if minimum > 5 * 1024 ** 3:
+        minimum = working / .9
+    if minimum > 20 * 1024 ** 3:
+        minimum = working + 2 * 1024 ** 3
+    raise ValueError('RAM disponible insuffisante : {:.1f} Gio disponibles, au moins {:.1f} Gio estimés pour ce checkpoint avec {} tokens de contexte. Déchargez les modèles ouverts dans un autre moteur ou libérez de la RAM, puis réessayez.'.format(available / 1024 ** 3, minimum / 1024 ** 3, minimum_context))
 
 
 def shortlist(screening, limit=6):
