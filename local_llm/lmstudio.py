@@ -94,12 +94,17 @@ class LMStudioClient:
 
     def iter_chat(self, payload):
         """Relay OpenAI SSE, including usage; close upstream on disconnect."""
+        yield from self._iter_sse('/v1/chat/completions', dict(payload, stream=True, stream_options={"include_usage": True}))
+
+    def iter_completion(self, payload):
+        """Native llama.cpp completion SSE; final stop frame replaces [DONE]."""
+        yield from self._iter_sse('/completion', dict(payload, stream=True), native=True)
+
+    def _iter_sse(self, route, body, native=False):
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = "Bearer " + self.token
-        body = dict(payload, stream=True, stream_options={"include_usage": True})
-        request = Request(self.url + "/v1/chat/completions",
-                          data=json.dumps(body).encode(), headers=headers)
+        request = Request(self.url + route, data=json.dumps(body).encode(), headers=headers)
         with self.opener.open(request, timeout=180) as response:
             frame = []
             size = 0
@@ -122,7 +127,11 @@ class LMStudioClient:
                         chunk = json.loads(raw)
                         if not isinstance(chunk, dict) or chunk.get("error"):
                             raise ValueError("LM Studio generation failed")
+                        if native and chunk.get('stop') is True:
+                            done = True
                         yield chunk
+                        if native and done:
+                            break
                 elif text.startswith("data:"):
                     frame.append(text[5:].lstrip())
             if not done:

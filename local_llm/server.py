@@ -359,7 +359,7 @@ class ChatService:
                 "max_lmstudio_tokens": self.max_lmstudio_tokens,
                 "max_accelerator_tokens": MAX_ACCELERATOR_TOKENS,
                 "accelerator": self.accelerator.describe(),
-                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory", "usage_profiles", "direct_library", "model_advice", "embedded_mtp"],
+                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory", "usage_profiles", "direct_library", "model_advice", "embedded_mtp", "persistent_kv_cache", "workload_benchmark"],
                 "retained_cache_bytes": self.prefix_cache.nbytes,
                 "retained_cache_limit_bytes": self.prefix_cache.max_bytes}
 
@@ -902,7 +902,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self._path()
-        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/local-models/import", "/v1/lmstudio/load", "/v1/accelerator/load", "/v1/accelerator/unload", "/v1/accelerator/optimize", "/v1/accelerator/cancel", "/v1/accelerator/profile", "/v1/compare"}:
+        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/local-models/import", "/v1/lmstudio/load", "/v1/accelerator/load", "/v1/accelerator/unload", "/v1/accelerator/optimize", "/v1/accelerator/cancel", "/v1/accelerator/profile", "/v1/accelerator/cache", "/v1/compare"}:
             self._error(404, "route not found")
             return
         if not self._same_origin():
@@ -929,6 +929,13 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("profile is required")
                 self._send_json(200, self.server.service.accelerator.set_usage_profile(payload["profile"]))
                 self.server.service._accelerator_records.clear()
+                return
+            if path == "/v1/accelerator/cache":
+                if (not isinstance(payload, dict) or set(payload) - {'enabled', 'clear'} or
+                        'enabled' in payload and type(payload['enabled']) is not bool or
+                        'clear' in payload and type(payload['clear']) is not bool):
+                    raise ValueError('Réglages du cache invalides')
+                self._send_json(200, self.server.service.accelerator.configure_cache(payload.get('enabled'), payload.get('clear', False)))
                 return
             if path == "/v1/accelerator/cancel":
                 self.server.service.accelerator.cancelled.set()
@@ -1065,7 +1072,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                     "calibration_gain_percent": profile["gain_percent"] if profile else None,
                     "optimization_profile": runtime.usage_profile,
                     "draft_proposed_tokens": timings.get("draft_n"), "draft_accepted_tokens": timings.get("draft_n_accepted"),
-                    "speculative": runtime.config.speculative, "cached_conversations": len(runtime.slots.entries)}})
+                    "speculative": runtime.config.speculative, "persistent_cache": runtime.describe().get("persistent_cache"), "cached_conversations": len(runtime.slots.entries)}})
             self._write_event("[DONE]")
         except (BrokenPipeError, ConnectionResetError):
             pass

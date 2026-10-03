@@ -136,5 +136,24 @@ class UsageProfileTests(unittest.TestCase):
         list(runtime.iter_chat(payload,'a'))
         self.assertTrue(runtime.client.iter_chat.call_args.args[0]['cache_prompt'])
 
+    def test_disk_snapshots_are_never_saved_for_interrupted_generation(self):
+        runtime = Accelerator(executable='unused')
+        runtime.model_id = 'target'; runtime.process = Mock(); runtime.process.poll.return_value = None
+        runtime.client = Mock(); runtime.context = Mock(return_value={'prompt_tokens':10})
+        runtime.client.iter_chat.side_effect = lambda payload: (chunk for chunk in [{'model':'target'}])
+        runtime._cache_compatible = Mock(return_value=True)
+        runtime.cache_binding = 'bound-runtime'
+        runtime.kv_store = Mock(); runtime.kv_store.budget = 512 * 1024**2
+        runtime.kv_store.restore.return_value = False
+        payload = {'model':'target', 'messages':[], 'max_tokens':32}
+        stream = runtime.iter_chat(payload, 'a'); next(stream); stream.close()
+        runtime.kv_store.save.assert_not_called()
+        runtime.kv_store.remove.assert_called_once_with('a', 'bound-runtime')
+        runtime.kv_store.restore.reset_mock()
+        list(runtime.iter_chat(payload, 'a'))
+        runtime.kv_store.restore.assert_not_called()
+        self.assertFalse(runtime.client.iter_chat.call_args.args[0]['cache_prompt'])
+        runtime.kv_store.save.assert_called_once()
+
 
 if __name__ == '__main__': unittest.main()

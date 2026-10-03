@@ -62,6 +62,28 @@ class MemoryAndValidationTests(unittest.TestCase):
         self.assertIn('catégorie', decision['reason'])
         self.assertTrue(set(TRAIN_PROMPTS).isdisjoint(VALIDATION_PROMPTS))
 
+    def test_only_initial_allocation_failure_can_reduce_context_before_any_message(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'fixture.gguf'; path.write_bytes(b'fixture')
+            item = SimpleNamespace(id='target', name='Target', path=path, architecture='llama')
+            runtime = Accelerator(executable='mock', state_dir=folder)
+            attempted = []
+            def start(config):
+                attempted.append(config)
+                if len(attempted) == 1:
+                    raise ValueError('failed to allocate KV buffer')
+                runtime.config = config
+            with patch.object(runtime, 'available', return_value={'available':True}), patch('local_llm.accelerator.GGUFReader', return_value=SimpleNamespace(metadata=self.metadata())), patch.object(runtime, '_start', side_effect=start), patch.object(runtime, '_restore_profile'):
+                runtime.load(item, 12 * 1024**3)
+            self.assertEqual([c.context for c in attempted], [4096, 2048])
+            self.assertEqual(runtime.memory['context'], 2048)
+            self.assertEqual(runtime.memory['cache_ram_mib'], 0)
+            with patch.object(runtime, 'available', return_value={'available':True}), patch('local_llm.accelerator.GGUFReader', return_value=SimpleNamespace(metadata=self.metadata())), patch.object(runtime, '_start', side_effect=ValueError('unsupported architecture')) as launch:
+                with self.assertRaisesRegex(ValueError, 'unsupported'):
+                    runtime.load(item, 12 * 1024**3)
+                launch.assert_called_once()
+
     def test_validation_failure_keeps_standard_without_selecting_on_holdout(self):
         with tempfile.TemporaryDirectory() as folder:
             runtime = Accelerator(executable='mock', state_dir=folder)
@@ -75,10 +97,10 @@ class MemoryAndValidationTests(unittest.TestCase):
                     # independent validation differs: never try the runner-up there.
                     scale = 1 if name == 'standard' else .6 if name == 'motifs-4' else .8
                     rows = [dict(row, passes=passes) for row in samples(scale, 100 / scale)[:3]] * passes
-                    if prompts == VALIDATION_PROMPTS and name != 'standard':
+                    if phase == 'Vérification indépendante' and name != 'standard':
                         rows = [dict(row, output_sha256='changed') for row in rows]
                     trials[name]['samples'] = rows
-            with patch.object(runtime, '_start', side_effect=start), patch.object(runtime, '_run_trials', side_effect=run) as run_trials, patch.object(runtime, '_cache_benchmark', return_value={}), patch.object(runtime, 'available', return_value={}), patch('local_llm.accelerator.model_fingerprint', return_value=('weights', 100)):
+            with patch.object(runtime, '_start', side_effect=start), patch.object(runtime, '_run_trials', side_effect=run) as run_trials, patch.object(runtime, '_cache_benchmark', return_value={}), patch.object(runtime, '_benchmark_workloads', side_effect=lambda prompts: [{'id':i,'category':CATEGORIES[i], 'prompt':p, 'input_tokens':10,'output_limit':128} for i,p in enumerate(prompts)]), patch.object(runtime, 'available', return_value={}), patch('local_llm.accelerator.model_fingerprint', return_value=('weights', 100)):
                 runtime._calibrate([])
             self.assertEqual(runtime.job['state'], 'complete')
             self.assertEqual(runtime.profile['candidate'], 'motifs-4')

@@ -107,6 +107,18 @@ class LMStudioTests(unittest.TestCase):
             with patch.object(client, '_request', return_value={'stats': {'tokens_per_second': speed}}), self.assertRaises(ValueError):
                 client.complete_raw('test', 'raw prompt', 8)
 
+    def test_native_completion_uses_final_stop_frame_and_rejects_truncation(self):
+        client = LMStudioClient(token='temporary-local-token')
+        chunks = [{'content':'text', 'tokens':[1], 'stop':False}, {'content':'', 'tokens':[], 'stop':True, 'timings':{'predicted_n':1}}]
+        stream = ''.join('data: ' + json.dumps(c) + '\n\n' for c in chunks).encode()
+        with patch.object(client.opener, 'open', return_value=io.BytesIO(stream)) as opened:
+            self.assertEqual(list(client.iter_completion({'prompt':'public'})), chunks)
+        self.assertTrue(opened.call_args.args[0].full_url.endswith('/completion'))
+        incomplete = ('data: ' + json.dumps(chunks[0]) + '\n\n').encode()
+        with patch.object(client.opener, 'open', return_value=io.BytesIO(incomplete)):
+            with self.assertRaisesRegex(ValueError, 'before completion'):
+                list(client.iter_completion({'prompt':'public'}))
+
     def test_token_is_not_in_request_url(self):
         client = LMStudioClient(token='test-secret')
         with patch.object(client.opener, 'open', return_value=io.BytesIO(json.dumps({'models': []}).encode())) as opener:

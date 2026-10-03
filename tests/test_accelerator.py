@@ -88,6 +88,7 @@ class RuntimeTests(unittest.TestCase):
     def test_worker_is_private_authenticated_gpu_and_only_owned_process_stops(self):
         runtime = Accelerator(executable='llama-server')
         runtime.path, runtime.model_id = Path('/tmp/a file.gguf'), 'target'
+        runtime.capabilities = {'optional_flags': []}
         child = Mock(); child.poll.return_value = None
         client = Mock(); client._request.side_effect = [{'status': 'ok'}, {'total_slots': 2}]
         with patch('local_llm.accelerator.socket.socket') as socket, patch('local_llm.accelerator.subprocess.Popen', return_value=child) as popen, patch('local_llm.accelerator.LMStudioClient', return_value=client):
@@ -183,17 +184,20 @@ class RuntimeTests(unittest.TestCase):
     def test_saved_profile_is_bound_to_runtime_weights_hardware_and_valid_samples(self):
         import os, platform
         rows = trials()
+        for trial in rows.values():
+            trial['samples'] = [dict(row, passes=2, workloads_count=6, workload=i%6, category=('discussion','code','contexte long')[i%3], input_tokens=40+i%6, output_limit=128) for i, row in enumerate(trial['samples'] * 2)]
         winner, summaries = select_winner(rows)
-        validation = {name: dict(trial, samples=[dict(row, passes=3) for row in trial['samples'][:3]] * 3) for name, trial in rows.items()}
+        validation = {name: dict(trial, samples=[dict(row, passes=3) for row in trial['samples'][:6]] * 3) for name, trial in rows.items()}
         verified = {name: summarize(trial['samples']) for name, trial in validation.items()}
-        report = {'profiles': verified_profiles(rows, validation), 'draft_fingerprints': {}, 'validation': {'trials': validation}, 'training_summaries': summaries, 'protocol': PROTOCOL, 'model_sha256': 'fingerprint',
+        workloads = [{'id':i, 'category':('discussion','code','contexte long')[i%3], 'prompt':'public-' + str(i), 'input_tokens':40+i, 'output_limit':128} for i in range(6)]
+        report = {'training_manifest': Accelerator._manifest(workloads), 'workload_manifest': Accelerator._manifest(workloads), 'profiles': verified_profiles(rows, validation), 'draft_fingerprints': {}, 'validation': {'trials': validation}, 'training_summaries': summaries, 'protocol': PROTOCOL, 'model_sha256': 'fingerprint',
                   'hardware': {'system': platform.system(), 'machine': platform.machine(), 'cpu_count': os.cpu_count()},
                   'runtime': {'version': 'test', 'devices': 'GPU'}, 'context_length': 4096, 'slots': 2,
                   'config': rows[winner]['config'], 'trials': rows, 'summaries': verified, 'winner': winner}
         with tempfile.TemporaryDirectory() as folder:
             runtime = self.runtime(); runtime.state_dir = Path(folder); runtime.path = Path('/tmp/model.gguf')
             source = Path(folder) / 'fingerprint.json'
-            with patch('local_llm.accelerator.model_fingerprint', return_value=('fingerprint', 100)), patch.object(runtime, 'available', return_value={'version': 'test', 'devices': 'GPU'}), patch.object(runtime, '_start') as start:
+            with patch('local_llm.accelerator.model_fingerprint', return_value=('fingerprint', 100)), patch.object(runtime, 'available', return_value={'version': 'test', 'devices': 'GPU'}), patch.object(runtime, '_start') as start, patch.object(runtime, '_benchmark_workloads', return_value=workloads):
                 source.write_text(json.dumps(report)); runtime._restore_profile()
                 start.assert_called_once_with(ExecutionConfig(batch=256))
                 self.assertEqual(runtime.profile, report)

@@ -1,6 +1,6 @@
 """Managed, loopback-only llama.cpp execution and reproducible local calibration.
 
-No model downloads, shell commands, external providers or persisted chat text.
+No model downloads or external providers. Local KV snapshots contain chat state.
 Only child processes created by this instance are stopped by close().
 """
 from __future__ import annotations
@@ -26,12 +26,14 @@ from .gguf import GGUFReader
 from .discovery import mtp_head_count
 from .lmstudio import LMStudioClient
 from .loading import model_fingerprint
+from .memory import allocations
+from .kv_store import KVStore, digest
 from .calibration import (TRAIN_PROMPTS, VALIDATION_PROMPTS, CATEGORIES, OUTPUT_LIMITS,
                           TRAIN_PASSES, VALIDATION_PASSES, assess_candidate, summarize,
                           select_winner, memory_plan, shortlist, verified_profiles, USAGE_PROFILES, speculation_summary)
 
 
-PROTOCOL = 6
+PROTOCOL = 7
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,7 @@ class ExecutionConfig:
     backend_sampling: bool = False
     ngram_lookup: int = 12
     cache_ram_mib: int = 0
+    draft_p_min: float = 0.0
 
     def __post_init__(self):
         if any(type(value) is not int for value in (self.threads, self.threads_batch, self.batch, self.context, self.slots, self.draft_tokens, self.ngram_lookup)):
@@ -58,12 +61,14 @@ class ExecutionConfig:
             raise ValueError("Invalid execution configuration")
         if self.flash not in {"auto", "on", "off"} or not 512 <= self.context <= 32768 or not 1 <= self.slots <= 4:
             raise ValueError("Invalid context or attention configuration")
-        if self.kv_type not in {"f16", "q8_0"} or self.draft_tokens not in {2, 4, 8, 16, 32, 48, 64}:
+        if self.kv_type not in {"f16", "q8_0"} or self.draft_tokens not in {2, 3, 4, 6, 8, 12, 16, 32, 48, 64}:
             raise ValueError("Invalid cache precision or speculative depth")
         if self.speculative not in {"none", "ngram-simple", "ngram-map-k", "ngram-mod", "draft-simple", "draft-eagle3", "draft-dflash", "draft-dspark", "draft-mtp"}:
             raise ValueError("Unsupported speculative configuration")
         if (self.speculative.startswith("draft-") and self.speculative != "draft-mtp") != bool(self.draft_path):
             raise ValueError("A draft model is required for this speculative method")
+        if type(self.draft_p_min) not in (int, float) or not 0 <= self.draft_p_min <= .95:
+            raise ValueError('Invalid speculative confidence threshold')
         if (not 0 <= self.threads_batch <= 256 or
                 (self.ubatch is not None and (self.ubatch not in {128, 256, 512, 1024, 2048} or self.ubatch > self.batch)) or
                 type(self.backend_sampling) is not bool or self.ngram_lookup not in {4, 8, 12, 24} or
@@ -150,6 +155,11 @@ class Accelerator:
         self.cancelled = threading.Event()
         self.capabilities = None
         self.closed = False
+        self.kv_store = KVStore(self.state_dir)
+        self.cache_binding = None
+        self.runtime_memory = None
+        self._dirty_conversations = set()
+        self._fingerprints = {}
 
     def available(self):
         if self.capabilities is None:
@@ -168,7 +178,7 @@ class Accelerator:
                     devices = '\n'.join(re.sub(r'\s*\([^)]*(?:memory|free)[^)]*\)', '', line.strip())
                                         for line in devices.splitlines() if ': ' in line and 'srv ' not in line)
                     self.capabilities = {'available': True, 'version': version,
-                                         'optional_flags': [flag for flag in ('--backend-sampling', '--spec-ngram-map-k-size-m', '--spec-ngram-mod-n-max') if flag in help_text],
+                                         'optional_flags': [flag for flag in ('--backend-sampling', '--spec-ngram-map-k-size-m', '--spec-ngram-mod-n-max', '--spec-draft-p-min', '--slot-save-path') if flag in help_text],
                                          'specialized_methods': [method for method in ('draft-eagle3', 'draft-dflash', 'draft-dspark', 'draft-mtp') if method in help_text],
                                          'devices': devices, 'gpu': any(x in devices for x in ('MTL', 'CUDA', 'Vulkan', 'ROCm', 'SYCL'))}
                 except (OSError, subprocess.SubprocessError, ValueError) as exc:
@@ -182,7 +192,9 @@ class Accelerator:
                 'config': asdict(self.config), 'context_length': self.config.context,
                 'profile': self.profile, 'usage_profile': self.usage_profile,
                 'profile_switch_seconds': self.last_profile_switch_seconds, 'memory_plan': self.memory, 'cached_conversations': len(self.slots.entries),
-                'job': dict(self.job) if self.job else None}
+                'job': dict(self.job) if self.job else None,
+                'runtime_memory': self.runtime_memory,
+                'persistent_cache': dict(self.kv_store.describe(), supported='--slot-save-path' in (self.capabilities or {}).get('optional_flags', []))}
 
     def _stop(self):
         process, self.process = self.process, None
@@ -197,6 +209,8 @@ class Accelerator:
             else:
                 process.wait()
         self.client = None
+        self.cache_binding = None
+        self.runtime_memory = None
         if self.log:
             self.log.close()
             self.log = None
@@ -227,7 +241,8 @@ class Accelerator:
             if available is not None:
                 plan = memory_plan(GGUFReader(self.path).metadata, self.path.stat().st_size, available, required=config.context)
                 # MTP shares weights but allocates another context and compute buffers.
-                needed = plan['estimated_bytes'] + config.context * plan['kv_bytes_per_token'] + 256 * 1024 ** 2
+                needed = (plan['estimated_bytes'] + config.context * plan.get('mtp_kv_bytes_per_token', plan['kv_bytes_per_token']) +
+                          plan.get('recurrent_state_bytes', 0) * config.draft_tokens + 256 * 1024 ** 2)
                 if needed > available - (plan.get('reserve_bytes') or 0):
                     raise ValueError('RAM disponible insuffisante pour le contexte MTP supplémentaire ; standard conservé.')
         self._stop()
@@ -244,7 +259,19 @@ class Accelerator:
                    '--parallel', str(config.slots), '--batch-size', str(config.batch),
                    '--ubatch-size', str(config.ubatch or min(512, config.batch)), '--flash-attn', config.flash,
                    '--cache-type-k', config.kv_type, '--cache-type-v', config.kv_type, '--cache-ram', str(config.cache_ram_mib),
-                   '--no-context-shift', '--no-webui', '--jinja', '--spec-type', config.speculative]
+                   '--no-context-shift', '--no-webui', '--jinja', '--log-verbosity', '4', '--spec-type', config.speculative]
+        persistent = '--slot-save-path' in (self.capabilities or self.available()).get('optional_flags', [])
+        if persistent:
+            try:
+                directory = self.kv_store.prepare()
+                command += ['--slot-save-path', str(directory)]
+            except (OSError, ValueError) as exc:
+                persistent = False
+                self.kv_store.error = str(exc)
+        if config.draft_p_min:
+            if '--spec-draft-p-min' not in self.available().get('optional_flags', []):
+                raise ValueError('Ce runtime ne permet pas de régler la confiance spéculative.')
+            command += ['--spec-draft-p-min', str(config.draft_p_min)]
         if config.threads:
             command += ['--threads', str(config.threads)]
         if config.threads_batch:
@@ -283,6 +310,16 @@ class Accelerator:
                         raise ValueError('La capacité de contexte du runtime diffère de la configuration demandée.')
                     self.config = config
                     self.slots = SlotPool(config.slots)
+                    raw = os.pread(self.log.fileno(), min(os.fstat(self.log.fileno()).st_size, 4 * 1024 ** 2), 0) if hasattr(os, 'pread') else b''
+                    self.runtime_memory = allocations(raw.decode('utf-8', 'replace'))
+                    # Bind once at load, never hash gigabytes per request. File-stat
+                    # identity is checked again before each snapshot operation.
+                    if persistent and self.path.is_file():
+                        fingerprint = self._cached_fingerprint(self.path)
+                        draft_sha = self._cached_fingerprint(Path(config.draft_path)) if config.draft_path else None
+                        self.cache_binding = digest({'protocol': PROTOCOL, 'model': fingerprint,
+                            'draft': draft_sha, 'config': asdict(config), 'runtime': self.available()})
+                        self._cache_stat = self.path.stat()
                     return
                 if self.cancelled.is_set() and self.job and self.job['state'] == 'running':
                     raise ValueError('Calibration interrompue')
@@ -312,7 +349,22 @@ class Accelerator:
             self.job = None
             self.memory = plan
             try:
-                self._start(ExecutionConfig(context=plan["context"], slots=plan["slots"], cache_ram_mib=plan.get("cache_ram_mib", 0)))
+                config = ExecutionConfig(context=plan['context'], slots=plan['slots'], cache_ram_mib=plan.get('cache_ram_mib', 0))
+                while True:
+                    try:
+                        self._start(config)
+                        break
+                    except ValueError as exc:
+                        allocation_failure = any(term in str(exc).lower() for term in ('failed to allocate', 'out of memory', 'insufficient memory'))
+                        if not allocation_failure or config.context <= 512:
+                            raise
+                        # Initial load has no user messages yet. Retry only explicit
+                        # allocation failures, at smaller capacity and no host cache.
+                        config = replace(config, context=max(512, config.context // 2), cache_ram_mib=0)
+                        self.memory = dict(plan, context=config.context, cache_ram_mib=0,
+                            context_bytes=config.context * plan['kv_bytes_per_token'],
+                            estimated_bytes=plan['estimated_bytes'] - (plan['context'] - config.context) * plan['kv_bytes_per_token'] - plan.get('cache_ram_mib', 0) * 1024 ** 2,
+                            fallback_reason='Allocation refusée par le runtime ; capacité réduite avant la première requête.')
                 self._restore_profile()
             except BaseException:
                 self._stop()
@@ -342,13 +394,27 @@ class Accelerator:
                     summaries != report['training_summaries'] or verified != report['summaries'] or
                     asdict(config) != report['trials'][expected_winner]['config'] or
                     config.cache_ram_mib != self.config.cache_ram_mib or
-                    any(len(t['samples']) != VALIDATION_PASSES * len(CATEGORIES) or
-                        any(row.get('passes') != VALIDATION_PASSES for row in t['samples'])
+                    report.get('workload_manifest') != self._manifest(self._benchmark_workloads(VALIDATION_PROMPTS)) or
+                    report.get('training_manifest') != self._manifest(self._benchmark_workloads(TRAIN_PROMPTS)) or
+                    any(len(t['samples']) != VALIDATION_PASSES * 6 or
+                        any(row.get('passes') != VALIDATION_PASSES or row.get('workloads_count') != 6 for row in t['samples'])
                         for t in validation['trials'].values() if not t.get('error'))):
                 return
+            for name, manifest in (('trials', report['training_manifest']), ('validation', report['workload_manifest'])):
+                rows = report['trials'] if name == 'trials' else validation['trials']
+                for trial in rows.values():
+                    if trial.get('error'):
+                        continue
+                    for i, sample in enumerate(trial['samples']):
+                        expected = manifest[i % 6]
+                        if any(sample.get(key) != expected[key] for key in ('category', 'input_tokens', 'output_limit')) or sample.get('workload') != expected['id']:
+                            return
             # Bind every selectable profile, not only the balanced winner.
             for profile in profiles.values():
                 item_config = ExecutionConfig(**profile['config'])
+                if (item_config.context != self.config.context or item_config.slots != self.config.slots or
+                        item_config.cache_ram_mib != self.config.cache_ram_mib):
+                    return
                 if item_config.speculative == 'draft-mtp' and ('draft-mtp' not in self.available().get('specialized_methods', []) or not mtp_head_count(GGUFReader(self.path))):
                     return
                 if item_config.draft_path:
@@ -363,7 +429,7 @@ class Accelerator:
             self.profile = None
             if self.client is not None and self.process is not None and self.process.poll() is None:
                 return
-            self._start(replace(self.config, threads=0, threads_batch=0, ubatch=None, backend_sampling=False, batch=2048, flash="auto", speculative="none", draft_path=None, kv_type="f16"))
+            self._start(replace(self.config, threads=0, threads_batch=0, ubatch=None, backend_sampling=False, batch=2048, flash="auto", speculative="none", draft_path=None, kv_type="f16", draft_p_min=0.0))
 
     def set_usage_profile(self, usage):
         if usage not in USAGE_PROFILES:
@@ -428,29 +494,69 @@ class Accelerator:
                 self.profile = None
                 self.usage_profile = "balanced"
             slot, reset = self.slots.acquire(conversation)
+            restored = False
+            if reset and conversation not in self._dirty_conversations and self._cache_compatible():
+                restored = self.kv_store.restore(self.client, slot, conversation, self.cache_binding, payload['messages'])
+            else:
+                self.kv_store.last = {'restored': False, 'restore_seconds': None}
             # With a bounded host cache, llama.cpp saves/restores exact token-prefix
             # states itself. After an interrupted stream we still force a cold
             # request, so a dirty partial generation cannot masquerade as reused.
-            cached = not reset
+            cached = not reset or restored
             if self.config.cache_ram_mib and conversation not in getattr(self, '_dirty_conversations', set()):
                 cached = True
             body = dict(payload, cache_prompt=cached, id_slot=slot, repeat_penalty=1.0)
             upstream = self.client.iter_chat(body)
             completed = False
+            timings = {}
             try:
                 for chunk in upstream:
+                    timings = chunk.get('timings') or timings
                     yield chunk
                 completed = True
                 if hasattr(self, '_dirty_conversations'):
                     self._dirty_conversations.discard(conversation)
+                if self._cache_compatible():
+                    tokens = preview['prompt_tokens'] + payload['max_tokens']
+                    expected = (self.memory or {}).get('kv_bytes_per_token', 256 * 1024) * tokens + (self.memory or {}).get('recurrent_budget_bytes', 0)
+                    if expected <= self.kv_store.budget:
+                        self.kv_store.save(self.client, slot, conversation, self.cache_binding, payload['messages'], timings)
             finally:
                 upstream.close()
                 if not completed:
+                    if self.cache_binding:
+                        self.kv_store.remove(conversation, self.cache_binding)
                     self.slots.invalidate(conversation)
                     if not hasattr(self, '_dirty_conversations'):
                         self._dirty_conversations = set()
                     self._dirty_conversations.add(conversation)
                     # The next request assigned this slot uses cache_prompt=False.
+
+    def _cached_fingerprint(self, path):
+        stat = path.stat()
+        identity = (str(path.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ino, stat.st_ctime_ns)
+        if identity not in self._fingerprints:
+            self._fingerprints[identity] = model_fingerprint(path)[0]
+        return self._fingerprints[identity]
+
+    def _cache_compatible(self):
+        if not self.cache_binding or not self.path:
+            return False
+        try:
+            stat = self.path.stat()
+        except OSError:
+            return False
+        old = self._cache_stat
+        return (stat.st_size, stat.st_mtime_ns, stat.st_ino, stat.st_ctime_ns) == (old.st_size, old.st_mtime_ns, old.st_ino, old.st_ctime_ns)
+
+    def configure_cache(self, enabled=None, clear=False):
+        if not self.lock.acquire(blocking=False):
+            raise ValueError('Une génération ou calibration est en cours.')
+        try:
+            self.kv_store.configure(enabled, clear)
+            return self.describe()
+        finally:
+            self.lock.release()
 
     def _rss(self):
         if platform.system() in {'Darwin', 'Linux'} and self.process:
@@ -462,16 +568,74 @@ class Accelerator:
 
     def _sample(self, prompt, limit=128):
         formatted = self.client._request('/apply-template', {'messages': [{'role': 'user', 'content': prompt}]})['prompt']
+        count = len(self.client._request('/tokenize', {'content': formatted, 'add_special': False})['tokens'])
+        if count + limit > self.config.context:
+            raise ValueError('Le workload public dépasse le contexte ; aucune troncature implicite.')
         started = time.perf_counter()
-        result = self.client._request('/completion', {'prompt': formatted, 'n_predict': limit,
+        first, timings, tokens = None, {}, []
+        # Sample RSS during generation; it is a sampled process peak, not exclusive RAM.
+        stop, peak = threading.Event(), [self._rss()]
+        def monitor():
+            while not stop.wait(.1):
+                value = self._rss()
+                if value is not None:
+                    peak[0] = max(value, peak[0] or 0)
+        thread = threading.Thread(target=monitor, daemon=True)
+        thread.start()
+        upstream = self.client.iter_completion({'prompt': formatted, 'n_predict': limit,
             'temperature': 0, 'seed': 42, 'repeat_penalty': 1.0, 'cache_prompt': False,
-            'return_tokens': True, 'id_slot': 0, 'stream': False}, timeout=180)
-        timings = result['timings']
-        output = json.dumps(result.get('tokens', result['content']), ensure_ascii=False).encode()
-        return {'seconds': time.perf_counter() - started, 'decode_tps': timings['predicted_per_second'],
+            'return_tokens': True, 'id_slot': 0, 'stream': True})
+        try:
+            for chunk in upstream:
+                if self.cancelled.is_set():
+                    raise ValueError('Calibration interrompue')
+                if first is None and (chunk.get('tokens') or chunk.get('content')):
+                    first = time.perf_counter() - started
+                tokens.extend(chunk.get('tokens') or [])
+                timings = chunk.get('timings') or timings
+            finished = time.perf_counter()
+        finally:
+            upstream.close()
+            stop.set()
+            thread.join(timeout=3)
+        elapsed = finished - started
+        if not tokens or first is None or not timings.get('predicted_n'):
+            raise ValueError('Le runtime ne fournit pas de génération mesurable avec IDs de tokens.')
+        output = json.dumps(tokens).encode()
+        return {'seconds': elapsed, 'decode_tps': timings['predicted_per_second'],
                 'prefill_seconds': timings['prompt_ms'] / 1000, 'generated_tokens': timings['predicted_n'],
+                'first_token_seconds': first, 'input_tokens': count, 'output_limit': limit,
                 'output_sha256': hashlib.sha256(output).hexdigest(), 'process_rss_bytes': self._rss(),
-                'timings': timings}
+                'process_rss_peak_bytes': max(peak[0] or 0, self._rss() or 0) or None, 'timings': timings}
+
+    def _benchmark_workloads(self, prompts):
+        # Two input/output shapes per category; public data only. Synthetic log
+        # length is bounded explicitly against this model's actual tokenizer.
+        extended = (
+            prompts[0] + '\nWrite a detailed practical guide with examples, tradeoffs and a checklist.',
+            prompts[1] + '\nInclude tests, document invariants, and discuss alternative implementations in detail.',
+            prompts[2] + '\n' + '\n'.join('Additional observation %d: queue %d, memory %d MiB, latency %.2f seconds.' %
+                (i, i % 9, 800 + i * 13, .1 + i % 7 * .15) for i in range(96)))
+        workloads = []
+        for i, prompt in enumerate(tuple(prompts) + extended):
+            limit = min((128, 192, 128, 512, 512, 256)[i], self.config.context // 4)
+            lines = prompt.splitlines()
+            while True:
+                formatted = self.client._request('/apply-template', {'messages': [{'role': 'user', 'content': '\n'.join(lines)}]})['prompt']
+                count = len(self.client._request('/tokenize', {'content': formatted, 'add_special': False})['tokens'])
+                if count + limit <= self.config.context:
+                    break
+                if len(lines) <= 2:
+                    raise ValueError('Contexte trop petit pour la suite de calibration.')
+                lines.pop()
+            workloads.append({'id': i, 'category': CATEGORIES[i % 3], 'prompt': '\n'.join(lines),
+                              'input_tokens': count, 'output_limit': limit})
+        return workloads
+
+    @staticmethod
+    def _manifest(workloads):
+        return [dict(id=w['id'], category=w['category'], input_tokens=w['input_tokens'],
+                     output_limit=w['output_limit'], prompt_sha256=hashlib.sha256(w['prompt'].encode()).hexdigest()) for w in workloads]
 
     def optimize(self, draft=None, drafts=None):
         if not self.lock.acquire(blocking=False):
@@ -561,8 +725,9 @@ class Accelerator:
                     for i, prompt in enumerate(prompts):
                         if self.cancelled.is_set():
                             raise ValueError('Calibration interrompue')
-                        row = self._sample(prompt, 64 if phase == 'Présélection' else OUTPUT_LIMITS[i])
-                        row.update(category=CATEGORIES[i], passes=passes, workload=i)
+                        workload = prompt if isinstance(prompt, dict) else {'prompt': prompt, 'id': i, 'category': CATEGORIES[i], 'output_limit': 64}
+                        row = self._sample(workload['prompt'], workload['output_limit'])
+                        row.update(category=workload['category'], passes=passes, workload=workload['id'], workloads_count=len(prompts))
                         trials[name]['samples'].append(row)
                         done += 1
                         offset, span = {'Présélection': (0, 30), 'Sélection': (30, 30), 'Vérification indépendante': (60, 30)}[phase]
@@ -574,7 +739,7 @@ class Accelerator:
 
     def _candidate_configs(self, original, drafts):
         base = replace(original, threads=0, threads_batch=0, ubatch=None, backend_sampling=False,
-                       batch=2048, flash='auto', speculative='none', draft_path=None, kv_type='f16')
+                       batch=2048, flash='auto', speculative='none', draft_path=None, kv_type='f16', draft_p_min=0.0)
         half = max(1, (os.cpu_count() or 4) // 2)
         tuned = replace(base, threads=half, threads_batch=os.cpu_count() or 4, batch=1024, flash='on')
         configs = {'standard': base, 'réglages-1024': tuned, 'réglages-256': replace(tuned, batch=256),
@@ -594,16 +759,21 @@ class Accelerator:
         if '--spec-ngram-mod-n-max' in flags:
             configs['motifs-adaptatifs-64'] = replace(tuned, speculative='ngram-mod', draft_tokens=64, ngram_lookup=24)
         if self.path and 'draft-mtp' in capabilities.get('specialized_methods', []) and mtp_head_count(GGUFReader(self.path)):
-            for depth in (2, 4, 8, 16):
+            for depth in (2, 3, 4, 6, 8, 12, 16):
                 configs['mtp-intégré-' + str(depth)] = replace(tuned, speculative='draft-mtp', draft_tokens=depth)
+            if '--spec-draft-p-min' in flags:
+                for threshold in (.5, .8):
+                    configs['mtp-confiance-' + str(threshold)] = replace(tuned, speculative='draft-mtp', draft_tokens=12, draft_p_min=threshold)
         paths = [drafts] if isinstance(drafts, (str, Path)) else drafts or []
         for index, path in enumerate(paths):
             method = draft_method(self.path, Path(path))
             if not method or method != 'draft-simple' and method not in capabilities.get('specialized_methods', []):
                 continue
-            for depth in (2, 4, 8, 16):
+            for depth in (2, 3, 4, 6, 8, 12, 16):
                 configs['auxiliaire-' + str(index + 1) + '-' + str(depth)] = replace(tuned,
                     speculative=method, draft_path=str(path), draft_tokens=depth)
+            if '--spec-draft-p-min' in flags and method == 'draft-simple':
+                configs['auxiliaire-' + str(index + 1) + '-confiance'] = replace(tuned, speculative=method, draft_path=str(path), draft_tokens=12, draft_p_min=.8)
         return configs
 
     def _calibrate(self, drafts):
@@ -615,12 +785,15 @@ class Accelerator:
                 initial_drafts = {str(path): model_fingerprint(Path(path))[0] for path in (drafts or [])}
                 configs = self._candidate_configs(original, drafts)
                 base = configs['standard']
+                training_workloads = self._benchmark_workloads(TRAIN_PROMPTS)
+                validation_workloads = self._benchmark_workloads(VALIDATION_PROMPTS)
+                screening_workloads = [dict(w, output_limit=min(w['output_limit'], 128)) for w in training_workloads]
                 screening = {name: {'config': asdict(config), 'samples': []} for name, config in configs.items()}
-                self._run_trials(configs, TRAIN_PROMPTS, 1, 'Présélection', screening)
+                self._run_trials(configs, screening_workloads, 1, 'Présélection', screening)
                 names = shortlist(screening)
                 configs = {name: configs[name] for name in names}
                 trials = {name: {'config': asdict(config), 'samples': []} for name, config in configs.items()}
-                self._run_trials(configs, TRAIN_PROMPTS, TRAIN_PASSES, 'Sélection', trials)
+                self._run_trials(configs, training_workloads, TRAIN_PASSES, 'Sélection', trials)
                 candidate, training_summaries = select_winner(trials)
                 decisions = {name: assess_candidate(trials['standard'], trial) for name, trial in trials.items() if name != 'standard'}
                 finalists = {'standard': base}
@@ -628,7 +801,7 @@ class Accelerator:
                     name, _ = select_winner(trials, category=category)
                     finalists[name] = configs[name]
                 validation = {name: {'config': asdict(config), 'samples': []} for name, config in finalists.items()}
-                self._run_trials(finalists, VALIDATION_PROMPTS, VALIDATION_PASSES, 'Vérification indépendante', validation)
+                self._run_trials(finalists, validation_workloads, VALIDATION_PASSES, 'Vérification indépendante', validation)
                 profiles = verified_profiles(trials, validation)
                 balanced = profiles['balanced']
                 decision, winner = balanced['decision'], balanced['winner']
@@ -642,12 +815,14 @@ class Accelerator:
                 fingerprint, _ = model_fingerprint(self.path)
                 if fingerprint != initial_fingerprint or any(model_fingerprint(Path(path))[0] != digest for path, digest in initial_drafts.items()):
                     original_profile = None
-                    original = replace(original, speculative='none', draft_path=None, kv_type='f16')
+                    original = replace(original, speculative='none', draft_path=None, kv_type='f16', draft_p_min=0.0)
                     raise ValueError('Les poids ont changé pendant la calibration ; aucun gain n’est validé.')
                 report = {'protocol': PROTOCOL, 'model_sha256': fingerprint, 'model_id': self.model_id,
                           'hardware': {'system': platform.system(), 'machine': platform.machine(), 'cpu_count': os.cpu_count()},
                           'runtime': self.available(), 'context_length': base.context, 'slots': base.slots,
-                          'memory_plan': self.memory, 'cache_benchmark': cache, 'draft_search': self.job.get('draft_search'),
+                          'memory_plan': self.memory, 'runtime_memory': self.runtime_memory,
+                          'workload_manifest': self._manifest(validation_workloads),
+                          'training_manifest': self._manifest(training_workloads), 'cache_benchmark': cache, 'draft_search': self.job.get('draft_search'),
                           'measured_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                           'winner': winner, 'candidate': candidate, 'config': asdict(chosen), 'trials': trials,
                           'training_summaries': training_summaries, 'summaries': summaries, 'decisions': decisions,
@@ -658,7 +833,7 @@ class Accelerator:
                           'draft_sha256': model_fingerprint(Path(chosen.draft_path))[0] if chosen.draft_path else None,
                           'gain_percent': 100 * (summaries['standard']['seconds'] / summaries[winner]['seconds'] - 1),
                           'decode_gain_percent': 100 * (summaries[winner]['decode_tps'] / summaries['standard']['decode_tps'] - 1),
-                          'scope': 'independent_chat_code_long_context_3_passes',
+                          'scope': 'independent_6_workloads_3_passes',
                           'kv_precision_changed': chosen.kv_type != base.kv_type,
                           'outputs_identical_on_benchmark': True}
                 self.state_dir.mkdir(parents=True, exist_ok=True)

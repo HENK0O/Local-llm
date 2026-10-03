@@ -30,6 +30,9 @@ class FakeRuntime:
         if usage not in {'balanced','discussion','code','long_context'}: raise ValueError('Profil inconnu')
         self.usage_profile = usage
         return self.describe()
+    def configure_cache(self, enabled=None, clear=False):
+        self.cache_settings = {'enabled':enabled, 'clear':clear}
+        return self.describe()
     def available(self): return {'available': True, 'gpu': True}
     def describe(self):
         return dict(self.available(), loaded=self.loaded, model_id=self.model_id, model_name=self.model_name, job=self.job)
@@ -113,6 +116,14 @@ class AcceleratorHTTPTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as error: self.request('/v1/accelerator/profile', payload)
             self.assertEqual(error.exception.code,400)
 
+    def test_disk_cache_controls_validate_types_and_do_not_accept_paths(self):
+        with self.request('/v1/accelerator/cache', {'enabled':False, 'clear':True}) as response:
+            self.assertEqual(response.status, 200)
+        self.assertEqual(self.runtime.cache_settings, {'enabled':False, 'clear':True})
+        for payload in ({'enabled':1}, {'clear':'yes'}, {'path':'/private/file'}, []):
+            with self.assertRaises(HTTPError) as error: self.request('/v1/accelerator/cache', payload)
+            self.assertEqual(error.exception.code,400)
+
     def test_model_advice_accepts_only_catalog_ids_and_import_is_same_origin(self):
         selected = SimpleNamespace(id='target')
         self.service.catalog = {'target': selected}
@@ -146,7 +157,7 @@ class AcceleratorHTTPTests(unittest.TestCase):
         with self.request('/v1/accelerator/load', {'id': 'target'}) as response: self.assertTrue(json.load(response)['loaded'])
         with self.assertRaises(HTTPError) as error: self.request('/v1/accelerator/load', {'id': '/arbitrary/model.gguf'})
         self.assertEqual(error.exception.code, 400)
-        for path in ('load', 'unload', 'optimize', 'cancel', 'profile'):
+        for path in ('load', 'unload', 'optimize', 'cancel', 'profile', 'cache'):
             with self.assertRaises(HTTPError) as error: self.request('/v1/accelerator/' + path, {}, 'https://evil.invalid')
             self.assertEqual(error.exception.code, 403)
         with self.request('/v1/accelerator/optimize', {}) as response:

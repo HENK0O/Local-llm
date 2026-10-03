@@ -32,7 +32,12 @@ function element(tag, cls = "", text = "") {
 }
 function render(
   profile,
-  features = ["validated_calibration", "gpu_runtime", "usage_profiles"],
+  features = [
+    "validated_calibration",
+    "gpu_runtime",
+    "usage_profiles",
+    "workload_benchmark",
+  ],
   usage = "balanced",
   pending = false,
 ) {
@@ -87,7 +92,7 @@ function profile() {
     categories: { discussion: { decode_tps: 100, seconds: 1 } },
   };
   return {
-    protocol: 6,
+    protocol: 7,
     winner: "standard",
     candidate: "motifs-4",
     config: { speculative: "none" },
@@ -124,7 +129,7 @@ test("failed holdout reports zero gain and explains rejection despite faster sel
   assert.match(view.text, /229 ms/);
   assert.match(view.text, /14 ms/);
   assert.match(view.text, /Préparation économisée par le cache Non vérifiée/);
-  assert.match(view.text, /RSS après essai —/);
+  assert.match(view.text, /Pic RSS échantillonné —/);
   assert.equal(view.disabled, false);
 });
 test("old server and old profiles cannot advertise the new validation", () => {
@@ -217,4 +222,26 @@ test("polling preserves a pending profile selection", () => {
     ).selected,
     "code",
   );
+});
+
+test("workload table separates actual input, output, streaming latency and decode", () => {
+  const report = profile();
+  report.summaries.standard.workloads = [
+    {
+      id: 0,
+      category: "contexte long",
+      input_tokens: 3000,
+      output_tokens: 256,
+      output_limit: 512,
+      first_token_seconds: 0.25,
+      decode_tps: 100,
+      seconds: 3,
+    },
+  ];
+  const result = render(report);
+  assert.match(result.text, /Mesures par longueur de requête/);
+  assert.match(result.text, /3000.0 \/ 256.0 tok \(max 512\)/);
+  assert.match(result.text, /250 ms → 250 ms/);
+  assert.match(result.text, /100.0 → 100.0 tok\/s/);
+  assert.match(result.text, /écritures et restaurations du cache disque/);
 });

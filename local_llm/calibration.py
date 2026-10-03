@@ -6,6 +6,8 @@ use disjoint prompts; validation is never used to choose a second candidate.
 import math
 import statistics
 
+from .memory import geometry
+
 MIB = 1024 ** 2
 TRAIN_PROMPTS = (
     'Explain how a bicycle changes gears and give practical advice for climbing a hill.',
@@ -30,15 +32,26 @@ VALIDATION_PASSES = 3
 USAGE_PROFILES = {'balanced': None, 'discussion': 'discussion', 'code': 'code', 'long_context': 'contexte long'}
 
 
+def _category(row, index):
+    return row.get('category', CATEGORIES[index % 3])
+
+
 def _rounds(samples):
     if not samples or any(not math.isfinite(s['seconds']) or s['seconds'] <= 0 or
                           not math.isfinite(s['decode_tps']) or s['decode_tps'] <= 0 for s in samples):
         raise ValueError('Invalid benchmark timings')
-    # Legacy unit fixtures also represent two complete three-workload passes.
     expected = samples[0].get('passes', TRAIN_PASSES)
-    if expected not in (TRAIN_PASSES, VALIDATION_PASSES) or len(samples) != expected * len(CATEGORIES):
+    width = samples[0].get('workloads_count', len(CATEGORIES))
+    if expected not in (TRAIN_PASSES, VALIDATION_PASSES) or width not in (3, 6) or len(samples) != expected * width:
         raise ValueError('Complete benchmark passes are required')
-    return [samples[r:r + 3] for r in range(0, len(samples), 3)]
+    groups = [samples[r:r + width] for r in range(0, len(samples), width)]
+    if any('workloads_count' in s for s in samples):
+        identities = [(s['workload'], s['category']) for s in groups[0]]
+        if (len(set(identities)) != width or set(c for _, c in identities) != set(CATEGORIES) or
+                any(s.get('passes') != expected or s.get('workloads_count') != width for s in samples) or
+                any([(s['workload'], s['category']) for s in group] != identities for group in groups)):
+            raise ValueError('Inconsistent workloads')
+    return groups
 
 
 def summarize(samples):
@@ -46,30 +59,48 @@ def summarize(samples):
     def decode(group):
         work = [max(1, s['generated_tokens'] - 1) for s in group]
         return sum(work) / sum(n / s['decode_tps'] for n, s in zip(work, group))
+    def optional_median(rows, key):
+        values = [s.get(key) for s in rows]
+        return statistics.median(values) if all(isinstance(v, (int, float)) and math.isfinite(v) and v >= 0 for v in values) else None
     totals = [sum(s['seconds'] for s in group) for group in rounds]
     categories = {}
-    for i, category in enumerate(CATEGORIES):
-        rows = [group[i] for group in rounds]
-        categories[category] = {'seconds': statistics.median(s['seconds'] for s in rows),
+    for category in CATEGORIES:
+        groups = [[s for i, s in enumerate(group) if _category(s, i) == category] for group in rounds]
+        rows = [s for group in groups for s in group]
+        categories[category] = {'seconds': statistics.median(sum(s['seconds'] for s in group) for group in groups),
                                 'decode_tps': decode(rows)}
+    workloads = []
+    for i, first in enumerate(rounds[0]):
+        rows = [group[i] for group in rounds]
+        workloads.append({'id': first.get('workload', i), 'category': _category(first, i),
+            'input_tokens': optional_median(rows, 'input_tokens'),
+            'output_tokens': optional_median(rows, 'generated_tokens'),
+            'output_limit': first.get('output_limit'), 'seconds': statistics.median(s['seconds'] for s in rows),
+            'first_token_seconds': optional_median(rows, 'first_token_seconds'),
+            'decode_tps': decode(rows), 'prefill_seconds': optional_median(rows, 'prefill_seconds')})
     return {'seconds': statistics.median(totals), 'decode_tps': statistics.median(decode(g) for g in rounds),
             'prefill_seconds': statistics.median(s['prefill_seconds'] for s in samples),
+            'first_token_seconds': optional_median(samples, 'first_token_seconds'),
             'process_rss_bytes': max((s['process_rss_bytes'] for s in samples if s.get('process_rss_bytes') is not None), default=None),
+            'process_rss_peak_bytes': max((s['process_rss_peak_bytes'] for s in samples if s.get('process_rss_peak_bytes') is not None), default=None),
             'variation_percent': 100 * (max(totals) - min(totals)) / statistics.median(totals),
-            'categories': categories}
+            'categories': categories, 'workloads': workloads}
 
 
 def assess_candidate(base, trial, category=None):
     if trial.get('error'):
         return {'accepted': False, 'reason': 'Échec du runtime : ' + trial['error']}
     rows = trial['samples']
+    fields = ('workload', 'category', 'workloads_count', 'input_tokens', 'output_limit')
+    if [[s.get(k) for k in fields] for s in rows] != [[s.get(k) for k in fields] for s in base['samples']]:
+        return {'accepted': False, 'reason': 'Workloads différents de la référence.'}
     if [s['output_sha256'] for s in rows] != [s['output_sha256'] for s in base['samples']]:
         return {'accepted': False, 'reason': 'Sorties différentes de la référence ; qualité non validée.'}
     try:
         reference, candidate = summarize(base['samples']), summarize(rows)
-        index = CATEGORIES.index(category) if category is not None else None
-        ratios = [(a[index]['seconds'] / b[index]['seconds']) if index is not None else
-                  sum(s['seconds'] for s in a) / sum(s['seconds'] for s in b)
+        def elapsed(group):
+            return sum(s['seconds'] for i, s in enumerate(group) if category is None or _category(s, i) == category)
+        ratios = [elapsed(a) / elapsed(b)
                   for a, b in zip(_rounds(rows), _rounds(base['samples']))]
         candidate_scope = candidate['categories'][category] if category else candidate
         reference_scope = reference['categories'][category] if category else reference
@@ -79,8 +110,14 @@ def assess_candidate(base, trial, category=None):
         reason = 'Gain inférieur à 5 % ou instable entre les passages.'
     elif candidate_scope['decode_tps'] < reference_scope['decode_tps']:
         reason = 'Le décodage ralentit malgré le gain global.'
-    elif category is None and any(candidate['categories'][c]['seconds'] > reference['categories'][c]['seconds'] * 1.1 for c in CATEGORIES):
-        reason = 'Une catégorie de requêtes ralentit de plus de 10 %.'
+    elif any(a['seconds'] > b['seconds'] * 1.1 for a, b in zip(candidate['workloads'], reference['workloads'])
+             if category is None or a['category'] == category):
+        reason = 'Une catégorie ou longueur de requêtes ralentit de plus de 10 %.'
+    elif any(a['first_token_seconds'] is not None and b['first_token_seconds'] is not None and
+             a['first_token_seconds'] > max(b['first_token_seconds'] * 1.2, b['first_token_seconds'] + .01)
+             for a, b in zip(candidate['workloads'], reference['workloads'])
+             if category is None or a['category'] == category):
+        reason = 'Le premier token ralentit de plus de 20 % et 10 ms sur une longueur de requête.'
     else:
         return {'accepted': True, 'reason': 'Sorties identiques et gain stable sur chaque passage.',
                 'round_gain_percent': [100 * (1 / r - 1) for r in ratios]}
@@ -110,8 +147,8 @@ def select_winner(trials, baseline_name='standard', category=None):
 def memory_plan(metadata, weight_bytes, available=None, required=512):
     """Bound weights + conservative KV estimate + buffers; leave an OS margin.
 
-    Hybrid/recurrent and MLA architectures use a deliberately conservative
-    estimate and one slot, since their state does not follow dense KV geometry.
+    Known hybrid/MLA architectures separate fixed recurrent state from KV.
+    Unknown metadata retains a conservative fallback. One slot is reserved.
     Estimates are not advertised as actual memory measurements.
     """
     architecture = str(metadata.get('general.architecture', ''))
@@ -122,29 +159,26 @@ def memory_plan(metadata, weight_bytes, available=None, required=512):
     maximum = min(32768, trained)
     if required > maximum:
         raise ValueError('Le contexte requis dépasse la capacité du modèle (aucun message supprimé).')
-    layers = integer('block_count', 32)
-    heads = integer('attention.head_count', 32)
-    kv_heads = integer('attention.head_count_kv', heads)
-    embedding = integer('embedding_length', 4096)
-    key = integer('attention.key_length', embedding // heads)
-    value = integer('attention.value_length', embedding // heads)
-    dense = architecture in {'llama', 'qwen2', 'mistral', 'gemma', 'gemma2', 'gemma3', 'phi3'}
-    per_layer = metadata.get(architecture + '.attention.head_count_kv')
-    head_total = (sum(per_layer) if isinstance(per_layer, list) and len(per_layer) == layers and
-                  all(isinstance(n, int) and n >= 0 for n in per_layer) else layers * kv_heads)
-    kv_per_token = head_total * (key + value) * 2
-    if not dense:
-        kv_per_token = max(256 * 1024, kv_per_token * 2)
-    fixed = int(weight_bytes * 1.2) + 512 * MIB
+    shape = geometry(metadata)
+    kv_per_token = shape['kv_bytes_per_token']
+    # Four F32 recurrent rows conservatively cover sequence bookkeeping for
+    # the single slot. Speculative rollback snapshots are budgeted separately.
+    recurrent = shape['recurrent_state_bytes'] * 4
+    buffers = int(weight_bytes * .2) + 512 * MIB
+    fixed = weight_bytes + buffers + recurrent
+    def result(context, cache_mib=0, reserve=None):
+        return dict(shape, context=context, slots=1, available_bytes=available,
+                    cache_ram_mib=cache_mib, reserve_bytes=reserve,
+                    weight_bytes=weight_bytes, compute_budget_bytes=buffers,
+                    recurrent_budget_bytes=recurrent, context_bytes=context * kv_per_token,
+                    estimated_bytes=fixed + context * kv_per_token + cache_mib * MIB)
     # Start with one GPU history and at most 4096 tokens. Grow only when a
     # request needs it; extra free RAM is not a reason to reserve four KV slots.
     if available is None:
         context = min(4096, maximum)
         if required > context:
             raise ValueError('RAM disponible inconnue : impossible d’agrandir le contexte automatiquement.')
-        return {'context': max(512, context), 'slots': 1, 'available_bytes': None,
-                'estimated_bytes': fixed + context * kv_per_token, 'kv_bytes_per_token': kv_per_token,
-                'reserve_bytes': None, 'conservative': not dense}
+        return result(max(512, context))
     reserve = max(512 * MIB, min(2 * 1024 ** 3, int(available * .1)))
     budget = max(0, available - reserve - fixed)
     choices = [min(n, maximum) for n in (512, 1024, 2048, 4096, 8192, 16384, 32768)]
@@ -157,10 +191,7 @@ def memory_plan(metadata, weight_bytes, available=None, required=512):
             continue
         cache_budget = min(available // 64, budget - context * kv_per_token)
         cache_mib = next(n for n in (256, 128, 64, 0) if n * MIB <= cache_budget)
-        return {'context': context, 'slots': 1, 'available_bytes': available,
-                'cache_ram_mib': cache_mib,
-                'estimated_bytes': fixed + context * kv_per_token + cache_mib * MIB,
-                'kv_bytes_per_token': kv_per_token, 'reserve_bytes': reserve, 'conservative': not dense}
+        return result(context, cache_mib, reserve)
     minimum_context = min(n for n in choices if n >= required)
     working = fixed + minimum_context * kv_per_token
     # Solve working + the same bounded reserve used above; exclude optional cache.
@@ -178,13 +209,15 @@ def shortlist(screening, limit=6):
     scores = {}
     for name, trial in screening.items():
         rows = trial['samples']
-        if trial.get('error') or len(rows) != len(CATEGORIES):
+        if trial.get('error') or len(rows) not in (3, 6) or len(rows) != len(base):
             continue
         if [s['output_sha256'] for s in rows] != [s['output_sha256'] for s in base]:
             continue
         if any(not math.isfinite(s['seconds']) or s['seconds'] <= 0 for s in rows):
             continue
-        scores[name] = [sum(s['seconds'] for s in rows)] + [s['seconds'] for s in rows]
+        scores[name] = [sum(s['seconds'] for s in rows)] + [
+            sum(s['seconds'] for i, s in enumerate(rows) if _category(s, i) == category)
+            for category in CATEGORIES]
     selected = ['standard']
     # Include the best global and per-category candidates before filling the
     # bounded shortlist. No held-out prompt participates in this selection.

@@ -105,40 +105,51 @@ propose, le sampling GPU. Elle teste les motifs `ngram-simple` (4/16/48 tokens,
 avec une recherche de motifs courts), `ngram-map-k` et `ngram-mod` adaptatif
 (jusqu’à 64 tokens). Les options absentes du build installé sont ignorées.
 En mode automatique, elle cherche au maximum deux auxiliaires locaux compatibles
-qui rentrent dans la RAM disponible et teste 2/4/8/16 tokens anticipés. Un
+qui rentrent dans la RAM disponible et teste 2/3/4/6/8/12/16 tokens anticipés.
+Pour le MTP intégré et l’auxiliaire classique, le seuil de confiance est aussi
+exploré quand le build installé le permet. Le MTP partage les poids de la cible,
+mais son contexte et les états de rollback restent compris dans le budget RAM. Un
 auxiliaire classique doit avoir exactement les mêmes tokens et tokens spéciaux.
 Vous pouvez choisir un auxiliaire précis ou désactiver cette recherche. Aucun
 modèle n’est téléchargé. Le modèle cible valide les propositions spéculatives.
 
-Une **présélection** de trois prompts publics à 64 tokens retient au maximum
-six configurations, en préservant le meilleur candidat par usage. Ces mesures
-rapides ne servent jamais à annoncer un gain. La **sélection** reprend trois
-prompts fixes (discussion, code, contexte long varié), avec des plafonds de
-128/192/128 tokens et deux passages dans des ordres opposés après échauffement.
-Chaque candidat retenu par usage est ensuite comparé au standard sur **trois
-autres prompts**, joués **trois fois**. La vérification indépendante ne sert
-jamais à chercher un candidat de remplacement : en cas d’échec, cet usage garde
-le standard. Les sorties gloutonnes doivent être identiques dans les **trois
-catégories**, y compris pour un profil spécialisé.
+Une **présélection** de six workloads publics, avec au plus 128 tokens de sortie,
+retient au maximum six configurations en préservant le meilleur candidat par
+usage. Ces mesures rapides ne servent jamais à annoncer un gain. La **sélection**
+utilise six workloads : deux formes par catégorie (discussion, code, contexte
+long), avec des plafonds de 128/192/128/512/512/256 tokens et deux passages dans
+des ordres opposés après échauffement. Six workloads différents sont ensuite
+joués **trois fois** pour vérifier les candidats retenus. Le tableau indique les
+longueurs d’entrée réellement tokenisées et les sorties obtenues, le premier
+token mesuré en streaming, le débit moteur et le temps total. Les journaux publics
+sont raccourcis explicitement pour les petites capacités et les limites de sortie
+bornées au quart du contexte ; aucun prompt utilisateur n’est utilisé ou tronqué.
+La vérification indépendante ne cherche jamais de candidat de remplacement : en
+cas d’échec, cet usage garde le standard. Les sorties gloutonnes doivent être
+identiques dans les **trois catégories**, y compris pour un profil spécialisé.
 
 Quatre profils sont proposés : **Équilibré, Discussion, Code, Contexte long**.
 Chaque passage doit améliorer le temps d’au moins 5 % et préserver le débit de
-décodage. Le profil équilibré vérifie la suite complète et refuse une catégorie
-ralentie de plus de 10 %. Les profils spécialisés évaluent les performances de
-leur catégorie uniquement : leur gain ne constitue pas un gain général.
+décodage. Aucun workload du périmètre retenu ne doit ralentir de plus de 10 %,
+même si un autre workload de sa catégorie progresse. Le premier token ne doit
+pas ralentir simultanément de plus de 20 % et de 10 ms. Les profils spécialisés
+évaluent les performances de leur catégorie uniquement : leur gain ne constitue pas un gain général.
 Le sélecteur dans Performances applique le profil aux prochaines réponses du
-modèle. Si ses réglages diffèrent, le worker est rechargé et son cache vidé ; les
-conversations restent disponibles. Ce coût de changement est affiché séparément
+modèle. Si ses réglages diffèrent, le worker est rechargé ; un cache disque
+compatible peut retrouver un état précédent et les conversations restent
+disponibles. Ce coût de changement est affiché séparément
 et n’est pas inclus dans le gain de génération.
 
 Les chargements et échauffements sont exclus du temps des suites ; préparation,
-génération et appel HTTP local sont inclus, ainsi que le travail spéculatif.
+génération et appel HTTP local d’inférence sont inclus, ainsi que le travail
+spéculatif. La mise en forme et le comptage du prompt public précèdent le
+chronomètre ; le temps des réponses de chat inclut aussi ces étapes.
 Les compteurs réels de tokens anticipés proposés et acceptés sont affichés
 lorsque le runtime les expose ; une valeur absente reste inconnue. Le coût de
 l’auxiliaire seul n’est pas fourni par cette API : un taux d’acceptation élevé ne
 suffit donc pas à valider un gain. Les médianes et le débit pondéré par le travail
-sont affichés. Les tests ne couvrent qu’un prompt indépendant par catégorie,
-répété trois fois : ils ne garantissent pas les mêmes gains sur toute requête.
+sont affichés. Les tests couvrent deux formes par catégorie, répétées trois fois : ils ne
+garantissent pas les mêmes gains sur toute requête.
 
 Les poids et leur quantification ne changent jamais. La capacité du contexte et
 le nombre de slots sont les mêmes pour tous les essais. Le standard utilise un
@@ -147,8 +158,8 @@ rejetée dès qu’une sortie diffère sur la sélection ou la vérification. M�
 ces tests passent, ils ne garantissent pas la qualité sur tous les prompts ni
 avec d’autres températures. Le diagnostic indique explicitement cette différence.
 
-L’écran détaille les réglages retenus, la mémoire estimée, les RSS observés après
-les essais, les résultats par catégorie et la raison de chaque rejet. Le gain
+L’écran détaille les réglages retenus, la mémoire estimée, le pic de RSS échantillonné pendant
+les essais (toutes les 100 ms), les résultats par longueur et par catégorie et la raison de chaque rejet. Le gain
 affiché vient uniquement des prompts indépendants ; ce n’est pas une promesse
 pour chaque réponse. Si aucun réglage ne passe, le gain affiché est zéro.
 Une mesure séparée compare trois paires du même contexte sans cache puis avec
@@ -175,13 +186,42 @@ réservation automatique de quatre caches GPU. Un cache de préfixes en RAM hôt
 **borné à 64/128/256 Mio selon la marge disponible** (ou désactivé si elle est
 insuffisante), permet de retrouver les états des conversations récentes sans
 réserver un emplacement GPU par fil. Le runtime ne restaure que des préfixes de
-tokens identiques. Ce cache est volatile et ne sauvegarde pas les conversations
-sur disque. Les architectures hybrides/MLA utilisent une estimation plus
-conservatrice. Ces estimations ne remplacent pas les capteurs.
+tokens identiques. Ce cache en RAM est volatile. Le plan distingue les poids,
+le KV, les états récurrents et les buffers de calcul : Ling `bailingmoe3` (KDA/MLA)
+et Qwen `qwen35` (attention/delta) ont des géométries spécifiques, y compris
+l’exclusion des couches MTP du KV principal. Les métadonnées inconnues ou
+incomplètes gardent une estimation prudente. Si le runtime refuse une allocation
+au chargement initial, la capacité est réduite jusqu’à 512 tokens et le cache hôte
+désactivé avant toute conversation ; les autres erreurs ne déclenchent pas cette
+réduction. Les allocations CPU/GPU déclarées par le runtime sont détaillées dans
+Performances. Leur somme et le RSS ne sont pas une mesure de RAM physique
+exclusive et ne remplacent pas les capteurs.
 Si une conversation dépasse la capacité chargée, l’app peut réallouer jusqu’à
 32 768 tokens si le modèle et la RAM le permettent ; les messages sont conservés,
 le cache est vidé et le profil de vitesse est invalidé. Une impossibilité est
 signalée, sans tronquer ni compresser silencieusement la conversation.
+
+Un **cache KV sur disque de 512 Mio maximum de fichiers retenus**, activé par défaut si le runtime
+expose `--slot-save-path`, conserve les états des réponses terminées dans
+`~/.cache/local-llm/kv-cache` (ou sous `LOCAL_LLM_STATE_DIR`). Il évite de recalculer
+un préfixe après redémarrage ou changement de modèle. Il ne duplique pas les poids.
+Les fichiers binaires contiennent des **états privés de conversation** ; les
+métadonnées ne contiennent que des empreintes, tailles et coûts. Dossier en mode
+700, fichiers en mode 600 ; aucun fichier n’est envoyé à GitHub. Le budget évince
+les états les plus anciens. L’interface Performances permet de désactiver le cache
+(et d’effacer les fichiers) ou d’effacer uniquement les snapshots disque.
+
+Chaque snapshot est lié au SHA-256 du modèle et de son auxiliaire, au build et
+aux appareils du runtime, à tous ses réglages et à l’identité de la conversation.
+Les messages précédents doivent être inchangés ; le runtime vérifie ensuite le
+préfixe de tokens exact. Une corruption ou incompatibilité impose un recalcul.
+La première estimation de restauration utilise 1,5 fois le coût mesuré de
+sauvegarde et de hash ; le coût réellement observé la remplace ensuite et est
+ajusté à la taille du prochain snapshot. La restauration est évitée si elle est
+estimée plus coûteuse que la préparation connue du préfixe. Cette estimation
+n’est pas une garantie de gain. Sauvegarde/restauration sont exclues des essais
+de réglages, mais incluses dans le temps total de vos requêtes ; leur coût est
+rapporté séparément. Les interruptions suppriment le snapshot du fil concerné.
 
 Les interruptions imposent une requête sans réutilisation de cache au prochain
 message du même fil. Le moteur CPU conserve jusqu’à huit
@@ -201,7 +241,8 @@ L’API expose `GET /v1/accelerator`, `GET /v1/accelerator/drafts` et les POST
 `/v1/accelerator/load` (`{"id":"id-du-catalogue"}`), `/optimize` (facultatif
 `{"draft_id":"id-du-catalogue"}` ou `{"draft_mode":"off"}`), `/cancel`, `/unload` et
 `/profile` (par exemple `{"profile":"code"}` ; valeurs : `balanced`, `discussion`,
-`code`, `long_context`). L’optimisation retourne
+`code`, `long_context`) et `/cache` (`{"enabled":false}` ou `{"clear":true}`).
+L’optimisation retourne
 202 ; son état et ses mesures sont accessibles dans `GET /v1/accelerator`.
 Pour le chat direct, envoyez `backend: "llamacpp"`, `model` correspondant à
 l’identifiant chargé, `conversation_id` propre au fil et `stream: true` à

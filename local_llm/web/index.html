@@ -402,6 +402,35 @@
         margin-top: 12px;
         line-height: 1.6;
       }
+      #persistentCacheControls summary {
+        font-size: 13px;
+        padding: 8px 0;
+      }
+      #persistentCacheControls label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 12px 0;
+      }
+      .benchmark-table-wrap {
+        overflow-x: auto;
+      }
+      .benchmark-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.82rem;
+      }
+      .benchmark-table th,
+      .benchmark-table td {
+        padding: 0.7rem;
+        text-align: left;
+        border-bottom: 1px solid var(--line);
+        white-space: nowrap;
+      }
+      .benchmark-table caption {
+        text-align: left;
+        padding: 0.7rem 0;
+      }
       details {
         font-size: 10px;
         color: var(--muted);
@@ -1622,16 +1651,36 @@
                 <p class="hint">
                   Le profil s’applique aux prochaines réponses de ce modèle.
                   Changer les réglages peut recharger le moteur et vider son
-                  cache ; vos conversations restent disponibles.
+                  cache en mémoire ; le cache disque compatible peut le
+                  restaurer.
                 </p>
               </div>
+              <details id="persistentCacheControls">
+                <summary>Cache des conversations · moteur direct</summary>
+                <p id="persistentCacheStatus" class="hint" role="status"></p>
+                <label
+                  ><input id="persistentCacheEnabled" type="checkbox" checked />
+                  Conserver le contexte après fermeture</label
+                >
+                <button id="clearPersistentCache">
+                  Effacer le cache disque
+                </button>
+                <p class="hint">
+                  Jusqu’à 512 Mio sur disque, sans copier les modèles. Ces
+                  fichiers contiennent l’état de vos conversations et restent
+                  sur cet appareil. La restauration est utilisée seulement si
+                  elle est compatible et estimée plus rapide que le recalcul.
+                  Désactiver efface les fichiers du cache.
+                </p>
+              </details>
               <div id="optimizationResult"></div>
               <p class="hint">
                 Comparaison sur ce PC : mêmes poids et même contexte. Une
                 présélection réduit les essais. Discussion, code et contexte
-                long : deux passages pour choisir, puis trois passages sur des
-                prompts indépendants pour vérifier. Le gain affiché vient de
-                cette vérification.
+                long : six workloads avec plusieurs longueurs d’entrée et
+                jusqu’à 512 tokens de sortie, deux passages pour choisir, puis
+                trois passages sur des prompts indépendants pour vérifier. Le
+                gain affiché vient de cette vérification.
               </p>
             </div>
             <label for="completionSelect">Réponse mesurée</label>
@@ -2842,7 +2891,7 @@
           busy ||
           !activeGPU?.loaded ||
           !gpuInfo.loaded ||
-          !info.features?.includes("usage_profiles");
+          !info.features?.includes("workload_benchmark");
         $("draftModel").disabled = busy || !activeGPU?.loaded;
         $("cancelOptimization").classList.toggle("hidden", !calibrationRunning);
         $("optimizationProgress").classList.toggle(
@@ -2853,8 +2902,8 @@
         const status = $("optimizationStatus");
         status.textContent = calibrationRunning
           ? gpuInfo.job?.message || "Calibration en cours…"
-          : !info.features?.includes("usage_profiles")
-            ? "Relancez le serveur local-llm pour activer la calibration avec validation indépendante."
+          : !info.features?.includes("workload_benchmark")
+            ? "Relancez le serveur local-llm pour activer les six workloads et le cache persistant."
             : !gpuInfo.available
               ? gpuInfo.error ||
                 "Installez llama.cpp pour activer le moteur direct."
@@ -2874,8 +2923,38 @@
                     : activeGPU.model_name +
                       " · prêt à tester plusieurs configurations. La calibration peut prendre quelques minutes.";
         const output = $("optimizationResult");
-        const expanded = output.querySelector("details")?.open;
+        const expanded = new Set(
+          Array.from(output.querySelectorAll?.("details") || [])
+            .filter((item) => item.open)
+            .map((item) => item.dataset.key),
+        );
         output.replaceChildren();
+        const disk = gpuInfo.persistent_cache;
+        $("persistentCacheControls").classList.toggle(
+          "hidden",
+          !info.features?.includes("persistent_kv_cache"),
+        );
+        $("persistentCacheEnabled").checked = disk?.enabled ?? true;
+        $("persistentCacheEnabled").disabled = busy || calibrationRunning;
+        $("clearPersistentCache").disabled =
+          busy || calibrationRunning || !disk?.entries;
+        $("persistentCacheStatus").textContent = disk
+          ? bytes(disk.bytes) +
+            " / " +
+            bytes(disk.budget_bytes) +
+            " · " +
+            disk.entries +
+            " contexte(s) conservé(s). " +
+            (disk.supported === false
+              ? "Restauration indisponible avec ce moteur. "
+              : "") +
+            (disk.last?.restored
+              ? "Dernière restauration : " +
+                duration(disk.last.restore_seconds) +
+                ". "
+              : "") +
+            (disk.error || "")
+          : "Cache disque disponible après mise à jour du serveur.";
         const report = gpuInfo.profile;
         const usage = gpuInfo.usage_profile || "balanced";
         const chosenProfile = report?.profiles?.[usage];
@@ -2949,9 +3028,60 @@
                 " La RAM réellement observée reste affichée dans les capteurs.",
             ),
           );
+        const allocations = gpuInfo.runtime_memory;
+        if (allocations?.declared_buffer_bytes != null) {
+          const detail = node("details");
+          detail.dataset.key = "allocations";
+          detail.open = expanded.has("allocations");
+          detail.append(
+            node(
+              "summary",
+              "",
+              "Allocations déclarées par le moteur · " +
+                bytes(allocations.declared_buffer_bytes),
+            ),
+          );
+          for (const buffer of allocations.buffers || [])
+            detail.append(
+              node(
+                "p",
+                "hint",
+                buffer.device +
+                  " · " +
+                  buffer.kind +
+                  " : " +
+                  bytes(buffer.bytes),
+              ),
+            );
+          detail.append(
+            node(
+              "p",
+              "hint",
+              "Buffers des poids, du contexte et du calcul. Leur somme n’est pas une mesure de RAM physique exclusive ; les capteurs affichent séparément la mémoire observée.",
+            ),
+          );
+          if (memory)
+            detail.append(
+              node(
+                "p",
+                "hint",
+                "Plan mémoire : poids " +
+                  bytes(memory.weight_bytes) +
+                  ", contexte " +
+                  bytes(memory.context_bytes) +
+                  ", états récurrents " +
+                  bytes(memory.recurrent_budget_bytes) +
+                  ", budget de calcul " +
+                  bytes(memory.compute_budget_bytes) +
+                  ". " +
+                  (memory.fallback_reason || ""),
+              ),
+            );
+          output.append(detail);
+        }
         if (!profile) return;
         if (
-          profile.protocol !== 6 ||
+          profile.protocol !== 7 ||
           !profile.validation ||
           !profile.training_summaries
         ) {
@@ -3014,7 +3144,10 @@
               : "Suite indépendante · retenu",
             fmt(winner.seconds) + " s",
           ],
-          ["RSS après essai", bytes(winner.process_rss_bytes)],
+          [
+            "Pic RSS échantillonné",
+            bytes(winner.process_rss_peak_bytes ?? winner.process_rss_bytes),
+          ],
         ]) {
           const item = node(
             "div",
@@ -3098,13 +3231,75 @@
                   profile.config.draft_tokens +
                   " tokens anticipés"
                 : "") +
+              (profile.config.draft_p_min
+                ? " · seuil de probabilité " +
+                  fmt(profile.config.draft_p_min * 100) +
+                  " %"
+                : "") +
               ". " +
               (profile.kv_precision_changed
                 ? "Le cache KV passe de F16 à Q8 : sorties gloutonnes identiques sur ces tests uniquement, sans garantie générale de qualité."
                 : "Précision du cache KV conservée en F16."),
           ),
         );
+        if (winner.workloads?.length) {
+          const workloads = node("details");
+          workloads.dataset.key = "workloads";
+          workloads.open = expanded.has("workloads");
+          workloads.append(
+            node("summary", "", "Mesures par longueur de requête"),
+          );
+          const wrap = node("div", "benchmark-table-wrap"),
+            table = node("table", "benchmark-table");
+          table.append(
+            node(
+              "caption",
+              "",
+              "Médianes des trois passages indépendants, après mise en forme du prompt. Premier token mesuré en streaming ; décodage fourni par le moteur.",
+            ),
+          );
+          const header = node("tr");
+          for (const label of [
+            "Usage",
+            "Entrée / sortie",
+            "Premier token std → retenu",
+            "Débit std → retenu",
+            "Total std → retenu",
+          ])
+            header.append(node("th", "", label));
+          const head = node("thead");
+          head.append(header);
+          table.append(head);
+          const body = node("tbody");
+          for (const [index, row] of winner.workloads.entries()) {
+            const ref = baseline.workloads?.[index];
+            if (!ref) continue;
+            const tr = node("tr");
+            for (const value of [
+              row.category,
+              fmt(row.input_tokens) +
+                " / " +
+                fmt(row.output_tokens) +
+                " tok (max " +
+                (row.output_limit ?? "—") +
+                ")",
+              duration(ref.first_token_seconds) +
+                " → " +
+                duration(row.first_token_seconds),
+              fmt(ref.decode_tps) + " → " + fmt(row.decode_tps) + " tok/s",
+              duration(ref.seconds) + " → " + duration(row.seconds),
+            ])
+              tr.append(node("td", "", value));
+            body.append(tr);
+          }
+          table.append(body);
+          wrap.append(table);
+          workloads.append(wrap);
+          output.append(workloads);
+        }
         const profilesDetail = node("details");
+        profilesDetail.dataset.key = "profiles";
+        profilesDetail.open = expanded.has("profiles");
         profilesDetail.append(
           node("summary", "", "Les quatre profils vérifiés"),
         );
@@ -3130,7 +3325,8 @@
         }
         output.append(profilesDetail);
         const details = node("details");
-        details.open = !!expanded;
+        details.dataset.key = "diagnostic";
+        details.open = expanded.has("diagnostic");
         details.append(
           node("summary", "", "Diagnostic du modèle et essais écartés"),
         );
@@ -3207,7 +3403,7 @@
             "hint",
             "Validation : " +
               profile.validation.decision.reason +
-              " Les temps incluent la préparation et la génération ; les chargements et échauffements sont exclus. Les tests utilisent jusqu’à 128/192/128 tokens, sans obliger le modèle à ignorer sa fin de réponse.",
+              " Les temps incluent la préparation et la génération ; les chargements et échauffements sont exclus. Les limites de sortie et les longueurs réellement testées sont indiquées dans le tableau. Le modèle peut terminer avant la limite. La calibration exclut les écritures et restaurations du cache disque.",
           ),
         );
         details.append(
@@ -3301,6 +3497,27 @@
           setBusy(false);
         }
       };
+      for (const [id, payload] of [
+        [
+          "persistentCacheEnabled",
+          () => ({ enabled: $("persistentCacheEnabled").checked }),
+        ],
+        ["clearPersistentCache", () => ({ clear: true })],
+      ]) {
+        $(id)[id === "persistentCacheEnabled" ? "onchange" : "onclick"] =
+          async () => {
+            if (busy || calibrationRunning) return;
+            setBusy(true);
+            try {
+              gpuInfo = await api("/v1/accelerator/cache", payload());
+              renderOptimization();
+            } catch (error) {
+              $("notice").textContent = error.message;
+            } finally {
+              setBusy(false);
+            }
+          };
+      }
       $("cancelOptimization").onclick = async () => {
         try {
           await api("/v1/accelerator/cancel", {});

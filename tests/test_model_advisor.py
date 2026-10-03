@@ -179,7 +179,7 @@ class DirectCheckpointTests(unittest.TestCase):
         with patch.object(runtime,'available',return_value={'specialized_methods':['draft-mtp']}), patch('local_llm.accelerator.GGUFReader',return_value=reader):
             configs=runtime._candidate_configs(ExecutionConfig(),[])
         mtp=[c for c in configs.values() if c.speculative=='draft-mtp']
-        self.assertEqual([c.draft_tokens for c in mtp],[2,4,8,16])
+        self.assertEqual([c.draft_tokens for c in mtp],[2,3,4,6,8,12,16])
         self.assertTrue(all(c.draft_path is None for c in mtp))
         with self.assertRaises(ValueError): ExecutionConfig(speculative='draft-mtp',draft_path='/extra.gguf')
 
@@ -197,6 +197,7 @@ class MTPMemoryTests(unittest.TestCase):
     def test_mtp_command_uses_main_checkpoint_and_no_second_weight_path(self):
         runtime=Accelerator(executable='llama-server')
         runtime.path=Path('/existing/model.gguf');runtime.model_id='target'
+        runtime.capabilities={'optional_flags':[]}
         process=Mock();process.poll.return_value=None
         client=Mock();client._request.side_effect=[{'status':'ok'}, {'default_generation_settings':{'n_ctx':4096},'total_slots':1}]
         with patch('local_llm.accelerator.socket.socket') as socket, patch('local_llm.accelerator.subprocess.Popen',return_value=process) as start, patch('local_llm.accelerator.LMStudioClient',return_value=client):

@@ -21,3 +21,7 @@ pytorch_model*.bin
 local-llm-conversations*.json
 
 *.local-llm-draft.json
+
+# Private runtime state, including binary conversation snapshots.
+kv-cache/
+.local-llm-state/
