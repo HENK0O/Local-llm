@@ -1588,9 +1588,28 @@
           <div class="performance-layout">
             <h1>Performances</h1>
             <p class="intro">
-              Les mesures de vos réponses et de votre machine, à part de la
-              discussion.
+              Trouver la meilleure configuration pour votre modèle et votre
+              machine, puis vérifier son gain.
             </p>
+            <div id="engineControls" class="performance-card">
+              <h2>Le moteur de ce modèle</h2>
+              <p id="engineRuntimeStatus" class="hint" role="status">
+                Choisissez un modèle local.
+              </p>
+              <label for="engineChoice">Exécution</label>
+              <select id="engineChoice">
+                <option value="auto">
+                  Automatique · profil validé, sinon référence
+                </option>
+              </select>
+              <button id="applyEngine" disabled>Appliquer ce moteur</button>
+              <p class="hint">
+                Les poids restent en place et le modèle reste chargé en mémoire
+                jusqu’à son déchargement. Automatique utilise la référence tant
+                qu’un meilleur profil n’a pas été vérifié sur cette machine.
+              </p>
+              <p id="engineCredit" class="hint"></p>
+            </div>
             <div class="performance-card">
               <h2>Une variante mieux adaptée ?</h2>
               <p id="modelAdviceStatus" class="hint" role="status">
@@ -1607,27 +1626,29 @@
               </details>
             </div>
             <div class="performance-card">
-              <h2>Optimiser ce modèle</h2>
+              <h2 id="optimizationTitle">Optimiser ce modèle</h2>
               <p id="optimizationStatus" class="hint" role="status">
                 Choisissez un modèle dans le moteur direct pour le calibrer.
               </p>
-              <label for="draftModel"
-                >Modèle auxiliaire pour la génération spéculative</label
-              >
-              <select id="draftModel">
-                <option value="">
-                  Automatique · chercher un auxiliaire compatible
-                </option>
-              </select>
-              <p class="hint">
-                Un auxiliaire classique doit avoir exactement le même
-                vocabulaire. Un auxiliaire spécialisé doit être déclaré pour les
-                poids précis de la cible. L’app teste plusieurs méthodes et
-                profondeurs de spéculation, puis vérifie chaque profil sur des
-                prompts différents. Les têtes MTP intégrées sont aussi testées
-                si elles sont présentes et prises en charge. Aucun modèle n’est
-                téléchargé.
-              </p>
+              <div id="ggufOptimizationOptions">
+                <label for="draftModel"
+                  >Modèle auxiliaire pour la génération spéculative</label
+                >
+                <select id="draftModel">
+                  <option value="">
+                    Automatique · chercher un auxiliaire compatible
+                  </option>
+                </select>
+                <p class="hint">
+                  Un auxiliaire classique doit avoir exactement le même
+                  vocabulaire. Un auxiliaire spécialisé doit être déclaré pour
+                  les poids précis de la cible. L’app teste plusieurs méthodes
+                  et profondeurs de spéculation, puis vérifie chaque profil sur
+                  des prompts différents. Les têtes MTP intégrées sont aussi
+                  testées si elles sont présentes et prises en charge. Aucun
+                  modèle n’est téléchargé.
+                </p>
+              </div>
               <button id="optimizeModel" disabled>Optimiser ce modèle</button>
               <button id="cancelOptimization" class="hidden">
                 Arrêter après l’essai en cours
@@ -1674,7 +1695,7 @@
                 </p>
               </details>
               <div id="optimizationResult"></div>
-              <p class="hint">
+              <p id="optimizationMethod" class="hint">
                 Comparaison sur ce PC : mêmes poids et même contexte. Une
                 présélection réduit les essais. Discussion, code et contexte
                 long : six workloads avec plusieurs longueurs d’entrée et
@@ -2065,6 +2086,14 @@
                 seen.add(chat.id);
                 return true;
               });
+              for (const chat of this.chats) {
+                if (
+                  !["auto", "llamacpp", "mlx", "mtplx"].includes(
+                    chat.enginePreference,
+                  )
+                )
+                  chat.enginePreference = "auto";
+              }
               this.activeId = this.chats.some(
                 (c) => c.id === saved.activeId && !c.archived,
               )
@@ -2099,6 +2128,7 @@
             customTitle: false,
             modelKey: modelKey || null,
             modelName: modelName || null,
+            enginePreference: "auto",
             draft: "",
             messages: [],
             createdAt: Date.now(),
@@ -2206,7 +2236,16 @@
             .map((m) => ({
               key: "llamacpp:" + m.id,
               name: m.name,
-              source: "Sur ce PC · moteur direct",
+              source:
+                "Sur cet appareil · " +
+                (m.engines
+                  ?.map(
+                    (engine) =>
+                      ({ llamacpp: "llama.cpp", mlx: "MLX", mtplx: "MTPLX" })[
+                        engine
+                      ],
+                  )
+                  .join(" / ") || "moteur direct"),
               quantization: m.quantization,
             })),
           ...local
@@ -2353,6 +2392,9 @@
           ? activeGPU.loaded &&
             gpuInfo.loaded &&
             activeGPU.model_id === gpuInfo.model_id &&
+            (!conversations.active?.enginePreference ||
+              conversations.active.enginePreference === "auto" ||
+              conversations.active.enginePreference === gpuInfo.engine) &&
             !calibrationRunning
           : activeLM
             ? !!activeLM.instanceId &&
@@ -2488,7 +2530,7 @@
             (m) =>
               m.compatible || (gpuInfo.available && m.accelerator_candidate),
           ).length +
-          " compatibles · " +
+          " à essayer · " +
           catalog.length +
           " fichiers détectés" +
           (lmCatalog.length ? " · " + lmCatalog.length + " via LM Studio" : "");
@@ -2526,6 +2568,14 @@
           }
           row.append(desc);
           if (m.accelerator_candidate && gpuInfo.available) {
+            desc.append(
+              node(
+                "small",
+                "",
+                "Compatibilité confirmée au chargement · " +
+                  (m.engines || ["llamacpp"]).map(engineLabel).join(" / "),
+              ),
+            );
             const gpuButton = node("button", "", "Charger dans local-llm");
             gpuButton.disabled = busy;
             gpuButton.onclick = () => loadModel("llamacpp:" + m.id);
@@ -2598,7 +2648,12 @@
         $("modelSelect").disabled =
           busy || (!catalog.length && !lmCatalog.length);
       }
-      async function loadModel(id, instanceId = null, ensureLoaded = false) {
+      async function loadModel(
+        id,
+        instanceId = null,
+        ensureLoaded = false,
+        engine = "auto",
+      ) {
         if (busy || !id) return false;
         id = directModelKey(id, catalog, gpuInfo.available);
         const choice = modelChoices(
@@ -2611,6 +2666,7 @@
           name: choice?.name || conversations.active?.modelName || id,
           instanceId,
           ensureLoaded,
+          engine,
           state: "loading",
           error: null,
         };
@@ -2620,6 +2676,7 @@
           chat.modelKey = id;
           chat.modelName = modelSelection.name;
           chat.lmInstanceId = instanceId;
+          chat.enginePreference = id.startsWith("llamacpp:") ? engine : "auto";
           conversations.save();
         }
         setBusy(true);
@@ -2630,8 +2687,13 @@
           if (id.startsWith("llamacpp:")) {
             const loaded = await api("/v1/accelerator/load", {
               id: id.slice(9),
+              engine,
             });
-            if (!loaded.loaded || loaded.model_id !== id.slice(9))
+            if (
+              !loaded.loaded ||
+              loaded.model_id !== id.slice(9) ||
+              (engine !== "auto" && loaded.engine !== engine)
+            )
               throw new Error(
                 "Le moteur n’a pas confirmé le chargement du modèle sélectionné.",
               );
@@ -2640,9 +2702,9 @@
             activeLM = null;
             info = await api("/health");
             $("composerInfo").textContent =
-              "local-llm · " +
-              (gpuInfo.gpu ? "GPU" : "llama.cpp") +
-              " · cache des conversations actif";
+              (gpuInfo.scope ||
+                (gpuInfo.gpu ? "llama.cpp · GPU" : "llama.cpp")) +
+              " · sur cet appareil";
             $("modelName").textContent = gpuInfo.model_name;
             $("engineStatus").textContent = "Exécution directe par local-llm";
             try {
@@ -2781,7 +2843,10 @@
                   : "Chargement…"
               : ready()
                 ? activeGPU
-                  ? gpuInfo.profile?.winner !== "standard" && gpuInfo.profile
+                  ? (gpuInfo.profile?.profiles?.[
+                      gpuInfo.usage_profile || "balanced"
+                    ]?.winner || gpuInfo.profile?.winner) !== "standard" &&
+                    gpuInfo.profile
                     ? "Optimisation active"
                     : gpuInfo.profile
                       ? "Calibré · configuration standard"
@@ -2887,6 +2952,18 @@
       }
       function renderOptimization() {
         if (!$("optimizeModel")) return;
+        renderEngineControls();
+        const mac = ["mlx", "mtplx"].includes(gpuInfo.engine);
+        $("optimizationTitle").textContent = mac
+          ? "Comparer les moteurs Mac"
+          : "Optimiser ce modèle";
+        $("optimizeModel").textContent = mac
+          ? "Trouver la meilleure configuration"
+          : "Optimiser ce modèle";
+        $("ggufOptimizationOptions").classList.toggle("hidden", mac);
+        $("optimizationMethod").textContent = mac
+          ? "Même checkpoint MLX, même template, même échantillonnage et contexte sans cache. Deux passages pour choisir ; trois passages sur des prompts indépendants pour vérifier. Un gain inférieur à 5 %, instable ou accompagné de sorties différentes est refusé. Ce test utilise l’API Python MTPLX en mode Sustained ; il ne compare pas son application en mode Turbo."
+          : "Mêmes poids GGUF et même contexte. Six workloads avec plusieurs longueurs, deux passages pour choisir puis trois passages indépendants pour vérifier. Aucun gain universel n’est promis.";
         $("optimizeModel").disabled =
           busy ||
           !activeGPU?.loaded ||
@@ -2908,7 +2985,7 @@
               ? gpuInfo.error ||
                 "Installez llama.cpp pour activer le moteur direct."
               : !activeGPU?.loaded
-                ? "Choisissez un modèle dans local-llm · llama.cpp pour le calibrer sur ce PC."
+                ? "Choisissez un modèle local pour le mesurer sur cette machine."
                 : gpuInfo.job?.state === "failed" ||
                     gpuInfo.job?.state === "cancelled"
                   ? gpuInfo.job.message
@@ -2932,7 +3009,7 @@
         const disk = gpuInfo.persistent_cache;
         $("persistentCacheControls").classList.toggle(
           "hidden",
-          !info.features?.includes("persistent_kv_cache"),
+          mac || !info.features?.includes("persistent_kv_cache"),
         );
         $("persistentCacheEnabled").checked = disk?.enabled ?? true;
         $("persistentCacheEnabled").disabled = busy || calibrationRunning;
@@ -2970,6 +3047,10 @@
         }
         $("usageProfile").disabled = busy;
         $("applyUsageProfile").disabled = busy || !chosenProfile;
+        if (mac) {
+          renderMacOptimization(output, report, usage, expanded);
+          return;
+        }
         const profile = chosenProfile
           ? {
               ...report,
@@ -3427,6 +3508,198 @@
         );
         output.append(details);
       }
+      function renderEngineControls() {
+        if (!info.features?.includes("mac_engines")) {
+          $("engineControls").classList.toggle("hidden", true);
+          return;
+        }
+        const item = catalog?.find((model) => model.id === gpuInfo.model_id);
+        const engines =
+          item?.engines || (item?.accelerator_candidate ? ["llamacpp"] : []);
+        const preference = conversations.active?.enginePreference || "auto";
+        const select = $("engineChoice");
+        const key =
+          gpuInfo.model_id + ":" + engines.join(",") + ":" + preference;
+        if (select.dataset.selectionKey !== key) {
+          select.replaceChildren(
+            node("option", "", "Automatique · profil validé, sinon référence"),
+          );
+          select.firstElementChild.value = "auto";
+          for (const engine of engines) {
+            const option = node("option", "", engineLabel(engine));
+            option.value = engine;
+            select.append(option);
+          }
+          select.value = engines.includes(preference) ? preference : "auto";
+          select.dataset.selectionKey = key;
+        }
+        select.disabled = busy || !activeGPU?.loaded;
+        $("applyEngine").disabled = busy || !activeGPU?.loaded;
+        $("engineControls").classList.toggle(
+          "hidden",
+          !info.features?.includes("mac_engines"),
+        );
+        $("engineRuntimeStatus").textContent = gpuInfo.loaded
+          ? engineLabel(gpuInfo.engine || "llamacpp") +
+            " · " +
+            gpuInfo.model_name +
+            " · chargé"
+          : "Choisissez un modèle local. La compatibilité est confirmée lors du chargement.";
+        $("engineCredit").replaceChildren();
+        if (gpuInfo.loaded && gpuInfo.engine === "mtplx") {
+          const credit = node("a", "", "Powered by MTPLX · Youssof Altoukhi");
+          credit.href = "https://github.com/youssofal/MTPLX";
+          credit.target = "_blank";
+          credit.rel = "noopener noreferrer";
+          $("engineCredit").append(credit);
+        } else if (gpuInfo.loaded) {
+          $("engineCredit").textContent =
+            gpuInfo.attribution || "llama.cpp · GGML";
+        }
+      }
+      function engineLabel(engine) {
+        return (
+          { llamacpp: "llama.cpp", mlx: "MLX-LM", mtplx: "MTPLX · Sustained" }[
+            engine
+          ] || engine
+        );
+      }
+      function renderMacOptimization(
+        output,
+        report,
+        usage,
+        expanded = new Set(),
+      ) {
+        output.append(
+          node(
+            "p",
+            "hint",
+            gpuInfo.config.context.toLocaleString("fr") +
+              " tokens de contexte · cache des requêtes désactivé · calculs " +
+              engineLabel(gpuInfo.engine),
+          ),
+        );
+        if (gpuInfo.memory_plan)
+          output.append(
+            node(
+              "p",
+              "hint",
+              "Allocation estimée : " +
+                bytes(gpuInfo.memory_plan.estimated_bytes) +
+                ". Les capteurs affichent la mémoire observée séparément.",
+            ),
+          );
+        if (!report) return;
+        if (
+          report.scope !== "same_mlx_artifact_sustained_cold_greedy" ||
+          report.protocol !== 1 ||
+          !report.profiles?.[usage]
+        ) {
+          output.append(
+            node(
+              "p",
+              "hint",
+              "Profil ancien ou incomplet : relancez la comparaison.",
+            ),
+          );
+          return;
+        }
+        const profile = report.profiles[usage];
+        const base = profile.baseline,
+          retained = profile.retained;
+        const grid = node("div", "performance-metrics");
+        for (const [label, value] of [
+          [
+            "Référence",
+            engineLabel(report.training.standard.config.engine) +
+              " · " +
+              fmt(base.decode_tps) +
+              " tok/s",
+          ],
+          [
+            "Configuration retenue",
+            engineLabel(profile.config.engine) +
+              " · " +
+              fmt(retained.decode_tps) +
+              " tok/s",
+          ],
+          [
+            profile.winner === "standard"
+              ? "Résultat"
+              : "Gain vérifié sur le benchmark",
+            profile.winner === "standard"
+              ? "Aucun gain validé"
+              : "+" + fmt(retained.decode_tps - base.decode_tps) + " tok/s",
+          ],
+          [
+            "Durée · référence / retenue",
+            fmt(base.seconds) + " / " + fmt(retained.seconds) + " s",
+          ],
+        ]) {
+          const item = node(
+            "div",
+            label.includes("Gain vérifié") ? "optimization-gain" : "",
+          );
+          item.append(node("span", "", label), node("strong", "", value));
+          grid.append(item);
+        }
+        output.append(
+          grid,
+          node("p", "hint", profile.decision.reason),
+          node(
+            "p",
+            "hint",
+            "Mesure à température 0, sans réflexion, sur des prompts publics. Le résultat ne prédit pas le gain de chaque réponse et ne démontre aucune supériorité sur le mode Turbo de MTPLX.",
+          ),
+        );
+        const detail = node("details");
+        detail.dataset.key = "mac-configurations";
+        detail.open = expanded.has("mac-configurations");
+        detail.append(
+          node("summary", "", "Configurations et raisons du choix"),
+        );
+        for (const [name, trial] of Object.entries(report.training)) {
+          detail.append(
+            node(
+              "p",
+              "hint",
+              name +
+                " · " +
+                (name === "standard"
+                  ? "Référence"
+                  : report.decisions?.[name]?.reason ||
+                    trial.error ||
+                    "Non validé") +
+                (report.validation[name]
+                  ? " · vérification indépendante effectuée"
+                  : " · sélection uniquement"),
+            ),
+          );
+        }
+        detail.append(
+          node(
+            "p",
+            "hint",
+            "Le chargement et l’échauffement sont exclus des mesures. Le contexte exact envoyé est visible dans Contexte. La comparaison utilise des poids MLX identiques ; les GGUF ne sont pas comparés à une autre quantification. Vérifié le " +
+              new Date(report.measured_at).toLocaleString("fr-FR"),
+          ),
+        );
+        output.append(detail);
+        const download = node("button", "", "Exporter les mesures");
+        download.onclick = () => {
+          const url = URL.createObjectURL(
+            new Blob([JSON.stringify(report, null, 2)], {
+              type: "application/json",
+            }),
+          );
+          const link = node("a");
+          link.href = url;
+          link.download = "local-llm-mac-benchmark.json";
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        };
+        output.append(download);
+      }
       async function refreshAccelerator() {
         if (
           gpuPolling ||
@@ -3485,6 +3758,10 @@
                 : {},
           );
           calibrationRunning = true;
+          if (gpuInfo.engine !== "llamacpp" && conversations.active) {
+            conversations.active.enginePreference = "auto";
+            conversations.save();
+          }
           renderOptimization();
           updateModelSelection();
         } catch (error) {
@@ -3493,6 +3770,15 @@
           $("notice").textContent = error.message;
         }
       };
+      $("applyEngine").onclick = async () => {
+        if (busy || !activeGPU?.loaded) return;
+        await loadModel(
+          currentModelKey(),
+          null,
+          false,
+          $("engineChoice").value,
+        );
+      };
       $("applyUsageProfile").onclick = async () => {
         const profile = $("usageProfile").value;
         setBusy(true);
@@ -3500,6 +3786,10 @@
           gpuInfo = await api("/v1/accelerator/profile", { profile });
           if (activeGPU?.model_id === gpuInfo.model_id)
             activeGPU = { ...activeGPU, ...gpuInfo };
+          if (gpuInfo.engine !== "llamacpp" && conversations.active) {
+            conversations.active.enginePreference = "auto";
+            conversations.save();
+          }
           renderOptimization();
         } catch (error) {
           $("notice").textContent = error.message;
@@ -3877,9 +4167,11 @@
             "",
             item.stats.backend === "lmstudio"
               ? "Exécution par LM Studio. Aucun gain local-llm attribué."
-              : "Exécution par local-llm. Décodage moteur : " +
+              : "Exécution par " +
+                  (item.stats.engine_scope || "local-llm") +
+                  ". Débit de décodage déclaré par ce moteur : " +
                   fmt(item.stats.decode_tokens_per_second) +
-                  " tok/s, hors préparation, sampling et transport. " +
+                  " tok/s. " +
                   Math.max(0, (item.usage.completion_tokens || 0) - 1) +
                   " étapes / " +
                   (item.stats.decode_seconds || 0).toFixed(4) +
@@ -4276,7 +4568,9 @@
             inContext: !!answer,
             note,
             modelLabel: activeGPU
-              ? final.local_llm.model_name + " · local-llm"
+              ? final.local_llm.model_name +
+                " · " +
+                (final.local_llm.engine_scope || "llama.cpp")
               : activeLM
                 ? final.local_llm.model_name + " · LM Studio"
                 : "local-llm",
@@ -4285,7 +4579,10 @@
           if (activeGPU)
             view.wrap.querySelector(
               ".message-label span:last-child",
-            ).textContent = final.local_llm.model_name + " · local-llm";
+            ).textContent =
+              final.local_llm.model_name +
+              " · " +
+              (final.local_llm.engine_scope || "llama.cpp");
           if (final.local_llm.model_instance_id) {
             chat.lastRequest.modelInstanceId =
               final.local_llm.model_instance_id;
@@ -4603,7 +4900,12 @@
             !ready() ||
             (activeLM && chat.lmInstanceId !== activeLM.instanceId))
         )
-          await loadModel(chat.modelKey, chat.lmInstanceId || null);
+          await loadModel(
+            chat.modelKey,
+            chat.lmInstanceId || null,
+            false,
+            chat.enginePreference || "auto",
+          );
         else if (!chat.modelKey && currentModelKey()) {
           chat.modelKey = currentModelKey();
           chat.modelName = activeGPU
@@ -5007,6 +5309,7 @@
             modelSelection.key,
             modelSelection.instanceId,
             modelSelection.ensureLoaded,
+            modelSelection.engine || "auto",
           );
       };
       $("newChat").onclick = newConversation;
@@ -5142,7 +5445,12 @@
             conversations.save();
           }
           if (chat?.modelKey && chat.modelKey !== currentModelKey())
-            await loadModel(chat.modelKey, chat.lmInstanceId || null);
+            await loadModel(
+              chat.modelKey,
+              chat.lmInstanceId || null,
+              false,
+              chat.enginePreference || "auto",
+            );
           else if (chat && !chat.modelKey) {
             chat.modelKey = currentModelKey();
             chat.modelName = activeGPU ? activeGPU.model_name : info.model;

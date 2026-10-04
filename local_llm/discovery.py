@@ -57,7 +57,7 @@ def lmstudio_model_roots(home: Path) -> List[Path]:
 
 def default_model_roots() -> List[Path]:
     home = Path.home()
-    roots = [Path.cwd() / "models", *lmstudio_model_roots(home),
+    roots = [Path.cwd() / "models", *lmstudio_model_roots(home), home / '.mtplx/models',
              Path(os.environ.get("HF_HUB_CACHE", Path(os.environ.get("HF_HOME", home / ".cache/huggingface")) / "hub"))]
     roots.extend(Path(p).expanduser() for p in os.environ.get("LOCAL_LLM_MODEL_DIRS", "").split(os.pathsep) if p)
     return roots
@@ -138,19 +138,26 @@ def inspect_model(path: Path, source: str = "local") -> DiscoveredModel:
                 raise ValueError("RoPE avec scaling non pris en charge")
         else:
             raw = json.loads((path / "config.json").read_text())
+            if not isinstance(raw, dict):
+                raise ValueError('Configuration de modèle invalide')
             architecture = raw.get("model_type", "llama")
+            weights = list(path.glob("*.safetensors")) + list(path.glob("weights.npz"))
+            size = sum(p.stat().st_size for p in weights)
+            quant = raw.get('quantization') or raw.get('quantization_config') or {}
+            if isinstance(quant, dict) and type(quant.get('bits')) is int:
+                quantization = str(quant['bits']) + '-bit MLX'
+            if raw.get('auto_map') or raw.get('model_file'):
+                raise ValueError('Code de modèle personnalisé non pris en charge')
             if architecture != "llama":
                 raise ValueError("Architecture non prise en charge : " + str(architecture))
             if raw.get("rope_scaling"):
                 raise ValueError("RoPE avec scaling non pris en charge")
             ModelConfig.from_dict(raw)
-            weights = list(path.glob("*.safetensors")) + list(path.glob("weights.npz"))
             if not weights or not (path / "tokenizer.json").is_file():
                 raise ValueError("Poids ou tokenizer manquants")
             from .tokenizer import load_tokenizer
             from .chat import require_chat_template
             require_chat_template(load_tokenizer(path / "tokenizer.json"))
-            size = sum(p.stat().st_size for p in weights)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         reason = str(exc)
     return DiscoveredModel(hashlib.sha256(str(path).encode()).hexdigest()[:20],
@@ -165,7 +172,7 @@ def discover_models(roots: Optional[Iterable[Path]] = None, limit: int = 256) ->
         root = Path(root).expanduser().resolve()
         if not root.is_dir():
             continue
-        source = "LM Studio" if root in studio_roots or "lmstudio" in str(root) or "lm-studio" in str(root) else "Hugging Face" if "huggingface" in str(root) else "local"
+        source = "MTPLX" if '.mtplx' in root.parts else "LM Studio" if root in studio_roots or "lmstudio" in str(root) or "lm-studio" in str(root) else "Hugging Face" if "huggingface" in str(root) else "local"
         for directory, dirs, files in os.walk(root, followlinks=False):
             relative = Path(directory).relative_to(root)
             dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in {"blobs", "node_modules", "__pycache__"}) if len(relative.parts) < 5 else []

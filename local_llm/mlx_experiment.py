@@ -32,7 +32,9 @@ def validate_model(path):
         if (root / name).stat().st_size > 1024 ** 2:
             raise ValueError('Configuration MLX trop volumineuse.')
         config = json.loads((root / name).read_text())
-        if config.get('auto_map'):
+        if not isinstance(config, dict):
+            raise ValueError('Configuration MLX invalide.')
+        if config.get('auto_map') or config.get('model_file'):
             raise ValueError('Les modèles nécessitant du code distant ne sont pas pris en charge.')
     return root
 

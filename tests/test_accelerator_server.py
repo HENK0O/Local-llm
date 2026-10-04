@@ -108,6 +108,38 @@ class AcceleratorHTTPTests(unittest.TestCase):
                          'messages': [{'role': 'user', 'content': 'Preview'}]}) as response:
             self.assertEqual(json.load(response)['prompt'], 'EXACT: Preview')
 
+    def test_mac_stream_reports_actual_engine_without_inventing_missing_timings(self):
+        def chunks(payload, conversation):
+            yield {'model': 'target', 'token_progress': True, 'choices': [{'delta': {'reasoning_content': 'Thinking'}}]}
+            yield {'model': 'target', 'choices': [{'delta': {'content': 'Answer'}}]}
+            yield {'model': 'target', 'usage': {'prompt_tokens': 10, 'completion_tokens': 5},
+                   'timings': {'cache_n': 0, 'prompt_ms': None, 'predicted_ms': None, 'predicted_per_second': None}}
+        for engine in ('mlx', 'mtplx'):
+            description = dict(self.runtime.describe(), engine=engine,
+                               scope='Sustained' if engine == 'mtplx' else 'standard', attribution='Actual engine')
+            with self.subTest(engine=engine), patch.object(self.runtime, 'iter_chat', side_effect=chunks), patch.object(
+                    self.runtime, 'describe', return_value=description):
+                with self.request('/v1/chat/completions', {'backend': 'llamacpp', 'model': 'target', 'stream': True,
+                        'max_tokens': 64, 'messages': [{'role': 'user', 'content': 'Question'}]}) as response:
+                    frames = [line[6:] for line in response.read().decode().splitlines() if line.startswith('data: ')]
+                stats = json.loads(frames[-2])['local_llm']
+                self.assertEqual(stats['engine'], engine)
+                self.assertEqual(stats['engine_attribution'], 'Actual engine')
+                self.assertEqual(stats['reused_prompt_tokens'], 0)
+                self.assertIsNone(stats['prefill_seconds']); self.assertIsNone(stats['decode_seconds'])
+                self.assertIsNone(stats['decode_tokens_per_second']); self.assertIsNone(stats['calibration_gain_percent'])
+                self.assertFalse(stats['optimized'])
+                self.assertGreaterEqual(stats['first_text_seconds'], stats['first_token_seconds'])
+
+    def test_mac_optimization_never_searches_or_passes_gguf_drafts(self):
+        with patch.object(self.runtime, 'describe', return_value={'engine': 'mtplx'}), patch.object(
+                self.runtime, 'optimize', return_value={'state': 'running'}) as optimize, patch.object(
+                self.service, 'accelerator_drafts') as drafts:
+            self.assertEqual(self.service.optimize_accelerator({})['state'], 'running')
+            optimize.assert_called_once_with(); drafts.assert_not_called()
+            with self.assertRaisesRegex(ValueError, 'GGUF'):
+                self.service.optimize_accelerator({'draft_id': 'something'})
+            self.assertEqual(optimize.call_count, 1)
     def test_usage_profile_endpoint_validates_and_applies_only_named_profiles(self):
         with self.request('/v1/accelerator/profile', {'profile':'code'}) as response:
             self.assertEqual(response.status, 200)

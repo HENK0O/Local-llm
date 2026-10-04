@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "local-llm"
 dynamic = ["version"]
-description = "Local GGUF inference with GPU execution, measured calibration and conversation caching"
+description = "Local inference with llama.cpp, MLX and optional MTPLX, selected through measured calibration"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"

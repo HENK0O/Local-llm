@@ -24,7 +24,8 @@ from .recommendations import recommend_models
 from .model_advisor import ModelAdvisor
 from .telemetry import SystemTelemetry
 from .cache import PrefixCache
-from .accelerator import Accelerator, draft_method
+from .accelerator import draft_method
+from .engines import EngineManager as Accelerator
 from .gguf import Q4Matrix, Q8Matrix, q4_backend_name, q8_backend_name
 from .loading import load_runtime
 from .reference_runtime import ReferenceRuntime
@@ -246,7 +247,11 @@ class ChatService:
             models = []
             for m in self.catalog.values():
                 data = m.to_dict()
-                data["accelerator_candidate"] = Path(m.path).suffix.lower() == ".gguf" and m.architecture not in {None, "dflash", "dspark", "bert", "nomic-bert"}
+                engines = (self.accelerator.model_engines(m) if hasattr(self.accelerator, 'model_engines') else
+                           ['llamacpp'] if Path(m.path).suffix.lower() == '.gguf' and m.architecture not in {None, 'dflash', 'dspark', 'bert', 'nomic-bert'} else [])
+                data['engines'] = engines
+                data['format'] = 'GGUF' if Path(m.path).suffix.lower() == '.gguf' else 'MLX' if engines else 'directory'
+                data["accelerator_candidate"] = bool(engines)
                 models.append(data)
             return {"models": models, "accelerator": self.accelerator.describe(),
                     "current_id": self.current_id,
@@ -359,7 +364,7 @@ class ChatService:
                 "max_lmstudio_tokens": self.max_lmstudio_tokens,
                 "max_accelerator_tokens": MAX_ACCELERATOR_TOKENS,
                 "accelerator": self.accelerator.describe(),
-                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory", "usage_profiles", "direct_library", "model_advice", "embedded_mtp", "persistent_kv_cache", "workload_benchmark"],
+                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory", "usage_profiles", "direct_library", "model_advice", "embedded_mtp", "persistent_kv_cache", "workload_benchmark", "mac_engines"],
                 "retained_cache_bytes": self.prefix_cache.nbytes,
                 "retained_cache_limit_bytes": self.prefix_cache.max_bytes}
 
@@ -389,13 +394,19 @@ class ChatService:
         item = self.catalog.get(payload["id"])
         if item is None:
             raise ValueError("Modèle absent des bibliothèques configurées")
+        engine = payload.get('engine', 'auto')
+        if not isinstance(engine, str) or engine not in {'auto', 'llamacpp', 'mlx', 'mtplx'}:
+            raise ValueError('Moteur inconnu')
         with self._generation_lock:
-            result = self.accelerator.load(item, self._accelerator_memory_available())
+            result = (self.accelerator.load(item, self._accelerator_memory_available(), engine=engine)
+                      if 'engine' in payload else self.accelerator.load(item, self._accelerator_memory_available()))
             self.unload_model()
             self._accelerator_records.clear()
             return result
 
     def accelerator_drafts(self):
+        if self.accelerator.describe().get('engine', 'llamacpp') != 'llamacpp':
+            return {'models': []}
         target = self.accelerator.path
         models = []
         if target is not None:
@@ -413,6 +424,12 @@ class ChatService:
     def optimize_accelerator(self, payload):
         if not isinstance(payload, dict):
             raise ValueError("JSON object required")
+        if self.accelerator.describe().get('engine', 'llamacpp') in {'mlx', 'mtplx'}:
+            if payload.get('draft_id'):
+                raise ValueError('Les auxiliaires GGUF ne sont pas utilisables par ce moteur Mac.')
+            result = self.accelerator.optimize()
+            self._accelerator_records.clear()
+            return result
         draft_id = payload.get("draft_id")
         draft = None
         if draft_id is not None:
@@ -506,7 +523,7 @@ class ChatService:
         request = parse_chat_request(payload, min(self.default_max_tokens, limit), limit)
         if request.backend == "llamacpp":
             if request.template_name is not None:
-                raise ValueError('Le moteur direct utilise le template embarqué du GGUF ; chat_template n’est pas disponible.')
+                raise ValueError('Le moteur direct utilise le template du checkpoint ; chat_template n’est pas disponible.')
             runtime = self.accelerator.describe()
             if runtime.get("job") and runtime["job"].get("state") == "running":
                 raise ValueError("Calibration en cours")
@@ -1043,6 +1060,8 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 usage = chunk.get("usage") or usage
                 timings = chunk.get("timings") or timings
                 choices = chunk.get("choices") or []
+                if first is None and chunk.get('token_progress'):
+                    first = time.perf_counter() - started
                 for choice in choices:
                     delta = choice.get('delta') or {}
                     now = time.perf_counter()
@@ -1062,11 +1081,14 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             self._write_event({"id": response_id, "model": request.model_id,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": finish}], "usage": usage,
                 "local_llm": {"backend": "llamacpp", "completion_id": response_id,
+                    "engine": runtime.describe().get('engine', 'llamacpp'),
+                    "engine_scope": runtime.describe().get('scope'),
+                    "engine_attribution": runtime.describe().get('attribution'),
                     "model_name": request.model_name, "decode_tokens_per_second": timings.get("predicted_per_second"),
-                    "prefill_seconds": timings.get("prompt_ms", 0) / 1000 if timings else None,
+                    "prefill_seconds": timings["prompt_ms"] / 1000 if timings.get('prompt_ms') is not None else None,
                     "first_token_seconds": first, "first_text_seconds": first_text,
                     "request_seconds": time.perf_counter() - started,
-                    "decode_seconds": timings.get("predicted_ms", 0) / 1000 if timings else None,
+                    "decode_seconds": timings["predicted_ms"] / 1000 if timings.get('predicted_ms') is not None else None,
                     "kv_cache_bytes": None, "reused_prompt_tokens": timings.get("cache_n"),
                     "optimized": bool(profile and profile["winner"] != "standard"), "timing_kind": "engine",
                     "calibration_gain_percent": profile["gain_percent"] if profile else None,

@@ -106,6 +106,43 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+test("an explicitly requested engine is confirmed as well as the model identity", async () => {
+  const { sandbox: s, $ } = fixture(async (path) => {
+    if (path === "/v1/accelerator/load" || path === "/v1/accelerator")
+      return { ...smol, engine: "mlx" };
+    throw new Error("Unexpected request " + path);
+  });
+  assert.equal(await s.loadModel("llamacpp:smol", null, false, "mtplx"), false);
+  assert.equal(s.conversations.active.enginePreference, "mtplx");
+  assert.match($("modelLoadFailureMessage").textContent, /n’a pas confirmé/);
+  assert.equal(s.canSend(), false);
+});
+
+test("returning to a chat restores its explicit engine on the same model", async () => {
+  const requests = [];
+  const { sandbox: s } = fixture(async (path, body) => {
+    if (path === "/v1/accelerator/load") {
+      requests.push(body);
+      return { ...smol, engine: "mtplx" };
+    }
+    if (path === "/health") return { features: ["gpu_runtime"], loaded: false };
+    throw new Error("Unexpected request " + path);
+  });
+  s.gpuInfo.engine = s.activeGPU.engine = "mlx";
+  s.conversations.select = function (id) {
+    this.active = {
+      id,
+      modelKey: "llamacpp:smol",
+      modelName: "Smol",
+      enginePreference: "mtplx",
+    };
+    return this.active;
+  };
+  await s.activateChat("mtplx-chat");
+  assert.equal(requests[0].engine, "mtplx");
+  assert.equal(s.canSend(), true);
+});
+
 test("failed Ling load keeps Ling selected, persists intent, shows reason and blocks Smol sending", async () => {
   const { sandbox: s, $ } = fixture(async (path, body) => {
     if (path === "/v1/accelerator/load")

@@ -5,6 +5,32 @@ les mêmes poids SmolLM2-360M-Instruct Q8_0, sur un MacBook Air Apple M5.
 Ils ne démontrent pas une supériorité sur LM Studio ou llama.cpp.
 Les temps dépendent de la charge, de la température et des fréquences du CPU.
 
+## Vérification MLX et MTPLX
+
+L’intégration du chat MLX a été vérifiée sur Metal avec un checkpoint généré
+de moins de 1 Mio : sortie streamée, compte de tokens, contexte exact,
+interruption, rechargement, calibration et restauration d’un profil vérifié.
+Le modèle synthétique produit volontairement le même token ; il ne mesure pas
+la qualité ou le débit d’un modèle utile. Les tests d’API MTPLX utilisent des
+simulations ; aucun benchmark réel de cette intégration MTPLX n’est encore
+publié. L’essai sur Bonsai 27B a été reporté faute de RAM disponible dans le
+budget prudent au moment du contrôle. Aucun chiffre de gain n’en est déduit.
+
+Pour répéter le petit test avec un environnement MLX existant :
+
+```bash
+LOCAL_LLM_TEST_MAC_PYTHON=/chemin/venv-mlx/bin/python \
+  .venv/bin/python -m unittest tests.test_real_mac_runtime -v
+```
+
+La nouvelle calibration compare uniquement les mêmes poids MLX : référence
+MLX-LM ou MTPLX sans MTP, réglage de préparation et profondeurs MTP compatibles.
+Son périmètre est l’API Python MTPLX **Sustained**, cache de requête désactivé,
+sampling glouton et raisonnement désactivé. Elle ne mesure pas l’app MTPLX Turbo
+ni une quantification GGUF différente. Le rapport exporté dans Performances
+contient tous les essais et les refus ; un gain ne passe qu’après vérification
+indépendante des mêmes tokens et des timings.
+
 | Mesure | Données brutes | Contrôle |
 |---|---|---|
 | Traitement du prompt | [inference-q8.json](inference-q8.json) | 3 essais alternés, mêmes tokens gloutons |

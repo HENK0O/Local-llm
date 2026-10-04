@@ -216,7 +216,7 @@ test("direct GGUF choices include unsupported native quantizations without dupli
     JSON.stringify(choices.map((m) => m.key)),
     JSON.stringify(["llamacpp:q8", "llamacpp:iq3", "directory"]),
   );
-  assert.equal(choices[0].source, "Sur ce PC · moteur direct");
+  assert.equal(choices[0].source, "Sur cet appareil · moteur direct");
 });
 
 test("GPU request identity survives conversation reload without mixing other contexts", () => {

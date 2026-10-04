@@ -17,6 +17,9 @@ function element(tag, cls = "", text = "") {
     className: cls,
     textContent: text,
     children: [],
+    get firstElementChild() {
+      return this.children[0];
+    },
     dataset: {},
     classList: { toggle() {} },
     append(...children) {
@@ -40,6 +43,7 @@ function render(
   ],
   usage = "balanced",
   pending = false,
+  engine = "llamacpp",
 ) {
   const elements = new Map();
   const sandbox = {
@@ -52,10 +56,13 @@ function render(
     duration: (n) => (Number.isFinite(n) ? Math.round(n * 1000) + " ms" : "—"),
     bytes: (n) => (Number.isFinite(n) ? n + " bytes" : "—"),
     info: { features },
+    catalog: [{ id: "target", engines: ["mlx", "mtplx"] }],
+    conversations: { active: { enginePreference: "auto" } },
     busy: false,
     calibrationRunning: false,
     activeGPU: { loaded: true, model_id: "target", model_name: "Target" },
     gpuInfo: {
+      engine,
       available: true,
       loaded: true,
       model_id: "target",
@@ -82,8 +89,62 @@ function render(
     status: elements.get("optimizationStatus").textContent,
     disabled: elements.get("optimizeModel").disabled,
     selected: elements.get("usageProfile").value,
+    credit: elements.has("engineCredit")
+      ? flatten(elements.get("engineCredit"))
+      : "",
   };
 }
+
+test("Mac comparison attributes MTPLX and scopes the verified gain to its actual benchmark", () => {
+  const base = { decode_tps: 20, seconds: 10 };
+  const retained = { decode_tps: 30, seconds: 7 };
+  const config = { engine: "mtplx", context: 4096, depth: 2 };
+  const report = {
+    protocol: 1,
+    scope: "same_mlx_artifact_sustained_cold_greedy",
+    profiles: {
+      balanced: {
+        winner: "mtplx-mtp-2",
+        config,
+        baseline: base,
+        retained,
+        decision: { reason: "Sorties identiques et gain stable." },
+      },
+    },
+    training: {
+      standard: { config: { engine: "mlx" } },
+      "mtplx-mtp-2": { config },
+    },
+    validation: { standard: {}, "mtplx-mtp-2": {} },
+    decisions: { "mtplx-mtp-2": { reason: "Sorties identiques." } },
+    measured_at: "2026-10-04T12:00:00Z",
+  };
+  const view = render(
+    report,
+    ["gpu_runtime", "workload_benchmark", "mac_engines"],
+    "balanced",
+    false,
+    "mtplx",
+  );
+  assert.match(view.text, /Gain vérifié sur le benchmark \+10\.0 tok\/s/);
+  assert.match(view.text, /ne démontre aucune supériorité sur le mode Turbo/);
+  assert.match(view.credit, /Powered by MTPLX/);
+  assert.doesNotMatch(view.text, /tokens gagnés|KV F16|Ancien profil/);
+  report.profiles.balanced = {
+    ...report.profiles.balanced,
+    winner: "standard",
+    retained: base,
+  };
+  const noGain = render(
+    report,
+    ["workload_benchmark"],
+    "balanced",
+    false,
+    "mlx",
+  );
+  assert.match(noGain.text, /Aucun gain validé/);
+  assert.doesNotMatch(noGain.text, /Gain vérifié sur le benchmark/);
+});
 function profile() {
   const summary = {
     decode_tps: 100,

@@ -4,22 +4,24 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](pyproject.toml)
 
-**Une app d’inférence locale avec exécution GPU, calibration mesurée et cache des conversations.**
+**Une app d’inférence locale qui choisit ses réglages à partir de mesures sur votre machine.**
 
 L’objectif est de **trouver et appliquer les réglages validés pour votre modèle
 et votre PC**. Aucun gain universel n’est promis : une référence déjà rapide
 peut être conservée. Le [premier parcours vérifié sur Ling Tiny](benchmarks/README.md#ling-tiny--chargement-et-absence-de-gain-validé)
 documente le chargement, les réponses et les essais sans accélération retenue.
 
-Le moteur direct utilise **llama.cpp** pour exécuter vos GGUF installés, avec
-Metal sur Apple Silicon ou les périphériques disponibles dans votre build.
+Le moteur direct utilise **llama.cpp** pour les GGUF, **MLX-LM** pour les dossiers
+MLX sur Apple Silicon et, si son environnement est installé, **MTPLX** pour les
+checkpoints avec têtes MTP compatibles. L’app lit les poids déjà présents, y
+compris dans `~/.mtplx/models`. Chaque réponse indique le moteur utilisé.
 local-llm calibre ses réglages sur votre machine et conserve une configuration
 uniquement si le benchmark confirme un gain reproductible sans changer ses
 sorties. Les poids ne sont ni modifiés ni téléchargés automatiquement.
 
 Le moteur CPU Python/NumPy reste disponible avec `--engine native`. Il expose la
 chaîne d’inférence et ses kernels Q8/Q4 en C++/NEON, vérifiés face aux logits et
-tokens du chemin de référence. L’accélération GPU provient de llama.cpp ; la
+tokens du chemin de référence. L’accélération GPU provient des runtimes amont ; la
 couche local-llm apporte la calibration, le choix de la spéculation, le suivi du
 contexte et des conversations. Relayer une requête à LM Studio n’accélère pas
 ses calculs.
@@ -295,15 +297,14 @@ llama.cpp doit proposer la méthode. Sans déclaration, un DFlash/DSpark n’est
 jamais associé automatiquement à un modèle de chat. Les fichiers auxiliaires
 restent ignorés par Git.
 
-### Expérience MLX optionnelle (Apple Silicon)
+### MLX et MTPLX dans le chat (Apple Silicon, expérimental)
 
-Une calibration **séparée en ligne de commande** explore la préparation MLX
-(128/512/2048 tokens par étape), avec les mêmes règles de sélection, vérification
-indépendante et profils d’usage. Elle ne remplace pas encore le moteur de chat
-GGUF. Il faut un dossier local compatible MLX contenant les poids Safetensors,
-le tokenizer et le template de conversation ; **les GGUF de LM Studio ne sont
-pas directement utilisables par cette expérience**. Aucun poids n’est téléchargé
-ou converti. Le chargement reste hors ligne, sans code de modèle distant.
+La bibliothèque détecte les dossiers MLX dans les emplacements existants,
+notamment `~/.mtplx/models`. On peut aussi ajouter leur chemin dans Bibliothèque.
+La compatibilité est confirmée au chargement, jamais à partir du seul nom.
+Il faut des poids Safetensors, un tokenizer et un template locaux. Un GGUF reste
+exécuté par llama.cpp ; il n’est pas converti en MLX. Aucun poids n’est copié ou
+téléchargé et aucun serveur LM Studio n’est requis.
 
 MLX-LM récent demande Python 3.11+ et une version de Transformers différente du
 backend de référence. Utilisez donc un environnement séparé ; n’installez pas
@@ -312,18 +313,62 @@ MLX dans la `.venv` du moteur Python 3.9 :
 ```bash
 python3.12 -m venv /chemin/venv-mlx
 /chemin/venv-mlx/bin/python -m pip install 'mlx-lm>=0.31,<0.33'
-local-llm mlx-experiment /chemin/modele-mlx-local \
-  --python /chemin/venv-mlx/bin/python --output /tmp/mesures-mlx.json
+LOCAL_LLM_MLX_PYTHON=/chemin/venv-mlx/bin/python .venv/bin/python -m local_llm serve
 ```
 
-Le rapport précise les versions, l’empreinte des fichiers, la mémoire GPU
-observée et le périmètre. Il compare les réglages du **même modèle MLX** ; il ne
-prétend pas que MLX soit supérieur à llama.cpp et ne mélange pas des poids de
-quantifications différentes. L’intégration a été vérifiée sur un minuscule
-modèle synthétique local ; une conclusion sur un modèle réel demande encore un
-modèle MLX installé et une mesure appropriée. Voir les sources officielles :
-[MLX-LM](https://github.com/ml-explore/mlx-lm) et
-[spéculation llama.cpp](https://github.com/ggml-org/llama.cpp/blob/master/docs/speculative.md).
+Un environnement MTPLX déjà installé est détecté sans installation automatique.
+L’intégration Python a été préparée pour MTPLX 2.12.2, MLX 0.32.2 et MLX-LM
+0.31.3. Elle utilise explicitement le profil **Sustained**, sans changer les
+réglages de l’app MTPLX ou la ventilation. Elle ne représente pas le mode Turbo
+de MTPLX. **Powered by MTPLX** — [MTPLX, Youssof Altoukhi](https://github.com/youssofal/MTPLX).
+
+Dans **Performances → Le moteur de ce modèle**, Automatique utilise un profil
+vérifié pour ces poids, versions et matériel ; sinon il garde la référence
+MLX-LM, ou l’exécution MTPLX sans spéculation pour les formats propriétaires.
+Les poids restent chargés jusqu’au déchargement. Une interruption arrête le
+worker concerné ; il faut recharger le modèle avant la requête suivante.
+
+**Comparer les moteurs sur ce Mac** teste la préparation MLX à 2048 et 512
+tokens par étape et, quand les têtes compatibles existent, les profondeurs MTP
+1/2/3. Les candidats utilisent **exactement le même dossier de poids**, le même
+template, la même tokenisation et un sampling glouton avec raisonnement
+désactivé. Le cache de requête est désactivé pour tous les essais. Deux passages
+de sélection précèdent trois passages sur des prompts indépendants. Les tokens
+de sortie doivent être identiques ; un gain stable d’au moins 5 % doit passer
+les contrôles de durée, débit et délai du premier token. Sinon la référence est
+conservée et l’app affiche **Aucun gain validé**. Un gain de calibration décrit
+ces workloads ; il ne mesure pas un gain sur chaque réponse du chat.
+
+Le rapport exportable conserve les mesures brutes, empreintes, versions et
+décisions. Les profils sont revérifiés avant réutilisation. Une quantification
+GGUF différente n’est jamais comparée à ce dossier MLX pour annoncer un gain.
+Le contexte MLX est actuellement borné à 4096 tokens, ou à la capacité inférieure
+du modèle ; un dépassement est refusé sans supprimer des messages. Le cache de
+préfixe et le cache disque ne sont pas encore intégrés pour MLX/MTPLX.
+
+Avant chaque chargement, l’app vérifie un budget estimé et la pression mémoire.
+Elle arrête son worker dès que la pression devient élevée ou que le capteur
+devient indisponible. La limite configurée dans MLX reste une indication,
+**pas un plafond matériel garanti**. Le budget et les capteurs réduisent le
+risque de swap sans garantir son absence.
+
+La génération sur Metal, le contexte, l’interruption, la reprise et la
+calibration ont été vérifiés avec un checkpoint synthétique de moins de 1 Mio.
+Ce test ne démontre ni la qualité d’un modèle utile ni un gain face à MTPLX.
+L’inférence MTPLX sur un checkpoint réel reste à vérifier ; aucun résultat de
+performance MTPLX n’est publié pour cette intégration.
+
+Le parcours réel peut se vérifier sans ouvrir le serveur de l’app :
+
+```bash
+.venv/bin/python scripts/verify_mac_runtime.py /chemin/modele-mlx-local \
+  --engine mlx --calibrate --output /tmp/mesures-mac.json
+```
+
+L’ancienne commande `mlx-experiment` reste disponible pour la préparation seule
+(128/512/2048 tokens par étape). Sources : [MLX-LM](https://github.com/ml-explore/mlx-lm),
+[limite mémoire MLX](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_memory_limit.html)
+et [MTPLX](https://github.com/youssofal/MTPLX).
 
 ## Essai rapide avec un vrai modèle
 
@@ -731,11 +776,13 @@ pas vérifiés automatiquement. Aucun résultat de LM Studio n’est présenté 
 une accélération de ses propres kernels par local-llm.
 
 La prise en charge d’une bibliothèque n’ajoute pas celle de nouvelles
-architectures. Le moteur exécute actuellement Llama et Baguette non hybride,
+architectures. Le moteur CPU natif exécute actuellement Llama et Baguette non hybride,
 avec les formats du tableau de support. Les modèles Qwen, MoE, hybrides, les
 quantifications K/IQ et les modèles MLX peuvent être détectés sans pouvoir être
-exécutés par ce runtime. Les configurations avec RoPE scaling ou biais de
-projection non implémentés sont refusées.
+exécutés par ce runtime CPU. Les configurations avec RoPE scaling ou biais de
+projection non implémentés sont refusées. Les moteurs directs llama.cpp,
+MLX-LM et MTPLX ont leurs propres architectures prises en charge, confirmées
+au chargement.
 
 La référence PyTorch/Transformers optionnelle reste disponible via l’API avec
 `"backend": "reference"` après un lancement avec `--reference` et, si nécessaire,
