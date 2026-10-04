@@ -9,9 +9,18 @@ Les temps dépendent de la charge, de la température et des fréquences du CPU.
 
 L’intégration du chat MLX a été vérifiée sur Metal avec un checkpoint généré
 de moins de 1 Mio : sortie streamée, compte de tokens, contexte exact,
-interruption, rechargement, calibration et restauration d’un profil vérifié.
-Le modèle synthétique produit volontairement le même token ; il ne mesure pas
-la qualité ou le débit d’un modèle utile. Les tests d’API MTPLX utilisent des
+cache par conversation, interruption, rechargement, calibration et restauration
+d’un profil vérifié.
+Le modèle de transport produit volontairement le même token ; il ne mesure pas
+la qualité ou le débit d’un modèle utile. Deux autres checkpoints synthétiques,
+Llama et Qwen hybride, ont des poids aléatoires et des logits dépendants de
+l’entrée. Leurs tests contrôlent les mêmes tokens gloutons avec et sans cache,
+la reprise de deux conversations et la modification de l’historique. Les logits
+sont contrôlés aussi, en tenant compte de la variation numérique déjà présente
+entre le calcul d’un prompt entier et celui de son dernier token sur Metal.
+Ces tests prouvent la réutilisation de calculs sur les fixtures ; ils ne
+mesurent pas une accélération de décodage sur un modèle entraîné.
+Les tests d’API MTPLX utilisent des
 simulations ; aucun benchmark réel de cette intégration MTPLX n’est encore
 publié. L’essai sur Bonsai 27B a été reporté faute de RAM disponible dans le
 budget prudent au moment du contrôle. Aucun chiffre de gain n’en est déduit.

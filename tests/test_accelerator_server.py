@@ -113,10 +113,12 @@ class AcceleratorHTTPTests(unittest.TestCase):
             yield {'model': 'target', 'token_progress': True, 'choices': [{'delta': {'reasoning_content': 'Thinking'}}]}
             yield {'model': 'target', 'choices': [{'delta': {'content': 'Answer'}}]}
             yield {'model': 'target', 'usage': {'prompt_tokens': 10, 'completion_tokens': 5},
-                   'timings': {'cache_n': 0, 'prompt_ms': None, 'predicted_ms': None, 'predicted_per_second': None}}
+                   'timings': {'cache_n': 2, 'prompt_n': 8, 'kv_cache_bytes': 128,
+                               'prompt_ms': None, 'predicted_ms': None, 'predicted_per_second': None}}
         for engine in ('mlx', 'mtplx'):
             description = dict(self.runtime.describe(), engine=engine,
-                               scope='Sustained' if engine == 'mtplx' else 'standard', attribution='Actual engine')
+                               scope='Sustained' if engine == 'mtplx' else 'standard', attribution='Actual engine',
+                               cached_conversations=2, conversation_cache={'supported': True, 'entries': 2, 'bytes': 128})
             with self.subTest(engine=engine), patch.object(self.runtime, 'iter_chat', side_effect=chunks), patch.object(
                     self.runtime, 'describe', return_value=description):
                 with self.request('/v1/chat/completions', {'backend': 'llamacpp', 'model': 'target', 'stream': True,
@@ -125,7 +127,10 @@ class AcceleratorHTTPTests(unittest.TestCase):
                 stats = json.loads(frames[-2])['local_llm']
                 self.assertEqual(stats['engine'], engine)
                 self.assertEqual(stats['engine_attribution'], 'Actual engine')
-                self.assertEqual(stats['reused_prompt_tokens'], 0)
+                self.assertEqual(stats['reused_prompt_tokens'], 2)
+                self.assertEqual(stats['processed_prompt_tokens'], 8)
+                self.assertEqual(stats['kv_cache_bytes'], 128)
+                self.assertEqual(stats['cached_conversations'], 2)
                 self.assertIsNone(stats['prefill_seconds']); self.assertIsNone(stats['decode_seconds'])
                 self.assertIsNone(stats['decode_tokens_per_second']); self.assertIsNone(stats['calibration_gain_percent'])
                 self.assertFalse(stats['optimized'])

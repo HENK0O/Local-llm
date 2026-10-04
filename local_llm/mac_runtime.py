@@ -14,7 +14,7 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from pathlib import Path
 
 from .calibration import (TRAIN_PROMPTS, VALIDATION_PROMPTS, OUTPUT_LIMITS, CATEGORIES,
@@ -26,7 +26,7 @@ from .telemetry import macos_memory_pressure
 from .recommendations import detect_hardware
 
 
-MAC_PROTOCOL = 1
+MAC_PROTOCOL = 2
 
 
 def worker_environment():
@@ -71,6 +71,8 @@ def mac_memory_plan(root, available, total, context=4096):
     """Upper estimate for weights, attention KV and hybrid recurrent state."""
     config = json.loads((root / 'config.json').read_text())
     text = config.get('text_config') or config
+    if not isinstance(text, dict):
+        raise ValueError('Configuration de contexte MLX invalide.')
     def positive(name, default):
         value = text.get(name, default)
         return value if type(value) is int and value > 0 else default
@@ -92,9 +94,11 @@ def mac_memory_plan(root, available, total, context=4096):
     if estimated + reserve > total or estimated > available:
         raise ValueError('RAM disponible insuffisante pour cet essai MLX : %.1f Gio disponibles, %.1f Gio estimés. Déchargez les modèles ouverts dans un autre moteur.' %
                          (available / 1024 ** 3, estimated / 1024 ** 3))
-    return {'context': context, 'estimated_bytes': estimated, 'available_bytes': available,
+    cache_budget = min(256 * 1024 ** 2, max(0, min(available, total - reserve) - estimated) // 4)
+    return {'context': context, 'estimated_bytes': estimated + cache_budget, 'available_bytes': available,
             'weight_bytes': weights, 'context_bytes': kv, 'recurrent_budget_bytes': recurrent,
             'compute_budget_bytes': compute, 'reserve_bytes': reserve,
+            'conversation_cache_budget_bytes': cache_budget,
             'memory_limit_bytes': min(total - reserve, available), 'kind': 'estimate'}
 
 
@@ -133,6 +137,8 @@ class MacRuntime:
         self._memory_abort = None
         self.last_profile_switch_seconds = None
         self.runtime_memory = None
+        self.cache_state = {'supported': False, 'entries': 0, 'bytes': 0}
+        self.last_request_context = None
         self.closed = False
         self.slots = type('NoSlots', (), {'entries': {}})()
 
@@ -156,11 +162,14 @@ class MacRuntime:
         return dict(self.capability)
 
     def describe(self):
-        return {**self.available(), 'engine': self.config.engine, 'loaded': self.process is not None and self.process.poll() is None,
+        loaded = self.process is not None and self.process.poll() is None
+        cache = self.cache_state if loaded else {'supported': False, 'entries': 0, 'bytes': 0}
+        return {**self.available(), 'engine': self.config.engine, 'loaded': loaded,
                 'model_id': self.model_id, 'model_name': self.model_name, 'config': asdict(self.config),
                 'context_length': self.config.context, 'profile': self.profile, 'usage_profile': self.usage_profile,
                 'profile_switch_seconds': self.last_profile_switch_seconds, 'memory_plan': self.memory,
-                'cached_conversations': 0, 'job': dict(self.job) if self.job else None,
+                'cached_conversations': cache['entries'], 'conversation_cache': dict(cache),
+                'job': dict(self.job) if self.job else None,
                 'runtime_memory': self.runtime_memory, 'persistent_cache': {'supported': False},
                 'attribution': 'Powered by MTPLX · Youssof Altoukhi' if self.config.engine == 'mtplx' else 'MLX-LM · Apple',
                 'scope': 'MTPLX Python · Sustained' if self.config.engine == 'mtplx' else 'MLX-LM · génération standard'}
@@ -168,6 +177,8 @@ class MacRuntime:
     def _stop(self):
         self._pressure_stop.set()
         process, self.process = self.process, None
+        self.cache_state = {'supported': False, 'entries': 0, 'bytes': 0}
+        self.last_request_context = None
         if process is not None:
             if process.poll() is None:
                 process.terminate()
@@ -220,7 +231,8 @@ class MacRuntime:
         self.events = queue.Queue()
         self.log = tempfile.TemporaryFile(mode='w+b')
         self.process = subprocess.Popen([self.available()['interpreter'], '-m', 'local_llm.mac_worker', str(self.path),
-            config.engine, str(config.context), str(self.memory['memory_limit_bytes'])],
+            config.engine, str(config.context), str(self.memory['memory_limit_bytes']),
+            str(self.memory.get('conversation_cache_budget_bytes', 0) if config.engine == 'mlx' else 0)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, env=worker_environment())
         process, events = self.process, self.events
         def read():
@@ -267,17 +279,20 @@ class MacRuntime:
                 continue
             if event.get('event') == 'error':
                 raise ValueError(event.get('error', 'Erreur du worker Mac'))
+            if event.get('conversation_cache'):
+                self.cache_state = dict(event['conversation_cache'])
             return event
         self._stop()
         raise ValueError('Le worker Mac n’a pas répondu dans le délai prévu.')
 
     def _request(self, body):
         if self.process is None or self.process.poll() is not None:
+            self._stop()
             raise ValueError('Le moteur Mac n’est plus chargé. Rechargez le modèle sélectionné.')
-        self.process.stdin.write(json.dumps(body).encode() + b'\n')
-        self.process.stdin.flush()
         completed = False
         try:
+            self.process.stdin.write(json.dumps(body).encode() + b'\n')
+            self.process.stdin.flush()
             while True:
                 event = self._next()
                 completed = event['event'] == 'done'
@@ -314,9 +329,9 @@ class MacRuntime:
         finally:
             self.lock.release()
 
-    def context(self, messages):
+    def context(self, messages, thinking=None):
         with self.lock:
-            frames = self._request({'op': 'context', 'messages': messages})
+            frames = self._request({'op': 'context', 'messages': messages, 'enable_thinking': thinking})
             try:
                 result = next(frames)['context']
                 # Consume completion before closing, so a completed request is
@@ -332,7 +347,12 @@ class MacRuntime:
         with self.lock:
             if payload.get('model') != self.model_id:
                 raise ValueError('Le modèle a changé ; renvoyez la requête.')
-            upstream = self._request(dict(payload, op='generate', prefill_step_size=self.config.prefill_step_size, depth=self.config.depth))
+            if self.config.engine == 'mlx':
+                preview = self.context(payload['messages'], payload.get('enable_thinking'))
+                self._ensure_capacity(preview['prompt_tokens'] + payload['max_tokens'])
+                self.last_request_context = dict(preview, context_length=self.config.context)
+            upstream = self._request(dict(payload, op='generate', conversation=conversation,
+                prefill_step_size=self.config.prefill_step_size, depth=self.config.depth))
             try:
                 for chunk in upstream:
                     chunk = dict(chunk)
@@ -341,6 +361,31 @@ class MacRuntime:
                     yield dict(chunk, model=self.model_id)
             finally:
                 upstream.close()
+
+    def _ensure_capacity(self, required):
+        """Grow MLX context in place; never reload weights or shorten messages."""
+        if required <= self.config.context:
+            return
+        if required > 8192:
+            raise ValueError('Le contexte et la réponse demandent %d tokens ; la capacité MLX actuelle est limitée à 8192. Réduisez la longueur de réponse ou ouvrez une nouvelle conversation.' % required)
+        if self.memory_probe is None or macos_memory_pressure() != 'normal':
+            raise ValueError('Une mesure de RAM disponible et une pression mémoire normale sont requises pour agrandir le contexte MLX.')
+        capacity = min(8192, 1 << (required - 1).bit_length())
+        plan = mac_memory_plan(self.path, self.memory_probe(), detect_hardware().get('memory_bytes'), capacity)
+        if plan['context'] < required:
+            raise ValueError('La capacité du modèle est de %d tokens ; %d sont requis. Aucun message n’a été supprimé.' % (plan['context'], required))
+        budget = min(self.memory.get('conversation_cache_budget_bytes', 0), plan['conversation_cache_budget_bytes'])
+        plan['conversation_cache_budget_bytes'] = budget
+        frames = self._request({'op': 'configure', 'context': plan['context'],
+                                'memory_limit': plan['memory_limit_bytes'], 'cache_budget': budget})
+        try:
+            for frame in frames:
+                if frame['event'] != 'done':
+                    raise ValueError('Modification du contexte non confirmée.')
+        finally:
+            frames.close()
+        self.config = replace(self.config, context=plan['context'])
+        self.memory, self.profile, self.usage_profile = plan, None, 'balanced'
 
     def _rss(self):
         if self.process:

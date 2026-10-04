@@ -1498,7 +1498,7 @@
         </header>
         <div id="serverUpdate" class="server-update hidden" role="status">
           Le serveur utilise une ancienne version. Relancez-le pour activer les
-          nouvelles fonctionnalités et la vérification des modèles LM Studio.
+          dernières améliorations du moteur.
         </div>
         <div
           id="storageNotice"
@@ -2511,7 +2511,8 @@
               data.features?.includes("system_telemetry") &&
               data.features?.includes("lmstudio_instances") &&
               data.features?.includes("gpu_runtime") &&
-              data.features?.includes("validated_calibration"),
+              data.features?.includes("validated_calibration") &&
+              data.features?.includes("mlx_conversation_cache"),
           ),
         );
         $("composerInfo").textContent = data.loaded
@@ -3575,10 +3576,26 @@
             "p",
             "hint",
             gpuInfo.config.context.toLocaleString("fr") +
-              " tokens de contexte · cache des requêtes désactivé · calculs " +
+              " tokens de contexte · calculs " +
               engineLabel(gpuInfo.engine),
           ),
         );
+        const cache = gpuInfo.conversation_cache;
+        if (cache?.supported) {
+          output.append(
+            node(
+              "p",
+              "hint",
+              "Contexte réutilisé dans les conversations · " +
+                cache.entries +
+                " en mémoire · " +
+                bytes(cache.bytes) +
+                " / " +
+                bytes(cache.budget_bytes) +
+                ". Aucun contexte enregistré sur disque. Le cache est désactivé pendant la calibration.",
+            ),
+          );
+        }
         if (gpuInfo.memory_plan)
           output.append(
             node(
@@ -3592,7 +3609,7 @@
         if (!report) return;
         if (
           report.scope !== "same_mlx_artifact_sustained_cold_greedy" ||
-          report.protocol !== 1 ||
+          report.protocol !== 2 ||
           !report.profiles?.[usage]
         ) {
           output.append(

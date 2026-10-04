@@ -14,7 +14,7 @@ from local_llm.calibration import TRAIN_PASSES, VALIDATION_PASSES, CATEGORIES, O
 from local_llm.discovery import inspect_model
 from local_llm.engines import EngineManager
 from local_llm.mac_runtime import MacConfig, MacRuntime, mac_memory_plan, model_engines, worker_environment
-from local_llm.mac_worker import ReasoningSplit, Worker
+from local_llm.mac_worker import ReasoningSplit, StreamBuffer, Worker
 from local_llm.mlx_experiment import validate_model
 
 
@@ -95,6 +95,38 @@ class MacRuntimeTests(unittest.TestCase):
                     runtime._start(MacConfig())
                 popen.assert_not_called()
 
+    def test_context_grows_in_place_without_reloading_weights_or_discarding_messages(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runtime = MacRuntime(folder); runtime.path = fixture(Path(folder))
+            runtime.config = MacConfig(context=2048); runtime.memory = {'conversation_cache_budget_bytes': 64 << 20}
+            runtime.profile = {'verified': True}; runtime.memory_probe = lambda: 10 << 30
+            process = runtime.process = Mock(); process.poll.return_value = None
+            def requests(body):
+                yield {'event': 'done'}
+            with patch('local_llm.mac_runtime.macos_memory_pressure', return_value='normal'), patch(
+                    'local_llm.mac_runtime.detect_hardware', return_value={'memory_bytes': 24 << 30}), patch.object(
+                    runtime, '_request', side_effect=requests) as request, patch.object(runtime, '_stop') as stop:
+                runtime._ensure_capacity(3000)
+                self.assertEqual(runtime.config.context, 4096)
+                self.assertIsNone(runtime.profile); self.assertIs(runtime.process, process)
+                self.assertEqual(request.call_args.args[0]['op'], 'configure')
+                self.assertEqual(request.call_args.args[0]['cache_budget'], 64 << 20)
+                stop.assert_not_called()
+
+    def test_context_growth_refusal_keeps_current_worker_and_config(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runtime = MacRuntime(folder); runtime.path = fixture(Path(folder))
+            runtime.config = MacConfig(context=2048); runtime.memory = {'conversation_cache_budget_bytes': 64 << 20}
+            process = runtime.process = Mock(); runtime.memory_probe = lambda: 128 << 20
+            with patch('local_llm.mac_runtime.macos_memory_pressure', return_value='normal'), patch(
+                    'local_llm.mac_runtime.detect_hardware', return_value={'memory_bytes': 24 << 30}), patch.object(runtime, '_request') as request:
+                with self.assertRaisesRegex(ValueError, 'RAM disponible insuffisante'):
+                    runtime._ensure_capacity(3000)
+                with self.assertRaisesRegex(ValueError, '8192'):
+                    runtime._ensure_capacity(9000)
+                self.assertEqual(runtime.config.context, 2048)
+                self.assertIs(runtime.process, process); request.assert_not_called()
+
     def test_child_environment_is_offline_and_does_not_inherit_runtime_overrides_or_lm_credentials(self):
         with patch.dict('os.environ', {'LM_STUDIO_API_TOKEN': 'secret', 'MTPLX_USE_UNVERIFIED': '1', 'HF_TOKEN': 'secret', 'MLX_OPT': 'x'}):
             env = worker_environment()
@@ -139,13 +171,28 @@ class MacRuntimeTests(unittest.TestCase):
     def test_normalized_stream_frames_do_not_corrupt_the_ipc_completion_marker(self):
         runtime = MacRuntime('/tmp/unused'); runtime.model_id = 'selected'
         runtime.process = Mock(); runtime.process.poll.return_value = None
+        runtime.events.put({'event': 'done', 'context': {'prompt': 'exact', 'prompt_tokens': 2}})
         runtime.events.put({'event': 'chunk', 'choices': [{'delta': {'content': 'Bonjour'}}]})
         runtime.events.put({'event': 'done', 'usage': {'completion_tokens': 1}, 'sample': {'seconds': 1}})
         with patch.object(runtime, '_stop') as stop:
-            frames = list(runtime.iter_chat({'model': 'selected', 'messages': []}, 'chat'))
+            frames = list(runtime.iter_chat({'model': 'selected', 'messages': [], 'max_tokens': 8}, 'chat'))
             self.assertEqual(frames[-1]['usage']['completion_tokens'], 1)
             self.assertNotIn('event', frames[-1]); self.assertNotIn('sample', frames[-1])
             stop.assert_not_called()
+
+    def test_broken_transport_discards_cache_metadata_and_never_reports_a_dead_worker_as_cached(self):
+        runtime = MacRuntime('/tmp/unused')
+        runtime.process = Mock(); runtime.process.poll.return_value = None
+        runtime.cache_state = {'supported': True, 'entries': 2, 'bytes': 128}
+        runtime.process.stdin.flush.side_effect = BrokenPipeError('closed')
+        with patch.object(runtime, '_stop') as stop:
+            with self.assertRaises(BrokenPipeError):
+                list(runtime._request({'op': 'generate'}))
+            stop.assert_called_once()
+        runtime.process.poll.return_value = 1
+        with patch.object(runtime, 'available', return_value={'available': True}):
+            self.assertEqual(runtime.describe()['cached_conversations'], 0)
+            self.assertEqual(runtime.describe()['conversation_cache']['bytes'], 0)
 
     def test_pressure_abort_timeout_and_pending_comparison_block_new_requests(self):
         runtime = MacRuntime('/tmp/unused')
@@ -217,6 +264,48 @@ class MacRuntimeTests(unittest.TestCase):
 
 
 class WorkerTests(unittest.TestCase):
+    def test_context_preparation_is_reused_only_for_the_same_messages_and_thinking_option(self):
+        worker = Worker.__new__(Worker); worker.context_length = 4096
+        worker.tokenizer = Mock(); worker.tokenizer.apply_chat_template.return_value = 'exact'
+        worker.tokenizer.encode.return_value = [1, 2]
+        messages = [{'role': 'user', 'content': 'Bonjour'}]
+        worker.context(messages)
+        worker.context_length = 8192
+        self.assertEqual(worker.context(messages)[0]['context_length'], 8192)
+        worker.tokenizer.encode.assert_called_once()
+        messages[0]['content'] = 'Changed'
+        worker.context(messages)
+        self.assertEqual(worker.tokenizer.encode.call_count, 2)
+        worker.context(messages, False)
+        self.assertEqual(worker.tokenizer.apply_chat_template.call_args.kwargs['enable_thinking'], False)
+
+    def test_stream_coalesces_fast_tokens_but_sends_first_token_and_visible_text_immediately(self):
+        frames = []; now = [0.0]
+        buffer = StreamBuffer(frames.append, lambda: now[0])
+        buffer.push({})
+        self.assertEqual(len(frames), 1); self.assertTrue(frames[0]['token_progress'])
+        buffer.push({'reasoning_content': 'R'})
+        self.assertEqual(len(frames), 1)
+        buffer.push({'content': 'Bonjour'})
+        self.assertEqual(len(frames), 2)
+        for _ in range(8):
+            buffer.push({'content': '.'})
+        self.assertEqual(len(frames), 3)
+        buffer.push({'content': '!'}); buffer.flush()
+        self.assertEqual(''.join(f['choices'][0]['delta'].get('content', '') for f in frames), 'Bonjour........!')
+        self.assertEqual(''.join(f['choices'][0]['delta'].get('reasoning_content', '') for f in frames), 'R')
+
+    def test_slow_tokens_flush_without_waiting_for_a_batch_and_final_tail_is_preserved(self):
+        frames = []; now = [0.0]
+        buffer = StreamBuffer(frames.append, lambda: now[0])
+        buffer.push({'content': 'a'})
+        now[0] = .1; buffer.push({'content': 'b'})
+        self.assertEqual(len(frames), 2)
+        buffer.push({'content': 'tail'}, token_progress=False); buffer.flush(); buffer.flush()
+        self.assertEqual(len(frames), 3)
+        self.assertFalse(frames[-1]['token_progress'])
+        self.assertEqual(frames[-1]['choices'][0]['delta']['content'], 'tail')
+
     def test_reasoning_markers_across_chunks_and_initial_thinking_are_not_shown_as_answer(self):
         split = ReasoningSplit()
         frames = [split.feed(t) for t in ('<thi', 'nk>private', '</th', 'ink>Bonjour')]

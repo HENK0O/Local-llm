@@ -364,7 +364,7 @@ class ChatService:
                 "max_lmstudio_tokens": self.max_lmstudio_tokens,
                 "max_accelerator_tokens": MAX_ACCELERATOR_TOKENS,
                 "accelerator": self.accelerator.describe(),
-                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory", "usage_profiles", "direct_library", "model_advice", "embedded_mtp", "persistent_kv_cache", "workload_benchmark", "mac_engines"],
+                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory", "usage_profiles", "direct_library", "model_advice", "embedded_mtp", "persistent_kv_cache", "workload_benchmark", "mac_engines", "mlx_conversation_cache"],
                 "retained_cache_bytes": self.prefix_cache.nbytes,
                 "retained_cache_limit_bytes": self.prefix_cache.max_bytes}
 
@@ -1073,7 +1073,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                     finish = choices[0]["finish_reason"]
                 chunk.update(id=response_id, backend="llamacpp")
                 self._write_event(chunk)
-            preview = runtime.context(payload["messages"])
+            preview = getattr(runtime, 'last_request_context', None) or runtime.context(payload["messages"])
             self.server.service._accelerator_records[response_id] = {**preview, "created": time.monotonic()}
             while len(self.server.service._accelerator_records) > 8:
                 self.server.service._accelerator_records.popitem(last=False)
@@ -1089,12 +1089,15 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                     "first_token_seconds": first, "first_text_seconds": first_text,
                     "request_seconds": time.perf_counter() - started,
                     "decode_seconds": timings["predicted_ms"] / 1000 if timings.get('predicted_ms') is not None else None,
-                    "kv_cache_bytes": None, "reused_prompt_tokens": timings.get("cache_n"),
+                    "kv_cache_bytes": timings.get('kv_cache_bytes'), "reused_prompt_tokens": timings.get("cache_n"),
+                    "processed_prompt_tokens": timings.get('prompt_n'),
                     "optimized": bool(profile and profile["winner"] != "standard"), "timing_kind": "engine",
                     "calibration_gain_percent": profile["gain_percent"] if profile else None,
                     "optimization_profile": runtime.usage_profile,
                     "draft_proposed_tokens": timings.get("draft_n"), "draft_accepted_tokens": timings.get("draft_n_accepted"),
-                    "speculative": runtime.config.speculative, "persistent_cache": runtime.describe().get("persistent_cache"), "cached_conversations": len(runtime.slots.entries)}})
+                    "speculative": runtime.config.speculative, "persistent_cache": runtime.describe().get("persistent_cache"),
+                    "cached_conversations": runtime.describe().get('cached_conversations', len(runtime.slots.entries)),
+                    "conversation_cache": runtime.describe().get('conversation_cache')}})
             self._write_event("[DONE]")
         except (BrokenPipeError, ConnectionResetError):
             pass

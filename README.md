@@ -342,9 +342,31 @@ ces workloads ; il ne mesure pas un gain sur chaque réponse du chat.
 Le rapport exportable conserve les mesures brutes, empreintes, versions et
 décisions. Les profils sont revérifiés avant réutilisation. Une quantification
 GGUF différente n’est jamais comparée à ce dossier MLX pour annoncer un gain.
-Le contexte MLX est actuellement borné à 4096 tokens, ou à la capacité inférieure
-du modèle ; un dépassement est refusé sans supprimer des messages. Le cache de
-préfixe et le cache disque ne sont pas encore intégrés pour MLX/MTPLX.
+Le contexte MLX commence à 4096 tokens, ou à la capacité inférieure du modèle.
+Il peut s’agrandir automatiquement jusqu’à 8192 tokens après vérification de
+la RAM disponible, sans recharger les poids. Un profil de calibration lié à
+l’ancienne capacité est invalidé. Si la mémoire ou la capacité du modèle ne
+suffit pas, la requête est refusée sans supprimer des messages. Le cache de
+préfixe MLX est désormais conservé **en RAM, par conversation**. L’app compare
+les IDs des tokens et ne réutilise que leur préfixe exact. Les modèles
+d’attention peuvent revenir à ce préfixe ; pour les modèles hybrides, un état
+de préparation détaché est conservé avant la génération, et n’est repris que
+s’il correspond entièrement au nouveau prompt. Un historique modifié provoque
+un recalcul quand cet état ne peut pas être ramené au bon préfixe.
+
+Le cache garde au maximum quatre conversations, dans un budget calculé à partir
+de la marge mémoire disponible, plafonné à 256 Mio. Les entrées les plus anciennes
+sont évincées ; un état trop grand n’est pas conservé. Un changement de modèle,
+de moteur ou un arrêt du worker efface ses caches. La calibration reste sans
+réutilisation de contexte. MTPLX et le cache disque MLX restent sans cache de
+conversation dans cette intégration.
+
+Les réponses indiquent les **tokens d’entrée réellement réutilisés**, séparés
+des tokens nouvellement traités. Cela évite des calculs de préparation ; ce
+n’est pas une accélération annoncée du décodage. Le streaming envoie le premier
+token et le premier texte immédiatement, puis regroupe les segments rapides
+pour réduire les échanges entre processus. Les segments de réflexion et de
+réponse restent séparés ; aucun token n’est supprimé.
 
 Avant chaque chargement, l’app vérifie un budget estimé et la pression mémoire.
 Elle arrête son worker dès que la pression devient élevée ou que le capteur
@@ -352,8 +374,8 @@ devient indisponible. La limite configurée dans MLX reste une indication,
 **pas un plafond matériel garanti**. Le budget et les capteurs réduisent le
 risque de swap sans garantir son absence.
 
-La génération sur Metal, le contexte, l’interruption, la reprise et la
-calibration ont été vérifiés avec un checkpoint synthétique de moins de 1 Mio.
+La génération sur Metal, le contexte, le cache, l’interruption, la reprise et la
+calibration ont été vérifiés avec des checkpoints synthétiques de moins de 1 Mio.
 Ce test ne démontre ni la qualité d’un modèle utile ni un gain face à MTPLX.
 L’inférence MTPLX sur un checkpoint réel reste à vérifier ; aucun résultat de
 performance MTPLX n’est publié pour cette intégration.

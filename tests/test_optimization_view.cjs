@@ -100,7 +100,7 @@ test("Mac comparison attributes MTPLX and scopes the verified gain to its actual
   const retained = { decode_tps: 30, seconds: 7 };
   const config = { engine: "mtplx", context: 4096, depth: 2 };
   const report = {
-    protocol: 1,
+    protocol: 2,
     scope: "same_mlx_artifact_sustained_cold_greedy",
     profiles: {
       balanced: {
