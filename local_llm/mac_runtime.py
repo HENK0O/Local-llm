@@ -24,9 +24,10 @@ from .loading import model_fingerprint
 from .mlx_experiment import validate_model
 from .telemetry import macos_memory_pressure
 from .recommendations import detect_hardware
+from .dflash import draft_contract
 
 
-MAC_PROTOCOL = 2
+MAC_PROTOCOL = 3
 
 
 def worker_environment():
@@ -43,6 +44,7 @@ def interpreter_candidates():
     if explicit:
         return [Path(explicit).expanduser()]
     return list(dict.fromkeys([Path(sys.executable),
+        Path(__file__).resolve().parent.parent / '.venv-mlx/bin/python',
         Path.home() / 'Library/Application Support/MTPLX/runtime-venv/bin/python',
         Path.home() / '.mtplx/venv/bin/python',
         Path.home() / '.local/share/uv/tools/mtplx/bin/python']))
@@ -61,13 +63,13 @@ def model_engines(path, capability):
     engines = []
     if config.get('model_type') != 'prism_hadamard_qwen35':
         engines.append('mlx')
-    if 'mtplx' in capability.get('packages', {}) and (
+    if ('mtplx' in capability.get('packages', {}) or capability.get('mtplx_runtime')) and (
             (root / 'mtp.safetensors').is_file() or config.get('mtplx_mtp_contract')):
         engines.append('mtplx')
     return engines
 
 
-def mac_memory_plan(root, available, total, context=4096):
+def mac_memory_plan(root, available, total, context=4096, draft=None):
     """Upper estimate for weights, attention KV and hybrid recurrent state."""
     config = json.loads((root / 'config.json').read_text())
     text = config.get('text_config') or config
@@ -88,6 +90,18 @@ def mac_memory_plan(root, available, total, context=4096):
     recurrent = recurrent_layers * positive('linear_num_value_heads', 32) * positive('linear_key_head_dim', 128) * positive('linear_value_head_dim', 128) * 4 * 4
     compute = max(512 * 1024 ** 2, int(weights * .15))
     estimated = weights + kv + recurrent + compute
+    draft_bytes = 0
+    if draft:
+        contract = draft_contract(root, draft)
+        if context > contract['max_context']:
+            raise ValueError('Capacité de contexte de l’auxiliaire DFlash dépassée.')
+        aux = json.loads((Path(draft) / 'config.json').read_text())
+        # Include full-precision load/quantization peak, draft KV and captured
+        # target activations. This is deliberately not just the final int4 size.
+        draft_bytes = (3 * contract['size_bytes'] + context * aux['num_hidden_layers'] *
+                       aux['num_key_value_heads'] * aux['head_dim'] * 4 +
+                       context * aux['hidden_size'] * len(aux['dflash_config']['target_layer_ids']) * 4)
+        estimated += draft_bytes
     reserve = 2 * 1024 ** 3
     if available is None or total is None:
         raise ValueError('RAM disponible inconnue : le chargement MLX attend une mesure système fiable.')
@@ -98,6 +112,7 @@ def mac_memory_plan(root, available, total, context=4096):
     return {'context': context, 'estimated_bytes': estimated + cache_budget, 'available_bytes': available,
             'weight_bytes': weights, 'context_bytes': kv, 'recurrent_budget_bytes': recurrent,
             'compute_budget_bytes': compute, 'reserve_bytes': reserve,
+            'draft_budget_bytes': draft_bytes,
             'conversation_cache_budget_bytes': cache_budget,
             'memory_limit_bytes': min(total - reserve, available), 'kind': 'estimate'}
 
@@ -109,13 +124,18 @@ class MacConfig:
     prefill_step_size: int = 2048
     depth: int = 0
     speculative: str = 'none'
+    draft_path: str = ''
+    block_size: int = 3
 
     def __post_init__(self):
         if (self.engine not in {'mlx', 'mtplx'} or type(self.context) is not int or not 512 <= self.context <= 8192
                 or self.prefill_step_size not in {128, 512, 2048} or type(self.prefill_step_size) is not int
                 or type(self.depth) is not int or not 0 <= self.depth <= 3
                 or self.engine == 'mlx' and self.depth != 0
-                or self.speculative != ('draft-mtp' if self.depth else 'none')):
+                or not isinstance(self.draft_path, str)
+                or self.draft_path and (self.engine != 'mlx' or not Path(self.draft_path).is_absolute())
+                or type(self.block_size) is not int or self.block_size not in (2, 3, 5)
+                or self.speculative != ('dflash' if self.draft_path else 'draft-mtp' if self.depth else 'none')):
             raise ValueError('Configuration du moteur Mac invalide.')
 
 
@@ -139,6 +159,9 @@ class MacRuntime:
         self.runtime_memory = None
         self.cache_state = {'supported': False, 'entries': 0, 'bytes': 0}
         self.last_request_context = None
+        self.library_paths = []
+        self.draft_paths = []
+        self.speculation_state = {'enabled': False}
         self.closed = False
         self.slots = type('NoSlots', (), {'entries': {}})()
 
@@ -147,6 +170,7 @@ class MacRuntime:
             self.capability = {'available': False, 'error': 'Un environnement Python 3.11+ avec mlx-lm est requis. Configurez LOCAL_LLM_MLX_PYTHON, ou installez MTPLX séparément.'}
             if platform.system() != 'Darwin' or platform.machine() != 'arm64':
                 return dict(self.capability)
+            runtimes = []
             for python in interpreter_candidates():
                 if not python.is_file():
                     continue
@@ -155,10 +179,15 @@ class MacRuntime:
                                             capture_output=True, text=True, timeout=10, env=worker_environment())
                     value = json.loads(result.stdout) if result.returncode == 0 else {}
                     if value.get('available'):
-                        self.capability = dict(value, interpreter=str(python), gpu=True)
-                        break
+                        runtimes.append(dict(value, interpreter=str(python), gpu=True))
                 except (OSError, ValueError, subprocess.SubprocessError):
                     continue
+            if runtimes:
+                preferred = next((r for r in runtimes if r.get('dflash', {}).get('available')), runtimes[0])
+                self.capability = dict(preferred)
+                # Keep optional MTPLX in its own installed environment. Choosing
+                # the isolated DFlash venv must not hide another working engine.
+                self.capability['mtplx_runtime'] = next((dict(r) for r in runtimes if 'mtplx' in r.get('packages', {})), None)
         return dict(self.capability)
 
     def describe(self):
@@ -169,15 +198,22 @@ class MacRuntime:
                 'context_length': self.config.context, 'profile': self.profile, 'usage_profile': self.usage_profile,
                 'profile_switch_seconds': self.last_profile_switch_seconds, 'memory_plan': self.memory,
                 'cached_conversations': cache['entries'], 'conversation_cache': dict(cache),
+                'speculation': self.speculation_state if loaded else {'enabled': False},
+                'dflash_capability': self.available().get('dflash', {'available': False}),
+                'runtime_packages': (self.available().get('mtplx_runtime') or self.available()).get('packages')
+                                    if self.config.engine == 'mtplx' else self.available().get('packages'),
                 'job': dict(self.job) if self.job else None,
                 'runtime_memory': self.runtime_memory, 'persistent_cache': {'supported': False},
-                'attribution': 'Powered by MTPLX · Youssof Altoukhi' if self.config.engine == 'mtplx' else 'MLX-LM · Apple',
-                'scope': 'MTPLX Python · Sustained' if self.config.engine == 'mtplx' else 'MLX-LM · génération standard'}
+                'attribution': 'Powered by MTPLX · Youssof Altoukhi' if self.config.engine == 'mtplx' else
+                               'MLX-LM · Apple / DFlash · Z Lab' if self.config.draft_path else 'MLX-LM · Apple',
+                'scope': 'MTPLX Python · Sustained' if self.config.engine == 'mtplx' else
+                         'MLX-LM · DFlash adaptatif expérimental' if self.config.draft_path else 'MLX-LM · génération standard'}
 
     def _stop(self):
         self._pressure_stop.set()
         process, self.process = self.process, None
         self.cache_state = {'supported': False, 'entries': 0, 'bytes': 0}
+        self.speculation_state = {'enabled': False}
         self.last_request_context = None
         if process is not None:
             if process.poll() is None:
@@ -217,22 +253,34 @@ class MacRuntime:
             self.lock.release()
 
     def _start(self, config):
-        self._stop()
         if self.closed:
             raise ValueError('Le moteur Mac est fermé.')
         if macos_memory_pressure() != 'normal':
             raise ValueError('La pression mémoire du Mac est élevée ou inconnue. Libérez de la RAM avant cet essai.')
+        plan = self.memory
         if self.memory_probe is not None:
-            self.memory = mac_memory_plan(self.path, self.memory_probe(),
-                                          detect_hardware().get('memory_bytes'), config.context)
+            plan = mac_memory_plan(self.path, self.memory_probe(),
+                                   detect_hardware().get('memory_bytes'), config.context, config.draft_path or None)
+        elif config.draft_path:
+            raise ValueError('Une mesure de RAM est requise avant de charger un auxiliaire DFlash.')
+        if config.draft_path:
+            if not self.available().get('dflash', {}).get('available'):
+                raise ValueError('DFlash est absent ou sa révision n’est pas prise en charge. Consultez la documentation.')
+            draft_contract(self.path, config.draft_path)
+        # Refuse a bad draft/memory plan before dropping a working AR model.
+        self._stop()
+        self.memory = plan
         self._memory_abort = None
         self._pressure_stop = threading.Event()
         self.config = config
         self.events = queue.Queue()
         self.log = tempfile.TemporaryFile(mode='w+b')
-        self.process = subprocess.Popen([self.available()['interpreter'], '-m', 'local_llm.mac_worker', str(self.path),
+        info = self.available()
+        backend = (info.get('mtplx_runtime') or info) if config.engine == 'mtplx' else info
+        self.process = subprocess.Popen([backend['interpreter'], '-m', 'local_llm.mac_worker', str(self.path),
             config.engine, str(config.context), str(self.memory['memory_limit_bytes']),
-            str(self.memory.get('conversation_cache_budget_bytes', 0) if config.engine == 'mlx' else 0)],
+            str(self.memory.get('conversation_cache_budget_bytes', 0) if config.engine == 'mlx' else 0),
+            config.draft_path, str(config.block_size)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, env=worker_environment())
         process, events = self.process, self.events
         def read():
@@ -281,6 +329,8 @@ class MacRuntime:
                 raise ValueError(event.get('error', 'Erreur du worker Mac'))
             if event.get('conversation_cache'):
                 self.cache_state = dict(event['conversation_cache'])
+            if event.get('speculation'):
+                self.speculation_state = dict(event['speculation'])
             return event
         self._stop()
         raise ValueError('Le worker Mac n’a pas répondu dans le délai prévu.')
@@ -320,6 +370,7 @@ class MacRuntime:
             chosen = candidates[0] if engine == 'auto' else engine
             self._stop()
             self.path, self.model_id, self.model_name = root, item.id, item.name
+            self.draft_paths = self.compatible_drafts(self.library_paths)
             self.memory, self.profile, self.job, self.usage_profile = plan, None, None, 'balanced'
             self.cancelled.clear()
             self._start(MacConfig(engine=chosen, context=plan['context']))
@@ -371,7 +422,7 @@ class MacRuntime:
         if self.memory_probe is None or macos_memory_pressure() != 'normal':
             raise ValueError('Une mesure de RAM disponible et une pression mémoire normale sont requises pour agrandir le contexte MLX.')
         capacity = min(8192, 1 << (required - 1).bit_length())
-        plan = mac_memory_plan(self.path, self.memory_probe(), detect_hardware().get('memory_bytes'), capacity)
+        plan = mac_memory_plan(self.path, self.memory_probe(), detect_hardware().get('memory_bytes'), capacity, self.config.draft_path or None)
         if plan['context'] < required:
             raise ValueError('La capacité du modèle est de %d tokens ; %d sont requis. Aucun message n’a été supprimé.' % (plan['context'], required))
         budget = min(self.memory.get('conversation_cache_budget_bytes', 0), plan['conversation_cache_budget_bytes'])
@@ -396,10 +447,52 @@ class MacRuntime:
         return None
 
     def active_measurement(self):
+        if self.config.draft_path:
+            last = self.speculation_state.get('last_request') or {}
+            # Online adaptation may differ from the fixed block validated by
+            # calibration. Never attach that profile's gain to another path.
+            if last.get('method') == 'autoregressive' or last.get('block_size') != self.config.block_size:
+                return None
         return self.profile['profiles'][self.usage_profile] if self.profile else None
 
     def configure_cache(self, enabled=None, clear=False):
         raise ValueError('Le cache disque n’est pas encore pris en charge par ce moteur Mac.')
+
+    def compatible_drafts(self, paths):
+        found = []
+        if self.path is not None:
+            for path in dict.fromkeys(map(str, paths)):
+                try:
+                    contract = draft_contract(self.path, path)
+                    found.append((contract['size_bytes'], str(Path(path).resolve())))
+                except (OSError, ValueError, TypeError, KeyError):
+                    continue
+        return [path for _, path in sorted(found)[:2]]
+
+    def configure_speculation(self, draft=None):
+        """Explicit experimental activation; never a validated speedup claim."""
+        if not self.lock.acquire(blocking=False):
+            raise ValueError('Le moteur Mac est occupé.')
+        try:
+            if self.config.engine != 'mlx' or self.process is None or self.process.poll() is not None:
+                raise ValueError('Chargez un modèle dans MLX avant d’activer DFlash.')
+            if self.job and self.job.get('state') == 'running':
+                raise ValueError('Comparaison en cours.')
+            if draft:
+                draft_contract(self.path, draft)
+            original = self.config
+            config = replace(original, draft_path=str(Path(draft).resolve()) if draft else '',
+                             speculative='dflash' if draft else 'none')
+            try:
+                self._start(config)
+            except (OSError, ValueError):
+                if self.process is None:
+                    self._start(original)
+                raise
+            self.profile, self.usage_profile = None, 'balanced'
+            return self.describe()
+        finally:
+            self.lock.release()
 
     def set_usage_profile(self, usage):
         if usage not in USAGE_PROFILES:
@@ -421,7 +514,9 @@ class MacRuntime:
         info = self.available()
         hardware = detect_hardware()
         return {'protocol': MAC_PROTOCOL, 'model_sha256': model_fingerprint(self.path)[0],
-                'runtime': {'packages': info['packages'], 'python': info['python']},
+                'runtime': {'packages': info['packages'], 'python': info['python'], 'dflash': info.get('dflash'),
+                            'mtplx': info.get('mtplx_runtime')},
+                'drafts': {path: model_fingerprint(Path(path))[0] for path in self.draft_paths},
                 'hardware': {key: hardware.get(key) for key in ('cpu', 'logical_cores', 'system', 'architecture', 'memory_bytes')},
                 'context_length': self.config.context,
                 'scope': 'same_mlx_artifact_sustained_cold_greedy', 'cache': 'cold',
@@ -446,6 +541,11 @@ class MacRuntime:
         configs = {'standard': MacConfig(engine=baseline, context=context)}
         if baseline == 'mlx':
             configs['mlx-prefill-512'] = MacConfig(context=context, prefill_step_size=512)
+            if self.available().get('dflash', {}).get('available'):
+                for index, draft in enumerate(self.draft_paths):
+                    for block in (2, 5):
+                        configs['dflash-%d-b%d' % (index, block)] = MacConfig(context=context,
+                            speculative='dflash', draft_path=draft, block_size=block)
         if 'mtplx' in engines:
             for depth in (1, 2, 3):
                 configs['mtplx-mtp-' + str(depth)] = MacConfig(engine='mtplx', context=context,
@@ -500,7 +600,8 @@ class MacRuntime:
     def _sample(self, prompt, limit):
         upstream = self._request({'op': 'generate', 'messages': [{'role': 'user', 'content': prompt}],
             'max_tokens': limit, 'temperature': 0, 'top_k': 0, 'top_p': 1, 'seed': 42, 'enable_thinking': False,
-            'prefill_step_size': self.config.prefill_step_size, 'depth': self.config.depth})
+            'prefill_step_size': self.config.prefill_step_size, 'depth': self.config.depth,
+            '_calibration': True, 'block_size': self.config.block_size})
         sample = None
         try:
             for frame in upstream:
@@ -514,8 +615,6 @@ class MacRuntime:
         return sample
 
     def optimize(self, draft=None, drafts=None):
-        if draft or drafts:
-            raise ValueError('Les modèles auxiliaires GGUF ne sont pas utilisables par MLX.')
         if not self.lock.acquire(blocking=False):
             raise ValueError('Le moteur Mac est occupé.')
         try:
@@ -523,6 +622,13 @@ class MacRuntime:
                 raise ValueError('Comparaison déjà en cours.')
             if self.process is None or self.process.poll() is not None:
                 raise ValueError('Chargez un modèle MLX avant la comparaison.')
+            if draft is not None or drafts is not None:
+                paths = [draft] if draft else list(drafts or [])
+                for path in paths:
+                    draft_contract(self.path, path)
+                if paths and not self.available().get('dflash', {}).get('available'):
+                    raise ValueError('Installez la révision DFlash documentée avant de tester cet auxiliaire.')
+                self.draft_paths = self.compatible_drafts(paths)
             self.cancelled.clear()
             self.job = {'state': 'running', 'progress': 0, 'message': 'Comparaison des moteurs Mac sur les mêmes poids.'}
             threading.Thread(target=self._calibrate, daemon=True).start()

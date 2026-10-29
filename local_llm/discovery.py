@@ -146,6 +146,9 @@ def inspect_model(path: Path, source: str = "local") -> DiscoveredModel:
             quant = raw.get('quantization') or raw.get('quantization_config') or {}
             if isinstance(quant, dict) and type(quant.get('bits')) is int:
                 quantization = str(quant['bits']) + '-bit MLX'
+            from .dflash import is_draft
+            if is_draft(raw):
+                raise ValueError('Auxiliaire DFlash : à associer à son modèle cible dans Performances.')
             if raw.get('auto_map') or raw.get('model_file'):
                 raise ValueError('Code de modèle personnalisé non pris en charge')
             if architecture != "llama":
@@ -177,8 +180,17 @@ def discover_models(roots: Optional[Iterable[Path]] = None, limit: int = 256) ->
             relative = Path(directory).relative_to(root)
             dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in {"blobs", "node_modules", "__pycache__"}) if len(relative.parts) < 5 else []
             candidates = [Path(directory) / name for name in sorted(files) if name.lower().endswith(".gguf") and not name.lower().startswith("mmproj")]
+            # DFlash auxiliaries share the target tokenizer and often ship no
+            # tokenizer.json. Keep them in the library, never as chat targets.
             if "config.json" in files and "tokenizer.json" in files:
                 candidates.append(Path(directory))
+            elif "config.json" in files and any(n.endswith('.safetensors') for n in files):
+                from .dflash import is_draft, read_config
+                try:
+                    if is_draft(read_config(directory)):
+                        candidates.append(Path(directory))
+                except (OSError, ValueError, TypeError):
+                    pass
             for candidate in candidates:
                 canonical = str(candidate.resolve())
                 if canonical not in found:

@@ -328,7 +328,7 @@ MLX-LM, ou l’exécution MTPLX sans spéculation pour les formats propriétaire
 Les poids restent chargés jusqu’au déchargement. Une interruption arrête le
 worker concerné ; il faut recharger le modèle avant la requête suivante.
 
-**Comparer les moteurs sur ce Mac** teste la préparation MLX à 2048 et 512
+**Optimiser le moteur Mac** teste la préparation MLX à 2048 et 512
 tokens par étape et, quand les têtes compatibles existent, les profondeurs MTP
 1/2/3. Les candidats utilisent **exactement le même dossier de poids**, le même
 template, la même tokenisation et un sampling glouton avec raisonnement
@@ -391,6 +391,95 @@ L’ancienne commande `mlx-experiment` reste disponible pour la préparation seu
 (128/512/2048 tokens par étape). Sources : [MLX-LM](https://github.com/ml-explore/mlx-lm),
 [limite mémoire MLX](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.set_memory_limit.html)
 et [MTPLX](https://github.com/youssofal/MTPLX).
+
+### DFlash sur MLX
+
+Le moteur MLX peut utiliser directement **DFlash ou DFlash2**, sans serveur
+supplémentaire. Le petit auxiliaire propose un bloc ; le modèle principal
+vérifie les propositions et valide les tokens avant leur affichage. L’algorithme
+de spéculation vient du [projet officiel Z Lab](https://github.com/z-lab/dflash).
+local-llm apporte l’intégration locale, les contrôles mémoire, le suivi des tokens,
+la sélection des blocs et le retour au mode classique.
+
+Le runtime optionnel doit rester séparé de la `.venv` Python 3.9 et de MTPLX.
+Depuis la racine du dépôt, avec Python 3.11+ sur un Mac Apple Silicon compatible :
+
+```bash
+python3.11 -m venv .venv-mlx
+.venv-mlx/bin/python -m pip install -r requirements-mlx.txt
+```
+
+L’app détecte `.venv-mlx` automatiquement au prochain lancement. Pour une
+installation ailleurs, définissez `LOCAL_LLM_MLX_PYTHON` comme ci-dessus.
+Les versions sont fixées : MLX 0.32.0, MLX-LM 0.31.3, Transformers 5.15.0,
+Hugging Face Hub 1.27.0 et DFlash à la révision
+`07ebd93db9f472af339b644bb70221ad8428328a`. Le fichier de l’API DFlash est
+vérifié par empreinte ; une autre révision est refusée jusqu’à validation.
+Cette installation télécharge des bibliothèques, **aucun poids de modèle**.
+
+Dans **Bibliothèque**, ajoutez le dossier MLX cible et le dossier de son
+auxiliaire officiel déjà téléchargé. Un auxiliaire n’a pas besoin de son propre
+tokenizer ; il partage celui de la cible. Les snapshots Hugging Face existants
+sont aussi détectés. Les poids sont lus sur place. Les fichiers Python présents
+dans les checkpoints ne sont jamais exécutés ; l’éventuel `auto_map` de
+l’auxiliaire reste une métadonnée inerte pour le chargeur DFlash intégré.
+
+| Cible reconnue | Auxiliaire |
+| --- | --- |
+| Qwen3-4B, Qwen3-8B | DFlash correspondant |
+| Qwen3.5-4B, 9B, 27B | DFlash correspondant |
+| Qwen3.6-27B, 35B-A3B | DFlash correspondant |
+| Qwen3.8-27B | DFlash2 correspondant |
+
+Sources des auxiliaires : [collection DFlash](https://huggingface.co/collections/z-lab/dflash)
+et [collection DFlash2](https://huggingface.co/collections/z-lab/dflash-2).
+Le catalogue vérifie les noms canoniques, les dimensions, le vocabulaire, les
+couches capturées et la capacité de contexte. Les suffixes MLX `4bit`, `8bit`,
+`bf16` et `mxfp4` sont reconnus. Un fine-tune nommé différemment, comme Ling ou
+Heretic, n’est pas associé automatiquement au drafter de son modèle de base.
+Ces vérifications rendent la paire candidate ; elles ne certifient pas le contenu
+des poids. Les empreintes des poids participent ensuite à la validation des profils.
+
+Dans **Performances**, choisissez l’auxiliaire puis **Essayer DFlash · expérimental**.
+Le bouton **Revenir au mode classique** décharge uniquement le worker détenu
+par l’app et recharge les mêmes poids principaux sans auxiliaire. Les conversations
+restent disponibles. L’auxiliaire original est quantifié en 4 bits **en mémoire,
+avant le partage des embeddings**, sans modifier ses fichiers ni les poids cibles.
+Les auxiliaires déjà quantifiés ne sont pas pris en charge par ce chargeur.
+
+L’adaptation intervient **entre les requêtes** : blocs de 2, 3 ou 5 tokens,
+réduction lorsque les cycles progressent peu, retour classique temporaire pendant
+trois requêtes, puis nouvel essai. Une réponse demandée de moins de 32 tokens
+utilise le mode classique. Un contrôle classique périodique sur une réponse réelle
+permet de comparer le coût de décodage récent dans des classes de longueurs et
+d’échantillonnage similaires. Cette heuristique n’est pas une comparaison contrôlée
+et ne produit aucun chiffre de gain validé. Une réponse déjà affichée n’est jamais
+rejouée avec un autre moteur si une erreur interrompt la génération.
+
+Le chemin DFlash actuel **recalcule le prompt** ; le cache par conversation reste
+disponible lors des réponses classiques. La spéculation peut donc perdre sur une
+conversation longue malgré un meilleur débit de décodage. Le budget RAM inclut
+le pic de chargement/quantification de l’auxiliaire, son KV et les activations
+capturées, en plus du modèle principal. Un 27B accompagné d’un drafter ne rentre
+pas nécessairement dans un Mac de 24 Gio ; un couple Qwen3-4B est un premier
+essai moins coûteux. Aucun checkpoint n’est téléchargé automatiquement.
+
+**Trouver la meilleure configuration** teste aussi les blocs fixes 2 et 5 sur au
+plus deux auxiliaires locaux. La référence, les prompts indépendants et les
+contrôles de tokens/durée restent les mêmes. Le protocole Mac 3 invalide les
+anciens profils. Un profil est lié aussi aux poids auxiliaires et aux dépendances.
+Si l’adaptation utilise un bloc différent de celui validé, ou revient au mode
+classique, le gain de ce profil n’est pas attaché à la réponse.
+
+Les statistiques indiquent la méthode réellement utilisée et les tokens validés
+par cycle. Le champ `accepted` amont inclut un token de correction ; il n’est
+**pas converti en faux pourcentage d’acceptation**. Les EOS ne sont ni affichés
+ni comptés comme tokens de réponse. Les contrôles Metal utilisent des modèles
+aléatoires de moins de 1 Mio pour DFlash avec attention classique/hybride et
+DFlash2 hybride avec fenêtre glissante : ils vérifient les tokens gloutons, le
+streaming et le retour au cache classique. Ils ne démontrent aucun gain sur un
+modèle entraîné et ne garantissent pas l’identité de toutes les sorties : les
+formes de calcul Metal peuvent faire varier les arrondis près d’une égalité.
 
 ## Essai rapide avec un vrai modèle
 

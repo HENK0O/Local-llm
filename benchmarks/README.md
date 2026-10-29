@@ -172,3 +172,36 @@ Pour reproduire le parcours et cette recherche ciblée depuis la racine du dép�
 Le plafond ne peut jamais augmenter la RAM mesurée. Sans `--calibrate`, la
 commande vérifie seulement le parcours de chat. `local-llm calibrate` et le
 bouton Optimiser de l’app restent la recherche complète des candidats disponibles.
+
+## Vérifications DFlash sur Metal
+
+La version 0.26.0 intègre l’API MLX officielle de DFlash, fixée à une révision.
+`tests/test_real_dflash.py` génère des checkpoints aléatoires de moins de 1 Mio
+au total par paire, sans télécharger de modèle. Les trois chemins testés sont
+Qwen3 avec DFlash, Qwen3.5 hybride avec DFlash et un Qwen3.5 synthétique représentant
+le chemin Qwen3.8 avec DFlash2, convolutions dynamiques et KV à fenêtre glissante.
+Ces noms de fixtures décrivent les contrats d’API ; ils ne représentent pas les
+poids entraînés 4B/27B. Blocs 2/3/5, prompts distincts, égalité des tokens gloutons,
+limite/EOS, streaming et retour au cache classique sont contrôlés. Le sampling
+non glouton fait l’objet d’un contrôle de fonctionnement, pas d’une preuve
+statistique d’équivalence des distributions.
+
+Un historique synthétique plus long révèle une différence de sortie gloutonne
+entre le calcul séquentiel et par bloc près d’une égalité de logits. Le test ne
+masque pas cette limite en exigeant une identité universelle : chaque bloc est
+comparé aux logits d’une référence cible recalculée sans cache, et les états
+après rollback sont contrôlés séparément pour 0/1/2/3 propositions acceptées.
+Les erreurs absolues doivent rester sous 0,01 sur cette fixture ; ce seuil ne
+constitue pas une garantie de précision pour d’autres modèles. La calibration
+de l’app conserve son critère strict de tokens identiques et refuse un candidat
+qui produit une telle divergence, même s’il est plus rapide.
+
+```bash
+LOCAL_LLM_TEST_MAC_PYTHON="$PWD/.venv-mlx/bin/python" \
+LOCAL_LLM_TEST_DFLASH_SOURCE="$PWD/.venv-mlx/lib/python3.11/site-packages" \
+  .venv/bin/python -m unittest tests.test_real_dflash -v
+```
+
+Adaptez `python3.11` au Python de l’environnement installé. Aucun résultat de
+tok/s de ces fixtures n’est publié comme gain utile. Un benchmark avec de vrais
+poids cibles et auxiliaires reste nécessaire avant toute annonce de performance.

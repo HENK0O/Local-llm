@@ -1639,7 +1639,7 @@
                     Automatique · chercher un auxiliaire compatible
                   </option>
                 </select>
-                <p class="hint">
+                <p id="draftHint" class="hint">
                   Un auxiliaire classique doit avoir exactement le même
                   vocabulaire. Un auxiliaire spécialisé doit être déclaré pour
                   les poids précis de la cible. L’app teste plusieurs méthodes
@@ -1647,6 +1647,34 @@
                   des prompts différents. Les têtes MTP intégrées sont aussi
                   testées si elles sont présentes et prises en charge. Aucun
                   modèle n’est téléchargé.
+                </p>
+              </div>
+              <div id="dflashControls" class="hidden">
+                <p id="dflashStatus" class="hint" role="status"></p>
+                <button id="toggleDFlash" disabled>
+                  Essayer DFlash · expérimental
+                </button>
+                <p class="hint">
+                  <a
+                    href="https://huggingface.co/collections/z-lab/dflash-2"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    >Checkpoints DFlash2 officiels</a
+                  >
+                  ·
+                  <a
+                    href="https://huggingface.co/collections/z-lab/dflash"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    >DFlash</a
+                  >
+                  ·
+                  <a
+                    href="https://github.com/HENK0O/Local-llm/blob/codex/inference-performance-playground/README.md#dflash-sur-mlx"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    >Installation du moteur</a
+                  >
                 </p>
               </div>
               <button id="optimizeModel" disabled>Optimiser ce modèle</button>
@@ -2937,7 +2965,9 @@
         const off = node(
           "option",
           "",
-          "Sans fichier auxiliaire · motifs et MTP intégré",
+          gpuInfo.engine === "mlx"
+            ? "Sans auxiliaire · génération classique"
+            : "Sans fichier auxiliaire · motifs et MTP intégré",
         );
         off.value = "off";
         $("draftModel").append(off);
@@ -2956,12 +2986,41 @@
         renderEngineControls();
         const mac = ["mlx", "mtplx"].includes(gpuInfo.engine);
         $("optimizationTitle").textContent = mac
-          ? "Comparer les moteurs Mac"
+          ? "Optimiser le moteur Mac"
           : "Optimiser ce modèle";
         $("optimizeModel").textContent = mac
           ? "Trouver la meilleure configuration"
           : "Optimiser ce modèle";
-        $("ggufOptimizationOptions").classList.toggle("hidden", mac);
+        $("ggufOptimizationOptions").classList.toggle(
+          "hidden",
+          mac && gpuInfo.engine !== "mlx",
+        );
+        $("draftHint").textContent =
+          gpuInfo.engine === "mlx"
+            ? "DFlash propose plusieurs tokens que le modèle principal vérifie ensemble. Seuls les auxiliaires locaux correspondant au modèle sont proposés. Aucun téléchargement automatique. Le cache de conversation reste disponible en mode classique ; le chemin DFlash recalcule actuellement le prompt."
+            : "Un auxiliaire classique doit partager le vocabulaire exact. Un auxiliaire spécialisé doit correspondre aux poids précis de la cible. L’app teste les méthodes disponibles, dont le MTP intégré, puis vérifie les profils sur des prompts indépendants. Aucun modèle n’est téléchargé.";
+        const dflash = gpuInfo.speculation;
+        const dflashSupported = gpuInfo.dflash_capability?.available;
+        $("dflashControls").classList.toggle(
+          "hidden",
+          gpuInfo.engine !== "mlx" || !info.features?.includes("mlx_dflash"),
+        );
+        $("toggleDFlash").textContent = dflash?.enabled
+          ? "Revenir au mode classique"
+          : "Essayer DFlash · expérimental";
+        $("toggleDFlash").disabled =
+          busy ||
+          !activeGPU?.loaded ||
+          (!dflash?.enabled && (!dflashSupported || !draftChoices.length));
+        $("dflashStatus").textContent = dflash?.enabled
+          ? (dflash.method === "dflash2" ? "DFlash2" : "DFlash") +
+            " activé · auxiliaire 4 bits · adaptation entre les requêtes. Aucun gain n’est revendiqué sans validation."
+          : dflashSupported
+            ? draftChoices.length
+              ? "DFlash disponible. Choisissez un auxiliaire compatible pour l’essayer, ou validez les réglages automatiquement."
+              : "Aucun auxiliaire local compatible détecté pour ce modèle. Ajoutez le checkpoint officiel correspondant dans Bibliothèque."
+            : gpuInfo.dflash_capability?.reason ||
+              "DFlash nécessite un environnement MLX séparé avec la révision documentée.";
         $("optimizationMethod").textContent = mac
           ? "Même checkpoint MLX, même template, même échantillonnage et contexte sans cache. Deux passages pour choisir ; trois passages sur des prompts indépendants pour vérifier. Un gain inférieur à 5 %, instable ou accompagné de sorties différentes est refusé. Ce test utilise l’API Python MTPLX en mode Sustained ; il ne compare pas son application en mode Turbo."
           : "Mêmes poids GGUF et même contexte. Six workloads avec plusieurs longueurs, deux passages pour choisir puis trois passages indépendants pour vérifier. Aucun gain universel n’est promis.";
@@ -3581,6 +3640,26 @@
           ),
         );
         const cache = gpuInfo.conversation_cache;
+        const spec = gpuInfo.speculation;
+        if (spec?.enabled) {
+          const last = spec.last_request;
+          output.append(
+            node(
+              "p",
+              "hint",
+              last
+                ? (last.method === "autoregressive"
+                    ? "Dernière réponse en mode classique. "
+                    : "Dernière réponse : " +
+                      last.method.toUpperCase() +
+                      " · " +
+                      fmt(last.tokens_per_cycle) +
+                      " tokens validés par cycle. ") +
+                    (last.fallback_reason || "")
+                : "DFlash prêt · la première requête utilisera l’auxiliaire si la réponse demandée contient au moins 32 tokens.",
+            ),
+          );
+        }
         if (cache?.supported) {
           output.append(
             node(
@@ -3609,7 +3688,7 @@
         if (!report) return;
         if (
           report.scope !== "same_mlx_artifact_sustained_cold_greedy" ||
-          report.protocol !== 2 ||
+          report.protocol !== 3 ||
           !report.profiles?.[usage]
         ) {
           output.append(
@@ -3761,6 +3840,26 @@
           gpuPolling = false;
         }
       }
+      $("toggleDFlash").onclick = async () => {
+        if (busy || !activeGPU?.loaded) return;
+        setBusy(true);
+        try {
+          const enabled = !gpuInfo.speculation?.enabled;
+          const selected = $("draftModel").value;
+          const payload = { enabled };
+          if (enabled && selected && selected !== "off")
+            payload.draft_id = selected;
+          gpuInfo = await api("/v1/accelerator/speculation", payload);
+          renderOptimization();
+          $("notice").textContent = enabled
+            ? "DFlash activé pour ce modèle. Les gains restent à valider."
+            : "Génération classique rétablie.";
+        } catch (error) {
+          $("notice").textContent = error.message;
+        } finally {
+          setBusy(false);
+        }
+      };
       $("optimizeModel").onclick = async () => {
         if (busy || !activeGPU?.loaded) return;
         setBusy(true);

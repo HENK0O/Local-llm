@@ -30,6 +30,7 @@ from .gguf import Q4Matrix, Q8Matrix, q4_backend_name, q8_backend_name
 from .loading import load_runtime
 from .reference_runtime import ReferenceRuntime
 from .version import __version__
+from .dflash import draft_contract, is_draft, read_config
 
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -278,7 +279,8 @@ class ChatService:
         path = Path(value.strip()).expanduser()
         if not path.is_absolute() or not path.exists():
             raise ValueError('Choisissez un fichier ou dossier existant avec son chemin absolu.')
-        if not (path.is_file() and path.suffix.lower() == '.gguf' or path.is_dir() and (path / 'config.json').is_file() and (path / 'tokenizer.json').is_file()):
+        auxiliary = path.is_dir() and (path / 'config.json').is_file() and is_draft(read_config(path)) and any(path.glob('*.safetensors'))
+        if not (path.is_file() and path.suffix.lower() == '.gguf' or path.is_dir() and (path / 'config.json').is_file() and (path / 'tokenizer.json').is_file() or auxiliary):
             raise ValueError('Un fichier GGUF ou dossier avec config.json et tokenizer.json est requis.')
         item = inspect_model(path)
         if not item.architecture:
@@ -364,7 +366,7 @@ class ChatService:
                 "max_lmstudio_tokens": self.max_lmstudio_tokens,
                 "max_accelerator_tokens": MAX_ACCELERATOR_TOKENS,
                 "accelerator": self.accelerator.describe(),
-                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory", "usage_profiles", "direct_library", "model_advice", "embedded_mtp", "persistent_kv_cache", "workload_benchmark", "mac_engines", "mlx_conversation_cache"],
+                "features": ["system_telemetry", "prefix_cache", "model_unload", "context_inspection", "lmstudio_instances", "gpu_runtime", "auto_calibration", "conversation_cache", "speculative_decoding", "validated_calibration", "adaptive_memory", "usage_profiles", "direct_library", "model_advice", "embedded_mtp", "persistent_kv_cache", "workload_benchmark", "mac_engines", "mlx_conversation_cache", "mlx_dflash"],
                 "retained_cache_bytes": self.prefix_cache.nbytes,
                 "retained_cache_limit_bytes": self.prefix_cache.max_bytes}
 
@@ -398,6 +400,8 @@ class ChatService:
         if not isinstance(engine, str) or engine not in {'auto', 'llamacpp', 'mlx', 'mtplx'}:
             raise ValueError('Moteur inconnu')
         with self._generation_lock:
+            if hasattr(type(self.accelerator), 'set_model_library'):
+                self.accelerator.set_model_library(m.path for m in self.catalog.values())
             result = (self.accelerator.load(item, self._accelerator_memory_available(), engine=engine)
                       if 'engine' in payload else self.accelerator.load(item, self._accelerator_memory_available()))
             self.unload_model()
@@ -405,7 +409,20 @@ class ChatService:
             return result
 
     def accelerator_drafts(self):
-        if self.accelerator.describe().get('engine', 'llamacpp') != 'llamacpp':
+        info = self.accelerator.describe()
+        if info.get('engine') == 'mlx':
+            models = []
+            if self.accelerator.path:
+                for item in self.catalog.values():
+                    try:
+                        contract = draft_contract(self.accelerator.path, item.path)
+                        models.append({'id': item.id, 'name': item.name, 'size_bytes': contract['size_bytes'],
+                                       'method': contract['method']})
+                    except (OSError, ValueError, TypeError, KeyError):
+                        continue
+            return {'models': sorted(models, key=lambda m: m['size_bytes'])[:2],
+                    'dflash': info.get('dflash_capability', {'available': False})}
+        if info.get('engine', 'llamacpp') != 'llamacpp':
             return {'models': []}
         target = self.accelerator.path
         models = []
@@ -421,10 +438,44 @@ class ChatService:
                     continue
         return {'models': models}
 
+    def configure_accelerator_speculation(self, payload):
+        if (not isinstance(payload, dict) or set(payload) - {'enabled', 'draft_id'}
+                or type(payload.get('enabled')) is not bool):
+            raise ValueError('Réglages DFlash invalides.')
+        with self._generation_lock:
+            if self.accelerator.describe().get('engine') != 'mlx':
+                raise ValueError('Chargez un modèle dans MLX avant d’activer DFlash.')
+            draft = None
+            if payload['enabled']:
+                choices = self.accelerator_drafts()['models']
+                identifier = payload.get('draft_id')
+                if identifier is not None and not isinstance(identifier, str):
+                    raise ValueError('Identifiant d’auxiliaire invalide.')
+                choice = next((m for m in choices if m['id'] == identifier), None) if identifier else next(iter(choices), None)
+                if choice is None:
+                    raise ValueError('Aucun auxiliaire DFlash local compatible. Ajoutez le checkpoint officiel à la bibliothèque.')
+                draft = self.catalog[choice['id']].path
+            result = self.accelerator.configure_speculation(draft)
+            self._accelerator_records.clear()
+            return result
+
     def optimize_accelerator(self, payload):
         if not isinstance(payload, dict):
             raise ValueError("JSON object required")
-        if self.accelerator.describe().get('engine', 'llamacpp') in {'mlx', 'mtplx'}:
+        engine = self.accelerator.describe().get('engine', 'llamacpp')
+        if engine == 'mlx':
+            choices = self.accelerator_drafts()
+            selected = payload.get('draft_id')
+            if selected is not None and (not isinstance(selected, str) or selected not in {m['id'] for m in choices['models']}):
+                raise ValueError('Auxiliaire DFlash incompatible ou absent de la bibliothèque.')
+            paths = ([self.catalog[selected].path] if selected else
+                     [self.catalog[m['id']].path for m in choices['models']] if choices.get('dflash', {}).get('available') else [])
+            if payload.get('draft_mode') == 'off':
+                paths = []
+            result = self.accelerator.optimize(drafts=paths)
+            self._accelerator_records.clear()
+            return result
+        if engine == 'mtplx':
             if payload.get('draft_id'):
                 raise ValueError('Les auxiliaires GGUF ne sont pas utilisables par ce moteur Mac.')
             result = self.accelerator.optimize()
@@ -919,7 +970,7 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self._path()
-        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/local-models/import", "/v1/lmstudio/load", "/v1/accelerator/load", "/v1/accelerator/unload", "/v1/accelerator/optimize", "/v1/accelerator/cancel", "/v1/accelerator/profile", "/v1/accelerator/cache", "/v1/compare"}:
+        if path not in {"/v1/chat/completions", "/v1/context", "/v1/benchmark", "/v1/local-models/load", "/v1/local-models/unload", "/v1/local-models/refresh", "/v1/local-models/import", "/v1/lmstudio/load", "/v1/accelerator/load", "/v1/accelerator/unload", "/v1/accelerator/optimize", "/v1/accelerator/speculation", "/v1/accelerator/cancel", "/v1/accelerator/profile", "/v1/accelerator/cache", "/v1/compare"}:
             self._error(404, "route not found")
             return
         if not self._same_origin():
@@ -940,6 +991,9 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/v1/accelerator/optimize":
                 self._send_json(202, self.server.service.optimize_accelerator(payload))
+                return
+            if path == "/v1/accelerator/speculation":
+                self._send_json(200, self.server.service.configure_accelerator_speculation(payload))
                 return
             if path == "/v1/accelerator/profile":
                 if not isinstance(payload, dict) or not isinstance(payload.get("profile"), str):
@@ -1078,6 +1132,9 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
             while len(self.server.service._accelerator_records) > 8:
                 self.server.service._accelerator_records.popitem(last=False)
             profile = runtime.active_measurement()
+            speculation = runtime.describe().get('speculation')
+            actual_method = ((speculation.get('last_request') or {}).get('method')
+                             if speculation and speculation.get('enabled') else None)
             self._write_event({"id": response_id, "model": request.model_id,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": finish}], "usage": usage,
                 "local_llm": {"backend": "llamacpp", "completion_id": response_id,
@@ -1095,9 +1152,11 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                     "calibration_gain_percent": profile["gain_percent"] if profile else None,
                     "optimization_profile": runtime.usage_profile,
                     "draft_proposed_tokens": timings.get("draft_n"), "draft_accepted_tokens": timings.get("draft_n_accepted"),
-                    "speculative": runtime.config.speculative, "persistent_cache": runtime.describe().get("persistent_cache"),
+                    "speculative": ('none' if actual_method == 'autoregressive' else actual_method) or runtime.config.speculative,
+                    "persistent_cache": runtime.describe().get("persistent_cache"),
                     "cached_conversations": runtime.describe().get('cached_conversations', len(runtime.slots.entries)),
-                    "conversation_cache": runtime.describe().get('conversation_cache')}})
+                    "conversation_cache": runtime.describe().get('conversation_cache'),
+                    "speculation": runtime.describe().get('speculation')}})
             self._write_event("[DONE]")
         except (BrokenPipeError, ConnectionResetError):
             pass

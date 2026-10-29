@@ -34,6 +34,9 @@ def validate_model(path):
         config = json.loads((root / name).read_text())
         if not isinstance(config, dict):
             raise ValueError('Configuration MLX invalide.')
+        from .dflash import is_draft
+        if is_draft(config):
+            raise ValueError('Ce checkpoint DFlash est un auxiliaire, pas un modèle de conversation autonome.')
         if config.get('auto_map') or config.get('model_file'):
             raise ValueError('Les modèles nécessitant du code distant ne sont pas pris en charge.')
     return root

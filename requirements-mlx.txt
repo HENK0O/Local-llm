@@ -1,0 +1,6 @@
+# Optional isolated Apple Silicon runtime. Never install into MTPLX's venv.
+mlx==0.32.0
+mlx-lm==0.31.3
+transformers==5.15.0
+huggingface-hub==1.27.0
+dflash @ git+https://github.com/z-lab/dflash.git@07ebd93db9f472af339b644bb70221ad8428328a

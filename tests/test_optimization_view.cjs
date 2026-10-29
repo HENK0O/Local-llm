@@ -44,6 +44,7 @@ function render(
   usage = "balanced",
   pending = false,
   engine = "llamacpp",
+  runtime = {},
 ) {
   const elements = new Map();
   const sandbox = {
@@ -59,6 +60,7 @@ function render(
     catalog: [{ id: "target", engines: ["mlx", "mtplx"] }],
     conversations: { active: { enginePreference: "auto" } },
     busy: false,
+    draftChoices: [],
     calibrationRunning: false,
     activeGPU: { loaded: true, model_id: "target", model_name: "Target" },
     gpuInfo: {
@@ -75,6 +77,7 @@ function render(
         batch: 2048,
         kv_type: "f16",
       },
+      ...runtime,
     },
   };
   vm.runInNewContext(renderer + "\nrenderOptimization();", sandbox);
@@ -92,15 +95,48 @@ function render(
     credit: elements.has("engineCredit")
       ? flatten(elements.get("engineCredit"))
       : "",
+    dflash: elements.get("dflashStatus").textContent,
+    toggle: elements.get("toggleDFlash").textContent,
+    toggleDisabled: elements.get("toggleDFlash").disabled,
   };
 }
+
+test("DFlash shows its actual fallback without inventing a benchmark gain", () => {
+  const view = render(
+    null,
+    ["mlx_dflash", "mac_engines", "workload_benchmark"],
+    "balanced",
+    false,
+    "mlx",
+    {
+      dflash_capability: { available: true },
+      speculation: {
+        enabled: true,
+        method: "dflash2",
+        last_request: {
+          method: "autoregressive",
+          block_size: 0,
+          fallback_reason: "Réponse courte",
+        },
+      },
+    },
+  );
+  assert.match(view.dflash, /DFlash2 activé/);
+  assert.match(view.text, /Dernière réponse en mode classique.*Réponse courte/);
+  assert.match(view.toggle, /mode classique/);
+  assert.equal(view.toggleDisabled, false);
+  assert.doesNotMatch(view.text, /Gain vérifié|acceptation|tokens gagnés/);
+  const unavailable = render(null, ["mlx_dflash"], "balanced", false, "mlx");
+  assert.equal(unavailable.toggleDisabled, true);
+  assert.match(unavailable.dflash, /environnement MLX séparé/);
+});
 
 test("Mac comparison attributes MTPLX and scopes the verified gain to its actual benchmark", () => {
   const base = { decode_tps: 20, seconds: 10 };
   const retained = { decode_tps: 30, seconds: 7 };
   const config = { engine: "mtplx", context: 4096, depth: 2 };
   const report = {
-    protocol: 2,
+    protocol: 3,
     scope: "same_mlx_artifact_sustained_cold_greedy",
     profiles: {
       balanced: {

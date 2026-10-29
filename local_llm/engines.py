@@ -25,12 +25,23 @@ class EngineManager:
     def available(self):
         llama, mac = self.llama.available(), self.mac.available()
         return dict(llama, available=llama['available'] or mac['available'],
-                    engines={'llamacpp': llama, 'mlx': mac, 'mtplx': dict(mac, available=mac['available'] and 'mtplx' in mac.get('packages', {}))})
+                    engines={'llamacpp': llama, 'mlx': mac,
+                             'mtplx': dict(mac.get('mtplx_runtime') or mac,
+                                           available=mac['available'] and bool(mac.get('mtplx_runtime') or 'mtplx' in mac.get('packages', {})))})
 
     def model_engines(self, item):
         if Path(item.path).suffix.lower() == '.gguf':
             return ['llamacpp'] if self.llama.available()['available'] and item.architecture not in {None, 'dflash', 'dspark', 'bert', 'nomic-bert'} else []
         return model_engines(item.path, self.mac.available())
+
+    def set_model_library(self, paths):
+        self.mac.library_paths = list(paths)
+
+    def configure_speculation(self, draft=None):
+        if self.active is not self.mac:
+            raise ValueError('DFlash nécessite un modèle chargé dans MLX.')
+        self.mac.configure_speculation(draft)
+        return self.describe()
 
     def describe(self):
         data = self.active.describe()

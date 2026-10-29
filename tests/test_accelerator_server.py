@@ -1,14 +1,18 @@
 import json
+import tempfile
 import threading
 import unittest
 from dataclasses import replace
 from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from local_llm.accelerator import ExecutionConfig, SlotPool
 from local_llm.server import ChatService, LocalLLMHTTPServer, parse_chat_request
+from local_llm.discovery import inspect_model
+from tests.test_dflash import pair
 
 
 class FakeRuntime:
@@ -145,6 +149,44 @@ class AcceleratorHTTPTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'GGUF'):
                 self.service.optimize_accelerator({'draft_id': 'something'})
             self.assertEqual(optimize.call_count, 1)
+
+    def test_mlx_dflash_activation_uses_catalog_ids_and_existing_local_pair(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target, draft = pair(folder)
+            item = inspect_model(draft)
+            description = dict(self.runtime.describe(), engine='mlx', dflash_capability={'available': True})
+            with patch.object(self.runtime, 'describe', return_value=description), patch.object(
+                    self.runtime, 'path', target), patch.object(self.service, 'catalog', {item.id: item}), patch.object(
+                    self.runtime, 'configure_speculation', create=True, return_value=description) as configure:
+                with self.request('/v1/accelerator/drafts') as response:
+                    self.assertEqual(json.load(response)['models'][0]['method'], 'dflash')
+                with self.request('/v1/accelerator/speculation', {'enabled': True, 'draft_id': item.id}) as response:
+                    self.assertEqual(response.status, 200)
+                configure.assert_called_once_with(str(draft))
+                for payload in ({'enabled': 'yes'}, {'enabled': True, 'draft_id': '/private/arbitrary'},
+                                {'enabled': True, 'draft_id': 1}, {'enabled': True, 'path': str(draft)}):
+                    with self.assertRaises(HTTPError) as error:
+                        self.request('/v1/accelerator/speculation', payload)
+                    self.assertEqual(error.exception.code, 400)
+                self.assertEqual(configure.call_count, 1)
+                with self.request('/v1/accelerator/speculation', {'enabled': False}) as response:
+                    self.assertEqual(response.status, 200)
+                configure.assert_called_with(None)
+
+    def test_mlx_optimization_searches_only_compatible_dflash_not_gguf(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target, draft = pair(folder); item = inspect_model(draft)
+            gguf = SimpleNamespace(id='gguf', name='aux', path='/tmp/aux.gguf')
+            description = dict(self.runtime.describe(), engine='mlx', dflash_capability={'available': True})
+            with patch.object(self.runtime, 'describe', return_value=description), patch.object(
+                    self.runtime, 'path', target), patch.object(self.service, 'catalog', {item.id: item, gguf.id: gguf}), patch.object(
+                    self.runtime, 'optimize', return_value={'state': 'running'}) as optimize:
+                self.service.optimize_accelerator({})
+                optimize.assert_called_with(drafts=[str(draft)])
+                self.service.optimize_accelerator({'draft_mode': 'off'})
+                optimize.assert_called_with(drafts=[])
+                with self.assertRaisesRegex(ValueError, 'DFlash'):
+                    self.service.optimize_accelerator({'draft_id': 'gguf'})
     def test_usage_profile_endpoint_validates_and_applies_only_named_profiles(self):
         with self.request('/v1/accelerator/profile', {'profile':'code'}) as response:
             self.assertEqual(response.status, 200)
@@ -194,7 +236,7 @@ class AcceleratorHTTPTests(unittest.TestCase):
         with self.request('/v1/accelerator/load', {'id': 'target'}) as response: self.assertTrue(json.load(response)['loaded'])
         with self.assertRaises(HTTPError) as error: self.request('/v1/accelerator/load', {'id': '/arbitrary/model.gguf'})
         self.assertEqual(error.exception.code, 400)
-        for path in ('load', 'unload', 'optimize', 'cancel', 'profile', 'cache'):
+        for path in ('load', 'unload', 'optimize', 'cancel', 'profile', 'cache', 'speculation'):
             with self.assertRaises(HTTPError) as error: self.request('/v1/accelerator/' + path, {}, 'https://evil.invalid')
             self.assertEqual(error.exception.code, 403)
         with self.request('/v1/accelerator/optimize', {}) as response:

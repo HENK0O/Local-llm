@@ -18,11 +18,13 @@ from pathlib import Path
 
 from .mlx_experiment import validate_model
 from .mlx_cache import ConversationCache
+from .dflash import capability as dflash_capability, DFlashSession
 
 
 def probe():
     packages = {}
-    for package, module in (('mlx', 'mlx'), ('mlx-lm', 'mlx_lm'), ('mtplx', 'mtplx')):
+    for package, module in (('mlx', 'mlx'), ('mlx-lm', 'mlx_lm'), ('mtplx', 'mtplx'),
+                            ('transformers', 'transformers'), ('huggingface-hub', 'huggingface_hub')):
         try:
             if importlib.util.find_spec(module) is not None:
                 packages[package] = importlib.metadata.version(package)
@@ -30,6 +32,7 @@ def probe():
             pass
     apple = platform.system() == 'Darwin' and platform.machine() == 'arm64'
     return {'python': platform.python_version(), 'packages': packages,
+            'dflash': dflash_capability(),
             'available': apple and sys.version_info >= (3, 11) and 'mlx' in packages and 'mlx-lm' in packages}
 
 
@@ -89,7 +92,7 @@ class StreamBuffer:
 
 
 class Worker:
-    def __init__(self, root, engine, context, memory_limit, cache_budget=0):
+    def __init__(self, root, engine, context, memory_limit, cache_budget=0, draft_path=None, draft_block=3):
         import mlx.core as mx
         self.mx, self.root, self.engine, self.context_length = mx, validate_model(root), engine, context
         if memory_limit:
@@ -112,6 +115,11 @@ class Worker:
             raise ValueError('Unknown Mac engine')
         if not self.tokenizer.chat_template:
             raise ValueError('Template de conversation local absent.')
+        self.dflash = DFlashSession(self.root, draft_path, self.model, self.tokenizer, context) if draft_path and engine == 'mlx' else None
+        if self.dflash:
+            if type(draft_block) is not int or draft_block not in (2, 3, 5):
+                raise ValueError('Taille de bloc DFlash invalide.')
+            self.dflash.adaptive.block = draft_block
         self.conversations = None
         self._prepared = None
         if engine == 'mlx':
@@ -122,6 +130,13 @@ class Worker:
     def cache_summary(self):
         pool = getattr(self, 'conversations', None)
         return pool.summary() if pool is not None else {'supported': False, 'entries': 0, 'bytes': 0}
+
+    def speculation_summary(self):
+        session = getattr(self, 'dflash', None)
+        return ({'enabled': True, 'method': session.contract['method'], 'draft_bits': 4,
+                 'next_block_size': session.adaptive.block, 'last_request': session.last,
+                 'adaptive_between_requests': True, 'experimental': True}
+                if session else {'enabled': False})
 
     def _prefill_prefix(self, prompt, layers, step):
         # Keep the last prompt token for stream_generate, which produces logits
@@ -173,7 +188,48 @@ class Worker:
             stream.push(delta)
 
         prefill, decode, finish = None, None, 'stop'
-        if self.engine == 'mlx':
+        session = getattr(self, 'dflash', None)
+        block, fallback = (0, None)
+        if session:
+            block, fallback = ((body['block_size'], None) if body.get('_calibration') else session.adaptive.choose(limit))
+        cycles = committed = 0
+        if session and block:
+            eos = set(self.tokenizer.eos_token_ids)
+            detokenizer = self.tokenizer.detokenizer
+            last = None
+            total = 0
+            with contextlib.closing(session.stream(prompt, block_size=block, max_tokens=limit,
+                    temperature=body.get('temperature', 0), top_p=body.get('top_p', 1), top_k=body.get('top_k', 0),
+                    prefill_step_size=body.get('prefill_step_size', 2048))) as rows:
+                for row in rows:
+                    # Upstream emits whole VERIFIED blocks, not one token per
+                    # event. Its final empty event must not be counted again.
+                    values = row.tokens
+                    if (not isinstance(values, list) or any(type(t) is not int or t < 0 for t in values)
+                            or row.generation_tokens != total + len(values) or total + len(values) > limit):
+                        raise ValueError('Comptage de tokens DFlash incohérent ; réponse interrompue.')
+                    total += len(values)
+                    visible = [t for t in values if t not in eos]
+                    token_ids.extend(visible)
+                    for token in visible:
+                        detokenizer.add_token(token)
+                    if row.finish_reason:
+                        detokenizer.finalize()
+                    if row.accepted is not None and values:
+                        cycles += 1
+                        committed += len(visible)
+                    # Upstream adds EOS to its detokenizer. Decode verified
+                    # non-EOS IDs ourselves so stop markers cannot leak to UI.
+                    text = detokenizer.last_segment
+                    if values or text:
+                        emit(text)
+                    last = row
+            if last is None:
+                raise ValueError('Aucun token DFlash généré.')
+            prefill = last.prompt_tokens / last.prompt_tps if last.prompt_tps > 0 else None
+            decode = last.generation_tokens / last.generation_tps if last.generation_tps > 0 else None
+            finish = last.finish_reason or 'stop'
+        elif self.engine == 'mlx':
             from mlx_lm import stream_generate
             from mlx_lm.sample_utils import make_sampler
             eos = set(self.tokenizer.eos_token_ids)
@@ -257,6 +313,14 @@ class Worker:
         # generated reasoning tokens remain included. Cold calibration omits a
         # conversation key and follows the unchanged SDK generation path.
         rate = len(token_ids) / decode if decode and decode > 0 else None
+        if session:
+            if not body.get('_calibration'):
+                session.adaptive.observe(session.adaptive.bucket(len(prompt), limit, body.get('temperature', 0)),
+                                         block, cycles, committed, len(token_ids), decode)
+            session.last = {'method': session.contract['method'] if block else 'autoregressive',
+                            'block_size': block, 'cycles': cycles, 'verified_tokens': committed,
+                            'tokens_per_cycle': committed / cycles if cycles else None,
+                            'fallback_reason': fallback, 'prefix_cache_used': reused > 0}
         send({'event': 'done', 'choices': [{'index': 0, 'delta': {}, 'finish_reason': finish}],
               'usage': {'prompt_tokens': len(prompt), 'completion_tokens': len(token_ids)},
               'timings': {'predicted_per_second': rate, 'predicted_ms': decode * 1000 if decode is not None else None,
@@ -265,6 +329,7 @@ class Worker:
                           'first_token_seconds': first, 'request_seconds': elapsed,
                           'peak_gpu_bytes': int(self.mx.get_peak_memory())},
               'conversation_cache': self.cache_summary(),
+              'speculation': self.speculation_summary(),
               'sample': {'seconds': elapsed, 'decode_tps': rate, 'prefill_seconds': prefill,
                          'generated_tokens': len(token_ids), 'first_token_seconds': first,
                          'input_tokens': len(prompt), 'output_limit': limit,
@@ -285,8 +350,11 @@ def main():
             return
         try:
             worker = Worker(sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4]),
-                            int(sys.argv[5]) if len(sys.argv) > 5 else 0)
-            send({'event': 'ready', **probe(), 'conversation_cache': worker.cache_summary()})
+                            int(sys.argv[5]) if len(sys.argv) > 5 else 0,
+                            sys.argv[6] if len(sys.argv) > 6 and sys.argv[6] else None,
+                            int(sys.argv[7]) if len(sys.argv) > 7 else 3)
+            send({'event': 'ready', **probe(), 'conversation_cache': worker.cache_summary(),
+                  'speculation': worker.speculation_summary()})
             for line in sys.stdin:
                 request = json.loads(line)
                 try:
@@ -297,6 +365,8 @@ def main():
                         capacity = request['context']
                         if type(capacity) is not int or not worker.context_length <= capacity <= 8192:
                             raise ValueError('Capacité MLX invalide.')
+                        if worker.dflash and capacity > worker.dflash.contract['max_context']:
+                            raise ValueError('Capacité de l’auxiliaire DFlash dépassée.')
                         worker.context_length = capacity
                         worker.mx.set_memory_limit(request['memory_limit'])
                         worker.conversations.resize(request['cache_budget'])
