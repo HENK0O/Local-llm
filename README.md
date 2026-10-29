@@ -26,6 +26,24 @@ couche local-llm apporte la calibration, le choix de la spéculation, le suivi d
 contexte et des conversations. Relayer une requête à LM Studio n’accélère pas
 ses calculs.
 
+## Une interface en trois espaces
+
+- **Discussions** : conversations persistantes, recherche, sélection du modèle en haut et contexte consultable.
+- **Modèles** : bibliothèque avec recherche et filtres, format, taille, état de chargement et raison d’une incompatibilité. Les fichiers déjà présents sont utilisés sur place.
+- **Optimisations** : réglages du moteur, calibration et mesures. Les détails sont repliés pour garder le chat lisible.
+
+Le thème sombre est activé par défaut ; le bouton de thème permet de passer au clair.
+La barre latérale reste fixe sur ordinateur et se replie sur mobile.
+
+Un fichier `.safetensors` est un conteneur, pas une garantie de compatibilité MLX.
+Les quantifications EXL3, EXL2, GPTQ, AWQ et BitsAndBytes sont identifiées à partir
+des métadonnées et ne sont pas proposées au chargement par nos moteurs actuels.
+**EXL3 peut fonctionner sur Apple Silicon avec un runtime dédié comme
+[MLXL3](https://github.com/0xZKnw/mlxl3), qui n’est pas intégré ici.** Pour
+local-llm, choisissez une variante MLX ou GGUF dont l’architecture est prise en charge.
+Un modèle détecté peut encore manquer de mémoire ou nécessiter un moteur installé ;
+la bibliothèque distingue ces situations et les auxiliaires DFlash des modèles de discussion.
+
 ## Checkpoints existants, sans serveur LM Studio
 
 Les GGUF détectés dans la bibliothèque LM Studio, son dossier personnalisé ou
@@ -43,7 +61,7 @@ indique le budget disponible et l’estimation minimale avec son contexte ; les
 modèles chargés dans un autre moteur doivent être déchargés par leur application.
 Les réponses d’un ancien polling sont ignorées pendant un changement de modèle.
 
-Dans **Bibliothèque**, « Ajouter un checkpoint existant » accepte le chemin
+Dans **Modèles**, « Ajouter un checkpoint existant » accepte le chemin
 absolu d’un GGUF ou d’un dossier natif. Seul ce chemin est enregistré dans
 `LOCAL_LLM_STATE_DIR/library.json` (par défaut `~/.cache/local-llm`), jamais les
 poids. Les liens symboliques des snapshots Hugging Face conservent leur nom et
@@ -53,7 +71,7 @@ origine des autres mutations. Les anciennes conversations LM Studio passent au
 moteur direct seulement si leur clé correspond exactement à un unique fichier
 détecté, sans association par nom d’affichage.
 
-**Performances → Une variante mieux adaptée ?** vérifie automatiquement les
+**Modèles → Une variante mieux adaptée ?** vérifie automatiquement les
 quantifications du checkpoint sélectionné dans son dépôt Hugging Face. La
 recherche conserve le nom précis du modèle, sa taille et sa variante fine-tunée.
 Elle exclut les projecteurs, les auxiliaires et les fichiers partiels. Chaque
@@ -105,7 +123,7 @@ charger directement un GGUF que le moteur CPU ne prend pas en charge ; sa
 compatibilité finale dépend du build llama.cpp installé. Les modèles auxiliaires
 DFlash/DSpark et les modèles d’embeddings ne sont pas proposés comme modèles de chat.
 
-Dans **Performances**, choisissez **Optimiser ce modèle**. L’app explore les
+Dans **Optimisations**, choisissez **Optimiser ce modèle**. L’app explore les
 threads de génération et de préparation séparément, les batches physiques de
 préparation (`ubatch`), les tailles de batch, le cache KV Q8 et, si le build le
 propose, le sampling GPU. Elle teste les motifs `ngram-simple` (4/16/48 tokens,
@@ -141,7 +159,7 @@ décodage. Aucun workload du périmètre retenu ne doit ralentir de plus de 10 %
 même si un autre workload de sa catégorie progresse. Le premier token ne doit
 pas ralentir simultanément de plus de 20 % et de 10 ms. Les profils spécialisés
 évaluent les performances de leur catégorie uniquement : leur gain ne constitue pas un gain général.
-Le sélecteur dans Performances applique le profil aux prochaines réponses du
+Le sélecteur dans Optimisations applique le profil aux prochaines réponses du
 modèle. Si ses réglages diffèrent, le worker est rechargé ; un cache disque
 compatible peut retrouver un état précédent et les conversations restent
 disponibles. Ce coût de changement est affiché séparément
@@ -174,7 +192,7 @@ cache : premier token et préparation réellement économisée. Le cache doit av
 réutilisé des tokens pour qu’un gain de préparation soit déclaré. Ce test ne
 constitue pas une comparaison avec LM Studio. Les réponses rapportent aussi le
 délai du premier token, réflexion incluse, et le délai du premier texte visible,
-mesurés à la réception par le serveur, dans **Performances**.
+mesurés à la réception par le serveur, dans **Optimisations**.
 
 Le profil reste local (`~/.cache/local-llm`, ou `LOCAL_LLM_STATE_DIR`) et ne
 contient aucun texte de conversation. Il est lié à l’empreinte des poids, au
@@ -230,7 +248,7 @@ un préfixe après redémarrage ou changement de modèle. Il ne duplique pas les
 Les fichiers binaires contiennent des **états privés de conversation** ; les
 métadonnées ne contiennent que des empreintes, tailles et coûts. Dossier en mode
 700, fichiers en mode 600 ; aucun fichier n’est envoyé à GitHub. Le budget évince
-les états les plus anciens. L’interface Performances permet de désactiver le cache
+les états les plus anciens. L’interface Optimisations permet de désactiver le cache
 (et d’effacer les fichiers) ou d’effacer uniquement les snapshots disque.
 
 Chaque snapshot est lié au SHA-256 du modèle et de son auxiliaire, au build et
@@ -322,7 +340,7 @@ L’intégration Python a été préparée pour MTPLX 2.12.2, MLX 0.32.2 et MLX-
 réglages de l’app MTPLX ou la ventilation. Elle ne représente pas le mode Turbo
 de MTPLX. **Powered by MTPLX** — [MTPLX, Youssof Altoukhi](https://github.com/youssofal/MTPLX).
 
-Dans **Performances → Le moteur de ce modèle**, Automatique utilise un profil
+Dans **Optimisations → Le moteur de ce modèle**, Automatique utilise un profil
 vérifié pour ces poids, versions et matériel ; sinon il garde la référence
 MLX-LM, ou l’exécution MTPLX sans spéculation pour les formats propriétaires.
 Les poids restent chargés jusqu’au déchargement. Une interruption arrête le
@@ -417,7 +435,7 @@ Hugging Face Hub 1.27.0 et DFlash à la révision
 vérifié par empreinte ; une autre révision est refusée jusqu’à validation.
 Cette installation télécharge des bibliothèques, **aucun poids de modèle**.
 
-Dans **Bibliothèque**, ajoutez le dossier MLX cible et le dossier de son
+Dans **Modèles**, ajoutez le dossier MLX cible et le dossier de son
 auxiliaire officiel déjà téléchargé. Un auxiliaire n’a pas besoin de son propre
 tokenizer ; il partage celui de la cible. Les snapshots Hugging Face existants
 sont aussi détectés. Les poids sont lus sur place. Les fichiers Python présents
@@ -440,7 +458,7 @@ Heretic, n’est pas associé automatiquement au drafter de son modèle de base.
 Ces vérifications rendent la paire candidate ; elles ne certifient pas le contenu
 des poids. Les empreintes des poids participent ensuite à la validation des profils.
 
-Dans **Performances**, choisissez l’auxiliaire puis **Essayer DFlash · expérimental**.
+Dans **Optimisations**, choisissez l’auxiliaire puis **Essayer DFlash · expérimental**.
 Le bouton **Revenir au mode classique** décharge uniquement le worker détenu
 par l’app et recharge les mêmes poids principaux sans auxiliaire. Les conversations
 restent disponibles. L’auxiliaire original est quantifié en 4 bits **en mémoire,
@@ -689,7 +707,7 @@ instructions et sa gestion interne du contexte restent hors de portée de l’ap
 Sous chaque réponse figurent les **input tok**, **output tok**, le débit global,
 les tokens de contexte réutilisés et le bouton Copier. Les tokens d’entrée
 comprennent le contexte complet et le template, pas uniquement le dernier
-message. L’onglet **Performances** rassemble les statistiques des huit dernières
+message. L’onglet **Optimisations** rassemble les statistiques des huit dernières
 réponses du fil, les comparaisons manuelles et les mesures de la machine.
 Aucune comparaison ne démarre automatiquement après une réponse.
 
@@ -806,7 +824,7 @@ identifiés. Ces noms de capteurs ne constituent pas une API publique Apple ;
 une valeur absente reste indisponible. Linux lit les capteurs CPU hwmon, en
 millidegrés Celsius ; Windows affiche indisponible sans fournisseur de capteurs.
 Aucune température n’est estimée à partir de la charge. Les sources, la méthode,
-l’heure et le périmètre figurent dans Performances. Le polling se suspend lorsque
+l’heure et le périmètre figurent dans Optimisations. Le polling se suspend lorsque
 la page est masquée ; si le serveur est hors ligne, les anciennes valeurs sont
 effacées de l’affichage en direct.
 Si un ancien serveur est encore lancé après une mise à jour, l’interface affiche

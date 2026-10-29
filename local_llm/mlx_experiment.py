@@ -34,6 +34,11 @@ def validate_model(path):
         config = json.loads((root / name).read_text())
         if not isinstance(config, dict):
             raise ValueError('Configuration MLX invalide.')
+        if name == 'config.json':
+            from .formats import directory_format, format_reason, UNSUPPORTED_FORMATS
+            artifact_format = directory_format(config)
+            if artifact_format in UNSUPPORTED_FORMATS:
+                raise ValueError(format_reason(artifact_format))
         from .dflash import is_draft
         if is_draft(config):
             raise ValueError('Ce checkpoint DFlash est un auxiliaire, pas un modèle de conversation autonome.')

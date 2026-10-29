@@ -43,7 +43,7 @@ local-llm = "local_llm.cli:main"
 include = ["local_llm*"]
 
 [tool.setuptools.package-data]
-local_llm = ["web/*.html"]
+local_llm = ["web/*.html", "web/*.css"]
 
 [tool.setuptools.dynamic]
 version = { attr = "local_llm.version.__version__" }

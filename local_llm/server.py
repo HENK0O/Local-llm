@@ -31,6 +31,7 @@ from .loading import load_runtime
 from .reference_runtime import ReferenceRuntime
 from .version import __version__
 from .dflash import draft_contract, is_draft, read_config
+from .formats import model_availability
 
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
@@ -246,12 +247,14 @@ class ChatService:
                     items[self.accelerator.model_id] = self.catalog[self.accelerator.model_id]
                 self.catalog = items
             models = []
+            runtime_info = self.accelerator.available().get('engines', {})
             for m in self.catalog.values():
                 data = m.to_dict()
                 engines = (self.accelerator.model_engines(m) if hasattr(self.accelerator, 'model_engines') else
                            ['llamacpp'] if Path(m.path).suffix.lower() == '.gguf' and m.architecture not in {None, 'dflash', 'dspark', 'bert', 'nomic-bert'} else [])
                 data['engines'] = engines
-                data['format'] = 'GGUF' if Path(m.path).suffix.lower() == '.gguf' else 'MLX' if engines else 'directory'
+                data['format'] = getattr(m, 'format', 'GGUF' if Path(m.path).suffix.lower() == '.gguf' else 'Safetensors')
+                data['availability'] = model_availability(m, engines, runtime_info)
                 data["accelerator_candidate"] = bool(engines)
                 models.append(data)
             return {"models": models, "accelerator": self.accelerator.describe(),
@@ -865,6 +868,12 @@ class LocalLLMRequestHandler(BaseHTTPRequestHandler):
                 self._send_bytes(200, WEB_INDEX.read_bytes(), "text/html; charset=utf-8")
             except OSError as exc:
                 self._error(500, f"web interface unavailable: {exc}")
+            return
+        if path == "/app.css":
+            try:
+                self._send_bytes(200, WEB_INDEX.with_name('app.css').read_bytes(), 'text/css; charset=utf-8')
+            except OSError as exc:
+                self._error(500, f"web stylesheet unavailable: {exc}")
             return
         if path == "/favicon.ico":
             self._send_bytes(204, b"", "image/x-icon")

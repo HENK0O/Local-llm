@@ -171,6 +171,14 @@ class HTTPServerTests(unittest.TestCase):
         connection.close()
         return response.status, response.getheader("Content-Type"), data
 
+    def test_stylesheet_is_served_without_exposing_other_files(self):
+        status, mime, body = self.request("GET", "/app.css")
+        self.assertEqual(status, 200)
+        self.assertEqual(mime, "text/css; charset=utf-8")
+        self.assertIn(b"--bg:", body)
+        status, _, _ = self.request("GET", "/../pyproject.toml")
+        self.assertEqual(status, 404)
+
     def test_system_readings_are_available_and_do_not_use_the_chat_pipeline(self):
         status, _, body = self.request("GET", "/v1/system")
         self.assertEqual(status, 200)
@@ -188,7 +196,7 @@ class HTTPServerTests(unittest.TestCase):
         status, content_type, body = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("text/html", content_type)
-        self.assertIn(b"Playground", body)
+        self.assertIn("local-llm · Discussions".encode("utf-8"), body)
         self.assertIn(b'id="modelName"', body)
         self.assertIn(b"/v1/chat/completions", body)
         status, _, body = self.request("GET", "/health")

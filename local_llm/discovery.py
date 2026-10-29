@@ -12,6 +12,7 @@ import re
 
 from .config import ModelConfig
 from .gguf import GGUFReader, model_config
+from .formats import directory_format, quantization_label, format_reason, UNSUPPORTED_FORMATS
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,8 @@ class DiscoveredModel:
     repository: Optional[str] = None
     lmstudio_key: Optional[str] = None
     mtp_heads: int = 0
+    format: str = 'unknown'
+    role: str = 'model'
 
     def to_dict(self):
         return asdict(self)
@@ -116,11 +119,14 @@ def inspect_model(path: Path, source: str = "local") -> DiscoveredModel:
     size = 0
     repository, studio_key = file_provenance(path)
     mtp_heads = 0
+    artifact_format, role = ('GGUF' if path.suffix.lower() == '.gguf' else 'unknown'), 'model'
     try:
         if path.is_file():
             size = path.stat().st_size
             reader = GGUFReader(path)
             architecture = reader.metadata.get("general.architecture")
+            if architecture in {'dflash', 'dspark', 'eagle', 'eagle3'}:
+                role = 'auxiliary'
             mtp_heads = mtp_head_count(reader)
             repository = repository or repository_url(reader.metadata.get("general.base_model.0.repo_url"))
             quantization = "/".join(sorted({t.type_name for t in reader.tensors.values()}))
@@ -143,12 +149,14 @@ def inspect_model(path: Path, source: str = "local") -> DiscoveredModel:
             architecture = raw.get("model_type", "llama")
             weights = list(path.glob("*.safetensors")) + list(path.glob("weights.npz"))
             size = sum(p.stat().st_size for p in weights)
-            quant = raw.get('quantization') or raw.get('quantization_config') or {}
-            if isinstance(quant, dict) and type(quant.get('bits')) is int:
-                quantization = str(quant['bits']) + '-bit MLX'
+            artifact_format = directory_format(raw, (path / 'weights.npz').is_file())
+            quantization = quantization_label(raw, artifact_format)
+            if artifact_format in UNSUPPORTED_FORMATS:
+                raise ValueError(format_reason(artifact_format))
             from .dflash import is_draft
             if is_draft(raw):
-                raise ValueError('Auxiliaire DFlash : à associer à son modèle cible dans Performances.')
+                role = 'auxiliary'
+                raise ValueError('Auxiliaire DFlash : à associer à son modèle cible dans Optimisations.')
             if raw.get('auto_map') or raw.get('model_file'):
                 raise ValueError('Code de modèle personnalisé non pris en charge')
             if architecture != "llama":
@@ -165,7 +173,7 @@ def inspect_model(path: Path, source: str = "local") -> DiscoveredModel:
         reason = str(exc)
     return DiscoveredModel(hashlib.sha256(str(path).encode()).hexdigest()[:20],
                            path.stem if path.is_file() else path.name, str(path), source,
-                           size, reason is None, reason, architecture, quantization, repository, studio_key, mtp_heads)
+                           size, reason is None, reason, architecture, quantization, repository, studio_key, mtp_heads, artifact_format, role)
 
 
 def discover_models(roots: Optional[Iterable[Path]] = None, limit: int = 256) -> List[DiscoveredModel]:

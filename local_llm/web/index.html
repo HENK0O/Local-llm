@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta
       name="description"
-      content="Inférence locale sur CPU et comparaison de performances mesurées."
+      content="Vos modèles locaux, vos conversations et un moteur adapté à votre machine."
     />
-    <title>local-llm · Playground</title>
+    <title>local-llm · Discussions</title>
     <script>
       try {
         document.documentElement.dataset.theme =
@@ -16,1289 +16,7 @@
         document.documentElement.dataset.theme = "dark";
       }
     </script>
-    <style>
-      :root {
-        color-scheme: light;
-        --bg: #fafaf8;
-        --panel: #f1f2ee;
-        --paper: #fff;
-        --ink: #202823;
-        --muted: #757d76;
-        --line: #e0e4dd;
-        --accent: #276347;
-        --soft: #e6eee7;
-        --red: #a34040;
-        --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
-      }
-      :root[data-theme="dark"] {
-        color-scheme: dark;
-        --bg: #111517;
-        --panel: #171d20;
-        --paper: #1b2326;
-        --ink: #e8eeeb;
-        --muted: #a0aea7;
-        --line: #303c37;
-        --accent: #8ee0b1;
-        --soft: #23392e;
-        --red: #f39a9a;
-      }
-      .rec-list {
-        display: grid;
-        gap: 12px;
-        margin: 18px 0;
-      }
-      .rec-card {
-        padding: 20px;
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        background: var(--paper);
-      }
-      .rec-card.preferred {
-        border-color: var(--accent);
-      }
-      .rec-card h3 {
-        margin: 10px 0;
-        font-size: 18px;
-      }
-      .rec-card a {
-        display: inline-block;
-        margin-top: 12px;
-        color: var(--accent);
-      }
-      .library-tools {
-        display: flex;
-        gap: 10px;
-        margin: 18px 0;
-      }
-      .library-tools input {
-        min-width: 0;
-        flex: 1;
-        background: var(--paper);
-        border: 1px solid var(--line);
-        padding: 12px;
-        border-radius: 8px;
-      }
-      .runtime-tag {
-        display: inline-block;
-        border: 1px solid var(--line);
-        color: var(--muted);
-        padding: 5px 8px;
-        border-radius: 6px;
-        font-size: 11px;
-      }
-      * {
-        box-sizing: border-box;
-      }
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--ink);
-        font:
-          14px -apple-system,
-          BlinkMacSystemFont,
-          "Segoe UI",
-          sans-serif;
-        overflow: hidden;
-      }
-      button,
-      input,
-      select,
-      textarea {
-        font: inherit;
-        color: inherit;
-      }
-      button,
-      select {
-        cursor: pointer;
-      }
-      button:disabled,
-      select:disabled {
-        cursor: default;
-        opacity: 0.5;
-      }
-      button {
-        border: 1px solid var(--line);
-        border-radius: 7px;
-        padding: 9px 12px;
-        background: var(--paper);
-      }
-      button:hover:not(:disabled) {
-        background: var(--soft);
-      }
-      button:focus-visible,
-      textarea:focus-visible,
-      select:focus-visible,
-      input:focus-visible {
-        outline: 2px solid var(--accent);
-        outline-offset: 3px;
-      }
-      .app {
-        display: grid;
-        grid-template-rows: minmax(0, 1fr);
-        height: 100dvh;
-        min-height: 0;
-        grid-template-columns: 246px minmax(0, 1fr);
-      }
-      aside {
-        background: var(--panel);
-        border-right: 1px solid var(--line);
-        display: flex;
-        flex-direction: column;
-        overflow-y: auto;
-        padding: 20px 16px 12px;
-        overflow: hidden;
-        min-height: 0;
-        gap: 16px;
-      }
-      .brand {
-        font-weight: 650;
-        letter-spacing: -1.1px;
-        display: flex;
-        align-items: center;
-        gap: 9px;
-        font-size: 20px;
-      }
-      .mark {
-        width: 26px;
-        height: 26px;
-        border: 1.5px solid var(--accent);
-        border-radius: 7px;
-        display: grid;
-        place-items: center;
-        color: var(--accent);
-        font: 17px var(--mono);
-      }
-      .brand span:last-child {
-        font-weight: 400;
-        color: var(--muted);
-      }
-      .eyebrow {
-        font: 10px var(--mono);
-        letter-spacing: 1.6px;
-        text-transform: uppercase;
-        color: var(--muted);
-      }
-      .side-heading {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 12px;
-      }
-      .link-button {
-        border: 0;
-        background: none;
-        padding: 0;
-        font-size: 12px;
-        color: var(--accent);
-      }
-      .control {
-        display: block;
-        margin-top: 15px;
-      }
-      .control-label {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        font-size: 12px;
-        margin-bottom: 9px;
-      }
-      .value {
-        font: 11px var(--mono);
-        color: var(--muted);
-      }
-      select {
-        border: 1px solid var(--line);
-        background: var(--paper);
-        border-radius: 6px;
-        padding: 10px 8px;
-        width: 100%;
-        font-size: 12px;
-        text-overflow: ellipsis;
-      }
-      input[type="range"] {
-        width: 100%;
-        accent-color: var(--accent);
-        height: 3px;
-      }
-      input[type="checkbox"] {
-        accent-color: var(--accent);
-      }
-      .hint {
-        font-size: 11px;
-        line-height: 1.7;
-        color: var(--muted);
-        margin: 9px 0 0;
-      }
-      .source-status {
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        font-size: 12px;
-        margin-top: 12px;
-      }
-      .dot {
-        height: 6px;
-        width: 6px;
-        border-radius: 50%;
-        background: var(--accent);
-        flex: none;
-      }
-      .dot.off {
-        background: #a6aaa3;
-      }
-      .side-bottom {
-        margin-top: auto;
-        padding-top: 16px;
-        color: var(--muted);
-        font: 10px var(--mono);
-        line-height: 1.8;
-        margin: 0;
-        padding: 0;
-        display: flex;
-        justify-content: space-between;
-        font-size: 9px;
-        flex: none;
-      }
-      .side-bottom a {
-        color: inherit;
-        text-decoration: none;
-      }
-      .main {
-        min-width: 0;
-        display: flex;
-        flex-direction: column;
-        position: relative;
-        height: 100%;
-        min-height: 0;
-      }
-      header {
-        flex: none;
-        border-bottom: 1px solid var(--line);
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        height: 76px;
-        padding: 12px 24px;
-        gap: 12px;
-      }
-      .header-model {
-        color: var(--muted);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        max-width: 460px;
-        margin-top: 5px;
-        font-size: 10px;
-      }
-      .header-right {
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-      }
-      .scroll {
-        overflow-y: auto;
-        flex: 1;
-        padding: 0 30px;
-        scroll-behavior: smooth;
-      }
-      .conversation {
-        width: min(780px, 100%);
-        margin: auto;
-        padding: 38px 0;
-      }
-      .empty {
-        padding: 15vh 0 60px;
-        max-width: 600px;
-        margin: auto;
-      }
-      .empty .eyebrow {
-        color: var(--accent);
-      }
-      h1 {
-        font-size: clamp(28px, 3.1vw, 44px);
-        line-height: 1.17;
-        letter-spacing: -1.7px;
-        font-weight: 500;
-        margin: 18px 0 16px;
-      }
-      h1 span {
-        color: var(--muted);
-      }
-      .intro {
-        color: var(--muted);
-        font-size: 14px;
-        line-height: 1.8;
-        max-width: 440px;
-      }
-      .suggestions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        margin-top: 30px;
-      }
-      .suggestions button {
-        font-size: 12px;
-        background: transparent;
-        padding: 11px 13px;
-      }
-      .empty-note {
-        margin-top: 32px;
-        display: flex;
-        gap: 8px;
-        color: var(--muted);
-        font: 10px var(--mono);
-      }
-      .message {
-        margin-bottom: 32px;
-      }
-      .message-label {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 11px;
-        font-weight: 600;
-        margin-bottom: 13px;
-      }
-      .mini-mark {
-        color: var(--accent);
-        font: 12px var(--mono);
-      }
-      .message.user {
-        margin-left: 18%;
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 17px 19px;
-      }
-      .message.user .message-label {
-        color: var(--muted);
-      }
-      .content {
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        line-height: 1.85;
-        font-size: 14px;
-      }
-      .pending:empty:after {
-        content: "●";
-        font-size: 10px;
-        color: var(--accent);
-        animation: pulse 1s infinite;
-      }
-      @keyframes pulse {
-        50% {
-          opacity: 0.3;
-        }
-      }
-      .compare {
-        margin-top: 15px;
-        padding: 17px 19px;
-        border: 1px solid var(--line);
-        border-radius: 9px;
-        background: var(--paper);
-      }
-      .compare .hint {
-        margin-top: 12px;
-        line-height: 1.6;
-      }
-      #persistentCacheControls summary {
-        font-size: 13px;
-        padding: 8px 0;
-      }
-      #persistentCacheControls label {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin: 12px 0;
-      }
-      .benchmark-table-wrap {
-        overflow-x: auto;
-      }
-      .benchmark-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.82rem;
-      }
-      .benchmark-table th,
-      .benchmark-table td {
-        padding: 0.7rem;
-        text-align: left;
-        border-bottom: 1px solid var(--line);
-        white-space: nowrap;
-      }
-      .benchmark-table caption {
-        text-align: left;
-        padding: 0.7rem 0;
-      }
-      details {
-        font-size: 10px;
-        color: var(--muted);
-        margin-top: 10px;
-      }
-      details summary {
-        cursor: pointer;
-      }
-      details p {
-        line-height: 1.7;
-      }
-      .bottom {
-        flex: none;
-        padding: 15px 30px 19px;
-        background: var(--bg);
-      }
-      .composer {
-        max-width: 780px;
-        margin: auto;
-        background: var(--paper);
-        border: 1px solid #ccd3c8;
-        border-radius: 12px;
-        padding: 15px 16px 12px;
-        box-shadow: 0 3px 16px #20282305;
-      }
-      textarea {
-        resize: none;
-        border: 0;
-        outline: none !important;
-        background: transparent;
-        width: 100%;
-        min-height: 48px;
-        max-height: 160px;
-        line-height: 1.6;
-        font-size: 14px;
-      }
-      textarea::placeholder {
-        color: #92998f;
-      }
-      .composer-bar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-top: 8px;
-      }
-      .composer-info {
-        font: 10px var(--mono);
-        color: var(--muted);
-      }
-      .send {
-        background: var(--accent);
-        color: white;
-        border-color: var(--accent);
-        font-size: 12px;
-        padding: 9px 14px;
-      }
-      .send:hover:not(:disabled) {
-        background: #1d5038;
-      }
-      :root[data-theme="dark"] .send {
-        color: var(--bg);
-      }
-      :root[data-theme="dark"] .send:hover:not(:disabled) {
-        background: #b4efcd;
-      }
-      :root[data-theme="dark"] .stop {
-        color: var(--red);
-      }
-      .stop {
-        color: var(--red);
-        background: var(--paper);
-        border-color: var(--line);
-      }
-      .footer {
-        max-width: 780px;
-        margin: 11px auto 0;
-        display: flex;
-        justify-content: space-between;
-        font-size: 10px;
-        color: var(--muted);
-        gap: 10px;
-      }
-      .error {
-        color: var(--red);
-        font-size: 12px;
-        line-height: 1.6;
-      }
-      .notice {
-        min-height: 18px;
-        margin: 0 auto 8px;
-        max-width: 780px;
-        font-size: 12px;
-        color: var(--muted);
-      }
-      dialog {
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        max-width: 740px;
-        width: calc(100% - 32px);
-        padding: 25px;
-        background: var(--bg);
-        color: var(--ink);
-        max-height: 85dvh;
-        overflow-y: auto;
-      }
-      dialog::backdrop {
-        background: #1c28244d;
-      }
-      .dialog-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-      }
-      .dialog-head h2 {
-        font-size: 20px;
-        font-weight: 500;
-        margin: 0;
-      }
-      #contextDialog {
-        padding: 0;
-        overflow: hidden;
-        display: none;
-        flex-direction: column;
-      }
-      #contextDialog[open] {
-        display: flex;
-      }
-      #contextDialog .dialog-head,
-      .context-controls {
-        padding: 20px 24px;
-        flex: none;
-      }
-      .context-controls {
-        padding-top: 0;
-        padding-bottom: 14px;
-        border-bottom: 1px solid var(--line);
-      }
-      .context-controls select {
-        width: 100%;
-      }
-      .context-controls .hint {
-        margin-bottom: 0;
-      }
-      .context-body {
-        overflow-y: auto;
-        padding: 20px 24px;
-        min-height: 0;
-      }
-      .context-summary {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px 20px;
-        color: var(--muted);
-        font-size: 12px;
-        margin-bottom: 20px;
-      }
-      .context-entry {
-        margin: 0 0 20px;
-      }
-      .context-entry h3 {
-        color: var(--muted);
-        font-size: 11px;
-        font-weight: 500;
-        margin: 0 0 8px;
-      }
-      .context-entry pre,
-      #contextPrompt {
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        font: 12px/1.7 var(--mono);
-        margin: 0;
-      }
-      #contextRaw {
-        border-top: 1px solid var(--line);
-        padding-top: 16px;
-      }
-      #contextRaw summary {
-        cursor: pointer;
-        font-size: 12px;
-      }
-      #contextPrompt {
-        background: var(--paper);
-        padding: 16px;
-        border-radius: 8px;
-      }
-      .model-list {
-        margin: 20px 0;
-        max-height: 50vh;
-        overflow-y: auto;
-      }
-      .model-row {
-        padding: 14px 0;
-        border-bottom: 1px solid var(--line);
-        display: flex;
-        gap: 15px;
-        justify-content: space-between;
-        align-items: center;
-      }
-      .model-row strong {
-        font-size: 12px;
-        font-weight: 550;
-        overflow-wrap: anywhere;
-      }
-      .model-row small {
-        display: block;
-        color: var(--muted);
-        font-size: 11px;
-        margin-top: 6px;
-        line-height: 1.6;
-      }
-      .model-row .error {
-        font-size: 11px;
-      }
-      .model-row button {
-        flex: none;
-        font-size: 11px;
-      }
-      .library-roots {
-        font: 10px var(--mono);
-        color: var(--muted);
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        line-height: 1.6;
-      }
-      .hidden {
-        display: none !important;
-      }
-      .workspace-tabs {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 6px;
-        margin: 0;
-        flex: none;
-      }
-      .workspace-tabs button {
-        border: 0;
-        background: transparent;
-        padding: 9px 4px;
-        font-size: 12px;
-      }
-      .workspace-tabs button[aria-selected="true"] {
-        background: var(--soft);
-        color: var(--accent);
-      }
-      .workspace-pane {
-        flex: 1;
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-      }
-      .workspace-pane.hidden {
-        display: none;
-      }
-      .performance-layout {
-        width: min(820px, 100%);
-        margin: 0 auto;
-        padding: 32px;
-      }
-      #performanceView {
-        overflow-y: auto;
-      }
-      .performance-layout h1 {
-        font-size: 28px;
-        margin: 0 0 12px;
-      }
-      .performance-layout h2 {
-        font-size: 17px;
-        margin: 0 0 12px;
-        font-weight: 550;
-      }
-      .performance-card {
-        padding: 22px;
-        margin-top: 20px;
-        background: var(--paper);
-        border: 1px solid var(--line);
-        border-radius: 12px;
-      }
-      #optimizeModel {
-        margin: 10px 8px 8px 0;
-        padding: 11px 18px;
-        background: var(--accent);
-        color: var(--bg);
-        border-radius: 8px;
-        font-weight: 600;
-      }
-      #optimizationProgress {
-        display: block;
-        width: 100%;
-        margin-top: 16px;
-        accent-color: var(--accent);
-      }
-      #optimizationProgress.hidden {
-        display: none;
-      }
-      .optimization-gain strong {
-        color: var(--accent);
-      }
-      .performance-metrics {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 15px;
-        margin: 20px 0;
-      }
-      .performance-metrics span {
-        display: block;
-        font-size: 12px;
-        color: var(--muted);
-        margin-bottom: 8px;
-      }
-      .performance-metrics strong {
-        overflow-wrap: anywhere;
-        font: 21px var(--mono);
-        font-weight: 550;
-      }
-      .performance-layout label,
-      .setting-label {
-        display: block;
-        margin: 20px 0 8px;
-        font-size: 13px;
-      }
-      .connection-guide {
-        margin-top: 12px;
-        font-size: 12px;
-        line-height: 1.7;
-      }
-      .connection-guide summary {
-        color: var(--accent);
-        font-size: 12px;
-      }
-      .connection-guide ol {
-        padding-left: 18px;
-      }
-      .connection-guide li {
-        margin-bottom: 10px;
-      }
-      .connection-guide p {
-        overflow-wrap: anywhere;
-      }
-      .connection-guide a {
-        color: var(--accent);
-      }
-      .machine-reading {
-        display: flex;
-        justify-content: space-between;
-        gap: 8px;
-        margin: 4px 0;
-        line-height: 18px;
-        font-size: 10px;
-      }
-      .machine-reading strong {
-        font-weight: 550;
-      }
-      progress {
-        width: 100%;
-        accent-color: var(--accent);
-        display: block;
-        height: 3px;
-        margin: 4px 0 8px;
-      }
-      .reply-footer {
-        display: flex;
-        align-items: center;
-        margin-top: 14px;
-        color: var(--muted);
-        font-size: 11px;
-        justify-content: flex-start;
-        flex-wrap: wrap;
-        gap: 8px 14px;
-      }
-      .reply-footer button {
-        padding: 4px 8px;
-        background: none;
-        font-size: 11px;
-      }
-      #comparisonResult .compare {
-        margin-top: 22px;
-        background: var(--bg);
-      }
-      #settings input[type="number"] {
-        background: var(--paper);
-        border: 1px solid var(--line);
-        padding: 10px;
-        width: 100%;
-        border-radius: 7px;
-      }
-      #responsePerformance details p {
-        line-height: 1.6;
-      }
-      /* Fixed sidebar: the chat list is paginated; this column never scrolls. */
-      .brand-row {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex: none;
-      }
-      .new-chat {
-        width: 100%;
-        text-align: left;
-        background: var(--soft);
-        color: var(--accent);
-        padding: 10px;
-        font-size: 12px;
-      }
-      .chats-section {
-        flex: 1;
-        min-height: 80px;
-        display: flex;
-        flex-direction: column;
-      }
-      .chats-section .side-heading {
-        margin-bottom: 8px;
-        flex: none;
-      }
-      .chat-list {
-        flex: 1;
-        min-height: 0;
-        overflow: hidden;
-      }
-      .chat-row {
-        display: flex;
-        align-items: center;
-        height: 43px;
-        gap: 4px;
-        border-radius: 7px;
-        margin-bottom: 2px;
-      }
-      .chat-row.current {
-        background: var(--soft);
-      }
-      .chat-row button {
-        border: 0;
-        background: transparent;
-        text-align: left;
-        padding: 10px 8px;
-        font-size: 12px;
-      }
-      .chat-row .chat-select {
-        flex: 1;
-        min-width: 0;
-        overflow: hidden;
-        white-space: nowrap;
-        text-overflow: ellipsis;
-      }
-      .chat-row.current .chat-select {
-        color: var(--accent);
-      }
-      .chat-row .chat-menu {
-        padding: 7px;
-        flex: none;
-      }
-      .chat-pages {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        height: 28px;
-        flex: none;
-        color: var(--muted);
-        font-size: 10px;
-      }
-      .icon-button {
-        width: 32px;
-        height: 32px;
-        display: inline-grid;
-        place-items: center;
-        padding: 0;
-        background: none;
-        border-color: transparent;
-        flex: none;
-        font-size: 16px;
-      }
-      .icon-button.context-button {
-        width: auto;
-        display: inline-flex;
-        gap: 6px;
-        padding: 0 8px;
-        font-size: 12px;
-      }
-      @media (max-width: 850px) {
-        .icon-button.context-button {
-          width: 32px;
-          padding: 0;
-        }
-        .context-label {
-          display: none;
-        }
-      }
-      .sidebar-status {
-        border-top: 1px solid var(--line);
-        padding-top: 12px;
-        flex: none;
-      }
-      .lm-status-line {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 4px;
-        font-size: 11px;
-        margin-top: 10px;
-      }
-      .lm-status-line > span {
-        display: flex;
-        gap: 6px;
-        align-items: center;
-        min-width: 0;
-      }
-      .lm-status-line .icon-button {
-        width: 24px;
-        height: 24px;
-      }
-      #sidebarConnectionHelp {
-        font-size: 10px;
-        margin: 4px 0 2px;
-      }
-      .model-top {
-        min-width: 0;
-        flex: 1;
-      }
-      .model-toolbar {
-        display: flex;
-        gap: 8px;
-        max-width: 460px;
-        align-items: center;
-      }
-      .model-choice {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex: 1;
-        padding: 8px 12px;
-        min-width: 0;
-        text-align: left;
-        border-radius: 10px;
-      }
-      .model-choice:disabled {
-        opacity: 1;
-      }
-      .model-choice-copy {
-        flex: 1;
-        min-width: 0;
-      }
-      .model-choice-name {
-        display: block;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: 12px;
-        font-weight: 550;
-      }
-      .model-choice-meta {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        color: var(--muted);
-        font-size: 10px;
-        margin-top: 4px;
-      }
-      .model-choice.generating .model-choice-meta {
-        color: var(--accent);
-      }
-      .model-choice.generating .dot {
-        box-shadow: 0 0 7px var(--accent);
-      }
-      #modelPicker {
-        inset: auto;
-        margin: 0;
-        width: min(420px, calc(100vw - 24px));
-        padding: 16px;
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        color: var(--ink);
-        background: var(--paper);
-        box-shadow: 0 16px 48px #0005;
-      }
-      #modelPicker h2 {
-        margin: 0;
-        font-size: 14px;
-        font-weight: 550;
-      }
-      #pickerSearch {
-        width: 100%;
-        margin: 14px 0 4px;
-        padding: 10px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: var(--bg);
-      }
-      #pickerList {
-        overflow-y: auto;
-        max-height: min(360px, 45dvh);
-      }
-      .picker-option {
-        width: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 12px;
-        border: 0;
-        background: transparent;
-        text-align: left;
-      }
-      .picker-option.current {
-        background: var(--soft);
-      }
-      .picker-option strong,
-      .picker-option small {
-        display: block;
-        overflow-wrap: anywhere;
-      }
-      .picker-option strong {
-        font-size: 12px;
-        font-weight: 500;
-      }
-      .picker-option small {
-        margin-top: 4px;
-        font-size: 10px;
-        color: var(--muted);
-      }
-      .reasoning {
-        margin: 14px 0;
-        color: var(--muted);
-        font-size: 12px;
-      }
-      .reasoning summary {
-        cursor: pointer;
-      }
-      .reasoning pre {
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        max-height: 240px;
-        overflow-y: auto;
-        font: 12px/1.6 var(--mono);
-        padding: 12px;
-        border-left: 2px solid var(--line);
-      }
-      .server-update,
-      .storage-notice {
-        flex: none;
-        padding: 9px 24px;
-        border-bottom: 1px solid var(--line);
-        background: var(--soft);
-        font-size: 12px;
-        line-height: 1.6;
-        color: var(--accent);
-      }
-      .storage-notice {
-        color: var(--muted);
-      }
-      .reply-footer .copy-button {
-        margin-left: auto;
-      }
-      .reply-stat {
-        color: var(--muted);
-        font-size: 10px;
-        white-space: nowrap;
-      }
-      .reply-stat strong {
-        font-weight: 500;
-        color: var(--ink);
-      }
-      .token-reuse {
-        position: relative;
-        color: var(--muted);
-        font: 11px var(--mono);
-        border: 0;
-        padding: 0 !important;
-        outline-offset: 4px;
-      }
-      .token-reuse .tooltip {
-        display: none;
-        position: absolute;
-        bottom: calc(100% + 10px);
-        left: 50%;
-        transform: translateX(-50%);
-        width: 260px;
-        max-width: 70vw;
-        background: var(--paper);
-        border: 1px solid var(--line);
-        box-shadow: 0 8px 24px #0003;
-        padding: 12px;
-        border-radius: 8px;
-        color: var(--ink);
-        font:
-          11px/1.6 -apple-system,
-          sans-serif;
-        text-align: left;
-        white-space: normal;
-        z-index: 5;
-      }
-      .token-reuse:hover .tooltip,
-      .token-reuse:focus .tooltip {
-        display: block;
-      }
-      .dialog-actions {
-        display: flex;
-        gap: 10px;
-        margin-top: 20px;
-      }
-      #chatTitle {
-        width: 100%;
-        padding: 12px;
-        background: var(--paper);
-        border: 1px solid var(--line);
-        border-radius: 7px;
-      }
-      #connectionDialog .connection-guide {
-        margin: 0;
-      }
-      #connectionDialog .connection-guide > summary {
-        display: none;
-      }
-      .mobile-only,
-      .sidebar-backdrop {
-        display: none;
-      }
-      @media (max-width: 850px) {
-        .empty {
-          padding-top: 10vh;
-        }
-        .scroll,
-        .bottom {
-          padding-left: 22px;
-          padding-right: 22px;
-        }
-        .app {
-          grid-template-columns: 218px minmax(0, 1fr);
-        }
-        aside {
-          padding: 16px 12px 10px;
-        }
-      }
-      @media (max-width: 760px) {
-        .performance-layout {
-          padding: 22px 18px;
-        }
-        .performance-card {
-          padding: 16px;
-        }
-        .performance-metrics {
-          gap: 10px;
-        }
-        .performance-metrics strong {
-          overflow-wrap: anywhere;
-          font-size: 16px;
-        }
-      }
-      @media (max-width: 680px) {
-        .app {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr);
-          height: 100dvh;
-          min-height: 0;
-        }
-        .main {
-          height: 100%;
-          min-height: 0;
-        }
-        aside {
-          position: fixed;
-          inset: 0 auto 0 0;
-          width: min(270px, 85vw);
-          height: 100dvh;
-          z-index: 30;
-          display: flex;
-          padding: 20px 16px 12px;
-          transform: translateX(-100%);
-          border-right: 1px solid var(--line);
-          border-bottom: 0;
-        }
-        aside.open {
-          transform: translateX(0);
-        }
-        .mobile-only {
-          display: inline-grid;
-        }
-        .sidebar-backdrop {
-          display: block;
-          position: fixed;
-          inset: 0;
-          background: #0008;
-          border: 0;
-          border-radius: 0;
-          z-index: 25;
-          width: 100%;
-          height: 100%;
-        }
-        header {
-          height: 78px;
-          padding: 10px 12px;
-          gap: 5px;
-        }
-        .model-toolbar {
-          gap: 2px;
-        }
-        .model-choice {
-          padding: 8px 6px;
-        }
-        .model-choice-name {
-          font-size: 11px;
-        }
-        .model-toolbar .icon-button {
-          width: 28px;
-        }
-        .header-right {
-          gap: 0;
-          flex-wrap: nowrap;
-        }
-        .header-right .icon-button {
-          width: 28px;
-        }
-        .header-model {
-          max-width: 220px;
-        }
-        .performance-layout {
-          padding: 22px 18px;
-        }
-        .scroll,
-        .bottom {
-          padding-left: 18px;
-          padding-right: 18px;
-        }
-        .empty {
-          padding-top: 5vh;
-        }
-        .reply-footer {
-          gap: 8px 10px;
-        }
-        .token-reuse .tooltip {
-          left: auto;
-          right: -20px;
-          transform: none;
-        }
-      }
-      @media (max-width: 650px) {
-        .header-right {
-          justify-content: flex-end;
-        }
-      }
-      @media (max-width: 620px) {
-        .source-status {
-          display: none;
-        }
-        .side-heading {
-          margin-bottom: 8px;
-        }
-        .conversation {
-          padding-top: 22px;
-        }
-        .message.user {
-          margin-left: 8%;
-        }
-        .footer span:last-child {
-          display: none;
-        }
-      }
-      @media (max-height: 600px) {
-        aside {
-          gap: 9px;
-          padding-top: 12px;
-        }
-        .sidebar-status {
-          padding-top: 8px;
-        }
-        .lm-status-line {
-          margin-top: 4px;
-        }
-      }
-    </style>
+    <link rel="stylesheet" href="app.css" />
   </head>
   <body>
     <div class="app">
@@ -1317,10 +35,79 @@
             ×
           </button>
         </div>
-        <button id="newChat" class="new-chat">＋ Nouvelle conversation</button>
+        <nav
+          class="workspace-tabs"
+          role="tablist"
+          aria-label="Espace de travail"
+          aria-orientation="vertical"
+        >
+          <button
+            id="chatTab"
+            role="tab"
+            aria-selected="true"
+            aria-controls="chatView"
+            tabindex="0"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path
+                d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2V11.5A8.5 8.5 0 0 1 10.5 3h2a8.5 8.5 0 0 1 8.5 8.5Z"
+              />
+              <path d="M7 9h10M7 13h7" /></svg
+            ><span>Discussions</span></button
+          ><button
+            id="libraryTab"
+            role="tab"
+            aria-selected="false"
+            aria-controls="libraryView"
+            tabindex="-1"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="4" y="3" width="16" height="7" rx="2" />
+              <rect x="4" y="14" width="16" height="7" rx="2" />
+              <path d="M8 6.5h.01M8 17.5h.01" /></svg
+            ><span>Modèles</span></button
+          ><button
+            id="performanceTab"
+            role="tab"
+            aria-selected="false"
+            aria-controls="performanceView"
+            tabindex="-1"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.6"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m13 2-9 12h7l-1 8 10-13h-8l1-7Z" /></svg
+            ><span>Optimisations</span>
+          </button>
+        </nav>
+        <button id="newChat" class="new-chat">
+          <span>＋ Nouvelle discussion</span><kbd>⌘ N</kbd>
+        </button>
         <section class="chats-section" aria-label="Vos conversations">
           <div class="side-heading">
-            <span class="eyebrow">Conversations</span
+            <span class="eyebrow">Récentes</span
             ><button
               id="showArchives"
               class="icon-button"
@@ -1330,6 +117,13 @@
               ▣
             </button>
           </div>
+          <input
+            id="chatSearch"
+            class="chat-search"
+            type="search"
+            placeholder="Rechercher une discussion"
+            aria-label="Rechercher une discussion"
+          />
           <div id="chatList" class="chat-list"></div>
           <div class="chat-pages">
             <button
@@ -1348,28 +142,7 @@
             </button>
           </div>
         </section>
-        <nav
-          class="workspace-tabs"
-          role="tablist"
-          aria-label="Espace de travail"
-        >
-          <button
-            id="chatTab"
-            role="tab"
-            aria-selected="true"
-            aria-controls="chatView"
-          >
-            Discussion
-          </button>
-          <button
-            id="performanceTab"
-            role="tab"
-            aria-selected="false"
-            aria-controls="performanceView"
-          >
-            Performances
-          </button>
-        </nav>
+
         <div class="sidebar-status">
           <div class="machine-reading">
             <span>RAM utilisée</span><strong id="ramLive">Lecture…</strong>
@@ -1409,6 +182,7 @@
           >
             ☰
           </button>
+          <span id="workspaceName" class="workspace-name">Discussions</span>
           <div class="model-top">
             <div class="model-toolbar">
               <button
@@ -1514,33 +288,39 @@
           <div class="scroll" id="scroll">
             <div class="conversation" id="conversation">
               <div class="empty" id="empty">
-                <div class="eyebrow">L’inférence, chez vous</div>
+                <div class="welcome-mark" aria-hidden="true">↗</div>
+                <div class="eyebrow">Votre espace d’inférence</div>
                 <h1>
-                  Trouvez le bon réglage.<br /><span>Pour votre modèle.</span>
+                  Votre IA, simplement.<br /><span>Sur votre machine.</span>
                 </h1>
                 <p class="intro">
-                  Chargez un modèle local, puis comparez ses réglages dans
-                  Performances. L’app applique une optimisation seulement si les
-                  essais valident un gain ; sinon elle conserve le standard.
+                  Choisissez un modèle local et lancez la conversation.
+                  Retrouvez vos discussions ici, et les réglages du moteur dans
+                  Optimisations.
                 </p>
+                <div class="empty-actions">
+                  <button id="welcomeChoose" class="primary">
+                    Choisir un modèle</button
+                  ><button id="welcomeAdvice">Un modèle pour mon Mac ?</button>
+                </div>
                 <div class="suggestions">
                   <button
                     data-prompt="Explique simplement comment fonctionne un modèle de langage."
                   >
-                    Comprendre les modèles ↗</button
+                    <strong>Comprendre</strong>Éclaircir une idée ↗</button
                   ><button
                     data-prompt="Écris une courte histoire qui commence dans une gare déserte."
                   >
-                    Écrire une histoire ↗</button
+                    <strong>Écrire</strong>Partir d’une page blanche ↗</button
                   ><button
                     data-prompt="Donne-moi trois idées pour apprendre Python."
                   >
-                    Trouver des idées ↗
+                    <strong>Créer</strong>Explorer une nouvelle piste ↗
                   </button>
                 </div>
                 <div class="empty-note">
-                  <span class="dot"></span>Conversations privées · sur cet
-                  appareil
+                  <span class="dot"></span>Vos conversations restent sur cet
+                  appareil.
                 </div>
               </div>
             </div>
@@ -1574,44 +354,79 @@
               </div>
             </form>
             <div class="footer">
-              <span>Mesures disponibles dans Performances.</span
+              <span>Mesures détaillées dans Optimisations.</span
               ><span>Entrée pour envoyer · ⇧ Entrée pour une ligne</span>
             </div>
           </div>
         </section>
         <section
-          id="performanceView"
+          id="libraryView"
           class="workspace-pane hidden"
           role="tabpanel"
-          aria-labelledby="performanceTab"
+          aria-labelledby="libraryTab"
         >
-          <div class="performance-layout">
-            <h1>Performances</h1>
-            <p class="intro">
-              Trouver la meilleure configuration pour votre modèle et votre
-              machine, puis vérifier son gain.
-            </p>
-            <div id="engineControls" class="performance-card">
-              <h2>Le moteur de ce modèle</h2>
-              <p id="engineRuntimeStatus" class="hint" role="status">
-                Choisissez un modèle local.
-              </p>
-              <label for="engineChoice">Exécution</label>
-              <select id="engineChoice">
-                <option value="auto">
-                  Automatique · profil validé, sinon référence
-                </option>
-              </select>
-              <button id="applyEngine" disabled>Appliquer ce moteur</button>
-              <p class="hint">
-                Les poids restent en place et le modèle reste chargé en mémoire
-                jusqu’à son déchargement. Automatique utilise la référence tant
-                qu’un meilleur profil n’a pas été vérifié sur cette machine.
-              </p>
-              <p id="engineCredit" class="hint"></p>
+          <div id="library" class="library-layout">
+            <div class="page-head">
+              <div>
+                <div class="eyebrow">Votre bibliothèque locale</div>
+                <h1>Vos modèles</h1>
+                <p class="intro">
+                  Ce qui est installé, ce qui peut tourner, et pourquoi.
+                </p>
+              </div>
+              <div class="page-actions">
+                <button id="scanModels">↻ Actualiser</button
+                ><button id="addCheckpoint" class="primary">＋ Ajouter</button
+                ><button
+                  id="closeLibrary"
+                  class="icon-button"
+                  aria-label="Retour à la discussion"
+                >
+                  ×
+                </button>
+              </div>
             </div>
-            <div class="performance-card">
-              <h2>Une variante mieux adaptée ?</h2>
+
+            <div class="library-tools library-toolbar">
+              <input
+                id="modelSearch"
+                type="search"
+                placeholder="Chercher un modèle…"
+                aria-label="Chercher un modèle"
+              /><select id="modelFilter" aria-label="Filtrer les modèles">
+                <option value="all">Tous les modèles</option>
+                <option value="available">À charger</option>
+                <option value="blocked">Non disponibles</option>
+                <option value="auxiliary">Auxiliaires</option>
+              </select>
+            </div>
+            <p class="hint" id="libraryConnection">
+              Les modèles de LM Studio sont lus directement depuis sa
+              bibliothèque. Son serveur n’est pas nécessaire ; aucun fichier
+              n’est copié.
+            </p>
+            <div class="library-summary">
+              <span><strong id="libraryCount">0</strong> modèles détectés</span
+              ><span><strong id="libraryReadyCount">0</strong> à charger</span
+              ><span
+                ><strong id="libraryBlockedCount">0</strong> non
+                disponibles</span
+              >
+            </div>
+            <p class="hidden" id="modelHint"></p>
+
+            <div id="libraryActive" class="library-active">
+              <div class="source-status">
+                <span id="engineDot" class="dot off"></span
+                ><span id="engineStatus">Connexion au moteur…</span>
+              </div>
+              <button id="unloadModel" disabled>
+                Décharger le modèle local
+              </button>
+            </div>
+            <div id="modelList" class="model-list"></div>
+            <details class="performance-card">
+              <summary>Trouver une variante mieux adaptée</summary>
               <p id="modelAdviceStatus" class="hint" role="status">
                 Choisissez un checkpoint local pour vérifier ses variantes.
               </p>
@@ -1624,8 +439,109 @@
                 <summary>Comment ces suggestions sont vérifiées</summary>
                 <p id="modelAdviceMethod" class="hint"></p>
               </details>
+            </details>
+
+            <details id="importModel" class="performance-card">
+              <summary>Ajouter un modèle déjà téléchargé</summary>
+              <label for="checkpointPath">Ajouter un checkpoint existant</label>
+              <div class="library-tools">
+                <input
+                  id="checkpointPath"
+                  type="text"
+                  placeholder="/chemin/vers/modele.gguf ou dossier"
+                  autocomplete="off"
+                />
+                <button id="importCheckpoint">Ajouter sans copier</button>
+              </div>
+              <p id="importStatus" class="hint" role="status">
+                Le fichier reste à son emplacement. Seul son chemin est
+                enregistré sur ce PC.
+              </p>
+            </details>
+            <details id="optionalLM">
+              <summary>Connexion LM Studio optionnelle</summary>
+              <p class="hint">
+                Pour comparer les moteurs ou utiliser un modèle via LM Studio.
+                La lecture directe des checkpoints fonctionne sans cette
+                connexion. Déchargez le modèle dans LM Studio pour éviter que
+                les deux moteurs occupent la RAM en même temps.
+              </p>
+              <div class="lm-status-line">
+                <span
+                  ><span id="lmDot" class="dot off"></span
+                  ><span id="lmStatus"
+                    >LM Studio · connexion optionnelle</span
+                  ></span
+                ><button
+                  id="lmRefresh"
+                  class="icon-button"
+                  aria-label="Actualiser LM Studio"
+                  title="Actualiser LM Studio"
+                >
+                  ↻
+                </button>
+              </div>
+              <button id="sidebarConnectionHelp" class="link-button">
+                Comment connecter LM Studio ?
+              </button>
+            </details>
+            <details>
+              <summary>Emplacements recherchés</summary>
+              <div class="library-roots" id="libraryRoots"></div>
+            </details>
+            <details class="format-guide">
+              <summary>Quel format choisir pour ce moteur ?</summary>
+              <div class="format-grid">
+                <div>
+                  <strong>MLX / Safetensors</strong>
+                  <p>
+                    Pour Apple Silicon avec MLX. Safetensors est un conteneur :
+                    sa quantification doit aussi être compatible.
+                  </p>
+                </div>
+                <div>
+                  <strong>GGUF</strong>
+                  <p>
+                    Pour llama.cpp. L’architecture du modèle et la mémoire
+                    disponible restent à vérifier.
+                  </p>
+                </div>
+                <div>
+                  <strong>EXL3 / EXL2</strong>
+                  <p>
+                    Ces formats nécessitent un runtime dédié, non intégré ici.
+                    EXL3 peut fonctionner sur Mac avec
+                    <a
+                      href="https://github.com/0xZKnw/mlxl3"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      >MLXL3</a
+                    >. Pour notre moteur actuel, choisissez une variante MLX ou
+                    GGUF compatible.
+                  </p>
+                </div>
+              </div>
+            </details>
+          </div>
+        </section>
+        <section
+          id="performanceView"
+          class="workspace-pane hidden"
+          role="tabpanel"
+          aria-labelledby="performanceTab"
+        >
+          <div class="performance-layout">
+            <div class="page-head">
+              <div>
+                <div class="eyebrow">Le moteur, sous votre contrôle</div>
+                <h1>Optimisations</h1>
+                <p class="intro">
+                  Les accélérations et les réglages de votre modèle, au même
+                  endroit. Un gain n’est annoncé qu’après vérification.
+                </p>
+              </div>
             </div>
-            <div class="performance-card">
+            <div class="performance-card optimization-lead">
               <h2 id="optimizationTitle">Optimiser ce modèle</h2>
               <p id="optimizationStatus" class="hint" role="status">
                 Choisissez un modèle dans le moteur direct pour le calibrer.
@@ -1639,15 +555,18 @@
                     Automatique · chercher un auxiliaire compatible
                   </option>
                 </select>
-                <p id="draftHint" class="hint">
-                  Un auxiliaire classique doit avoir exactement le même
-                  vocabulaire. Un auxiliaire spécialisé doit être déclaré pour
-                  les poids précis de la cible. L’app teste plusieurs méthodes
-                  et profondeurs de spéculation, puis vérifie chaque profil sur
-                  des prompts différents. Les têtes MTP intégrées sont aussi
-                  testées si elles sont présentes et prises en charge. Aucun
-                  modèle n’est téléchargé.
-                </p>
+                <details>
+                  <summary>Comment choisir un auxiliaire ?</summary>
+                  <p id="draftHint" class="hint">
+                    Un auxiliaire classique doit avoir exactement le même
+                    vocabulaire. Un auxiliaire spécialisé doit être déclaré pour
+                    les poids précis de la cible. L’app teste plusieurs méthodes
+                    et profondeurs de spéculation, puis vérifie chaque profil
+                    sur des prompts différents. Les têtes MTP intégrées sont
+                    aussi testées si elles sont présentes et prises en charge.
+                    Aucun modèle n’est téléchargé.
+                  </p>
+                </details>
               </div>
               <div id="dflashControls" class="hidden">
                 <p id="dflashStatus" class="hint" role="status"></p>
@@ -1723,26 +642,51 @@
                 </p>
               </details>
               <div id="optimizationResult"></div>
-              <p id="optimizationMethod" class="hint">
-                Comparaison sur ce PC : mêmes poids et même contexte. Une
-                présélection réduit les essais. Discussion, code et contexte
-                long : six workloads avec plusieurs longueurs d’entrée et
-                jusqu’à 512 tokens de sortie, deux passages pour choisir, puis
-                trois passages sur des prompts indépendants pour vérifier. Le
-                gain affiché vient de cette vérification.
-              </p>
+              <details>
+                <summary>Comment les gains sont vérifiés</summary>
+                <p id="optimizationMethod" class="hint">
+                  Comparaison sur ce PC : mêmes poids et même contexte. Une
+                  présélection réduit les essais. Discussion, code et contexte
+                  long : six workloads avec plusieurs longueurs d’entrée et
+                  jusqu’à 512 tokens de sortie, deux passages pour choisir, puis
+                  trois passages sur des prompts indépendants pour vérifier. Le
+                  gain affiché vient de cette vérification.
+                </p>
+              </details>
             </div>
-            <label for="completionSelect">Réponse mesurée</label>
-            <select id="completionSelect" disabled>
-              <option>Envoyez un message pour commencer</option>
-            </select>
-            <div id="responsePerformance" class="performance-card">
+            <details class="performance-card">
+              <summary>Statistiques de vos réponses</summary>
+              <label for="completionSelect">Réponse à consulter</label
+              ><select id="completionSelect" disabled>
+                <option>Envoyez un message pour commencer</option>
+              </select>
+              <div id="responsePerformance" class="response-detail">
+                <p class="hint">
+                  Les statistiques de la prochaine réponse apparaîtront ici.
+                </p>
+              </div>
+            </details>
+            <details id="engineControls" class="performance-card">
+              <summary>Choix du moteur et réglages avancés</summary>
+              <p id="engineRuntimeStatus" class="hint" role="status">
+                Choisissez un modèle local.
+              </p>
+              <label for="engineChoice">Exécution</label>
+              <select id="engineChoice">
+                <option value="auto">
+                  Automatique · profil validé, sinon référence
+                </option>
+              </select>
+              <button id="applyEngine" disabled>Appliquer ce moteur</button>
               <p class="hint">
-                Les statistiques de la prochaine réponse apparaîtront ici.
+                Les poids restent en place et le modèle reste chargé en mémoire
+                jusqu’à son déchargement. Automatique utilise la référence tant
+                qu’un meilleur profil n’a pas été vérifié sur cette machine.
               </p>
-            </div>
-            <div class="performance-card">
-              <h2>Comparer avec un autre moteur</h2>
+              <p id="engineCredit" class="hint"></p>
+            </details>
+            <details class="performance-card">
+              <summary>Comparer avec un autre moteur</summary>
               <p class="hint">
                 La comparaison démarre uniquement à votre demande et peut
                 prendre quelques secondes. Le moteur est occupé pendant cette
@@ -1767,14 +711,12 @@
                 Mesurer la dernière réponse
               </button>
               <div id="comparisonResult"></div>
-            </div>
-            <div class="performance-card">
-              <div class="side-heading">
-                <h2>Votre machine</h2>
-                <button id="recommendButton" class="link-button">
-                  Modèles conseillés ↗
-                </button>
-              </div>
+            </details>
+            <details class="performance-card">
+              <summary>Votre machine</summary>
+              <button id="recommendButton" class="link-button">
+                Modèles conseillés ↗
+              </button>
               <p class="hint" id="hardwareHint">Lecture du matériel…</p>
               <div class="performance-metrics">
                 <div>
@@ -1795,7 +737,7 @@
                 <summary>Sources et périmètre des mesures</summary>
                 <p id="systemMethod"></p>
               </details>
-            </div>
+            </details>
           </div>
         </section>
       </main>
@@ -1864,80 +806,7 @@
         </details>
       </div>
     </dialog>
-    <dialog id="library">
-      <div class="dialog-head">
-        <h2>Votre bibliothèque</h2>
-        <button id="closeLibrary" aria-label="Fermer la bibliothèque">×</button>
-      </div>
-      <p class="hint">
-        Les poids sont lus sur place. Seuls les modèles compatibles peuvent être
-        chargés par local-llm.
-      </p>
-      <div class="library-tools">
-        <input
-          id="modelSearch"
-          type="search"
-          placeholder="Chercher un modèle…"
-          aria-label="Chercher un modèle"
-        />
-      </div>
-      <p class="hint" id="libraryConnection">
-        Les modèles de LM Studio sont lus directement depuis sa bibliothèque.
-        Son serveur n’est pas nécessaire ; aucun fichier n’est copié.
-      </p>
-      <p class="hint" id="modelHint"></p>
-      <div class="source-status">
-        <span id="engineDot" class="dot off"></span
-        ><span id="engineStatus">Connexion au moteur…</span>
-      </div>
-      <p class="hint">
-        Le modèle reste chargé entre les réponses. Décharger libère les poids et
-        le cache du moteur local ; LM Studio gère sa mémoire séparément.
-      </p>
-      <button id="unloadModel" disabled>Décharger le modèle local</button>
-      <div id="modelList" class="model-list"></div>
-      <button id="scanModels">Rechercher à nouveau</button>
-      <label for="checkpointPath">Ajouter un checkpoint existant</label>
-      <div class="library-tools">
-        <input
-          id="checkpointPath"
-          type="text"
-          placeholder="/chemin/vers/modele.gguf ou dossier"
-          autocomplete="off"
-        />
-        <button id="importCheckpoint">Ajouter sans copier</button>
-      </div>
-      <p id="importStatus" class="hint" role="status">
-        Le fichier reste à son emplacement. Seul son chemin est enregistré sur
-        ce PC.
-      </p>
-      <details id="optionalLM">
-        <summary>Connexion LM Studio optionnelle</summary>
-        <p class="hint">
-          Pour comparer les moteurs ou utiliser un modèle via LM Studio. La
-          lecture directe des checkpoints fonctionne sans cette connexion.
-          Déchargez le modèle dans LM Studio pour éviter que les deux moteurs
-          occupent la RAM en même temps.
-        </p>
-        <div class="lm-status-line">
-          <span
-            ><span id="lmDot" class="dot off"></span
-            ><span id="lmStatus">LM Studio · connexion optionnelle</span></span
-          ><button
-            id="lmRefresh"
-            class="icon-button"
-            aria-label="Actualiser LM Studio"
-            title="Actualiser LM Studio"
-          >
-            ↻
-          </button>
-        </div>
-        <button id="sidebarConnectionHelp" class="link-button">
-          Comment connecter LM Studio ?
-        </button>
-      </details>
-      <div class="library-roots" id="libraryRoots"></div>
-    </dialog>
+
     <dialog id="connectionDialog">
       <div class="dialog-head">
         <h2>Connecter LM Studio</h2>
@@ -2549,133 +1418,204 @@
         syncLength();
         setBusy(busy);
       }
+      function libraryAvailability(model) {
+        if (model.availability) return model.availability;
+        if (model.role === "auxiliary")
+          return {
+            code: "auxiliary",
+            label: "Auxiliaire",
+            reason: model.reason,
+          };
+        if (
+          ["EXL3", "EXL2", "GPTQ", "AWQ", "BitsAndBytes"].includes(model.format)
+        )
+          return {
+            code: "unsupported_format",
+            label: "Format incompatible",
+            reason: model.reason,
+          };
+        return model.compatible || model.accelerator_candidate
+          ? {
+              code: "candidate",
+              label: "À charger",
+              reason:
+                "La compatibilité et la RAM seront vérifiées au chargement.",
+            }
+          : {
+              code: "unavailable",
+              label: "Non pris en charge",
+              reason:
+                model.reason ||
+                "Ce fichier nécessite un autre moteur ou des fichiers complémentaires.",
+            };
+      }
       function renderCatalog(data) {
         catalogData = data;
         catalog = data.models;
         renderModelPicker();
         updateModelSelection();
-        $("modelHint").textContent =
+        const runnable = catalog.filter(
+          (m) => libraryAvailability(m).code === "candidate",
+        );
+        $("libraryCount").textContent = String(catalog.length);
+        $("libraryReadyCount").textContent = String(runnable.length);
+        $("libraryBlockedCount").textContent = String(
           catalog.filter(
             (m) =>
-              m.compatible || (gpuInfo.available && m.accelerator_candidate),
-          ).length +
-          " à essayer · " +
-          catalog.length +
-          " fichiers détectés" +
-          (lmCatalog.length ? " · " + lmCatalog.length + " via LM Studio" : "");
+              !["candidate", "auxiliary"].includes(libraryAvailability(m).code),
+          ).length,
+        );
+        $("modelHint").textContent =
+          runnable.length + " à charger · " + catalog.length + " détectés";
         $("localLibraryStatus").textContent =
-          catalog.length + " checkpoints sur ce PC";
+          catalog.length + " modèles sur cet appareil";
+        $("libraryActive").classList.toggle(
+          "hidden",
+          !gpuInfo.loaded && !info.loaded,
+        );
         $("modelList").replaceChildren();
         const query = $("modelSearch").value.trim().toLowerCase();
-        for (const m of catalog.filter((m) =>
-          (m.name + " " + m.source).toLowerCase().includes(query),
-        )) {
-          const row = node("div", "model-row"),
-            desc = node("div");
+        const filter = $("modelFilter").value || "all";
+        const visible = catalog.filter((m) => {
+          const state = libraryAvailability(m);
+          return (
+            [m.name, m.source, m.format, m.quantization, state.label]
+              .join(" ")
+              .toLowerCase()
+              .includes(query) &&
+            (filter === "all" ||
+              (filter === "available" && state.code === "candidate") ||
+              (filter === "auxiliary" && state.code === "auxiliary") ||
+              (filter === "blocked" &&
+                !["candidate", "auxiliary"].includes(state.code)))
+          );
+        });
+        for (const m of visible) {
+          const state = libraryAvailability(m);
+          const loaded =
+            (gpuInfo.loaded && gpuInfo.model_id === m.id) ||
+            (info.loaded && data.current_id === m.id);
+          const row = node("article", "model-row");
+          const desc = node("div");
+          const format =
+            m.format === "Safetensors" && m.engines?.includes("mlx")
+              ? "MLX"
+              : m.format || "Modèle";
           desc.append(
             node("strong", "", m.name),
             node(
               "small",
               "",
-              m.source + " · " + bytes(m.size_bytes) + " · " + modelQuant(m),
+              [m.source, format, bytes(m.size_bytes), modelQuant(m)]
+                .filter(Boolean)
+                .join(" · "),
             ),
           );
-          if (
-            !m.compatible &&
-            !(gpuInfo.available && m.accelerator_candidate)
-          ) {
-            desc.append(node("small", "", "Détecté · " + m.reason));
+          row.append(node("span", "model-file", format), desc);
+          const candidate = state.code === "candidate";
+          row.append(
+            node(
+              "span",
+              "model-state" + (loaded ? " ready" : candidate ? "" : " blocked"),
+              loaded ? "● Chargé" : state.label,
+            ),
+          );
+          if (candidate) {
+            const button = node(
+              "button",
+              loaded ? "" : "primary",
+              loaded ? "Chargé" : "Charger",
+            );
+            button.disabled = busy || loaded;
+            button.onclick = () =>
+              loadModel(
+                m.accelerator_candidate && gpuInfo.available
+                  ? "llamacpp:" + m.id
+                  : m.id,
+              );
+            row.append(button);
+            if (m.engines?.length)
+              desc.append(
+                node("small", "", m.engines.map(engineLabel).join(" / ")),
+              );
+          } else {
+            if (m.format === "EXL3" || m.format === "EXL2")
+              desc.append(
+                node(
+                  "small",
+                  "",
+                  "Runtime dédié requis · non intégré à local-llm.",
+                ),
+              );
+            const details = node("details");
+            details.append(
+              node(
+                "summary",
+                "",
+                state.code === "auxiliary"
+                  ? "Comment l’utiliser"
+                  : "Pourquoi ce modèle ne peut pas être chargé",
+              ),
+              node("p", "hint", state.reason),
+            );
+            desc.append(details);
+          }
+          $("modelList").append(row);
+        }
+        const external = lmCatalog.filter((m) =>
+          m.name.toLowerCase().includes(query),
+        );
+        if (external.length && filter !== "blocked" && filter !== "auxiliary") {
+          const group = node("details", "performance-card");
+          group.append(
+            node(
+              "summary",
+              "",
+              "Via LM Studio · " + external.length + " modèles",
+            ),
+          );
+          for (const m of external) {
+            const row = node("div", "model-row"),
+              desc = node("div");
             desc.append(
+              node("strong", "", m.name),
               node(
                 "small",
                 "",
-                m.accelerator_candidate
-                  ? "Disponible avec le moteur llama.cpp intégré, si cette version prend en charge son architecture."
-                  : "Ce fichier ne peut pas être utilisé seul par le moteur de discussion.",
+                "LM Studio · " +
+                  (m.loaded ? "chargé en mémoire" : "téléchargé, à charger"),
               ),
             );
-          }
-          row.append(desc);
-          if (m.accelerator_candidate && gpuInfo.available) {
-            desc.append(
-              node(
-                "small",
-                "",
-                "Compatibilité confirmée au chargement · " +
-                  (m.engines || ["llamacpp"]).map(engineLabel).join(" / "),
-              ),
-            );
-            const gpuButton = node("button", "", "Charger dans local-llm");
-            gpuButton.disabled = busy;
-            gpuButton.onclick = () => loadModel("llamacpp:" + m.id);
-            row.append(gpuButton);
-          }
-          if (m.compatible && !(m.accelerator_candidate && gpuInfo.available)) {
-            const b = node(
+            const button = node(
               "button",
               "",
-              m.id === data.current_id
-                ? "Chargé · moteur CPU"
-                : "Charger · moteur CPU",
+              m.loaded ? "Choisir l’instance" : "Charger dans LM Studio",
             );
-            b.disabled = busy || m.id === data.current_id;
-            b.addEventListener("click", () => loadModel(m.id));
-            row.append(b);
+            button.disabled = busy;
+            button.onclick = () => {
+              if (m.loaded) {
+                setWorkspace("chat");
+                $("modelSelect").click();
+              } else loadModel("lmstudio:" + m.id, null, true);
+            };
+            row.append(desc, button);
+            group.append(row);
           }
-          $("modelList").append(row);
-        }
-        if (lmCatalog.length)
-          $("modelList").append(
-            node("p", "eyebrow", "Disponibles via le serveur LM Studio"),
-          );
-        for (const m of lmCatalog.filter((m) =>
-          m.name.toLowerCase().includes(query),
-        )) {
-          const row = node("div", "model-row"),
-            desc = node("div");
-          desc.append(
-            node("strong", "", m.name),
-            node(
-              "small",
-              "",
-              "Serveur LM Studio · " +
-                (m.quantization || "") +
-                (m.loaded
-                  ? " · chargé en mémoire"
-                  : " · téléchargé, non chargé"),
-            ),
-          );
-          const b = node(
-            "button",
-            "",
-            m.loaded ? "Choisir" : "Charger dans LM Studio",
-          );
-          b.disabled = busy;
-          b.onclick = () => {
-            if (m.loaded) {
-              $("library").close();
-              $("modelSelect").click();
-            } else loadModel("lmstudio:" + m.id, null, true);
-          };
-          row.append(desc, b);
-          $("modelList").append(row);
+          $("modelList").append(group);
         }
         if (!$("modelList").children.length)
-          $("modelList").append(
-            node("p", "hint", "Aucun modèle ne correspond à cette recherche."),
-          );
-        if (!catalog.length)
           $("modelList").append(
             node(
               "p",
               "hint",
-              "Aucun modèle trouvé. Ajoutez un dossier de modèles au lancement.",
+              catalog.length
+                ? "Aucun modèle ne correspond à ces filtres."
+                : "Aucun modèle détecté. Ajoutez un dossier déjà téléchargé avec le bouton Ajouter.",
             ),
           );
-        $("libraryRoots").textContent =
-          "Dossiers recherchés\n" + data.roots.join("\n");
+        $("libraryRoots").textContent = data.roots.join("\n");
         $("modelSelect").disabled =
-          busy || (!catalog.length && !lmCatalog.length);
+          busy || !modelChoices(catalog, lmCatalog, !!gpuInfo.available).length;
       }
       async function loadModel(
         id,
@@ -2800,9 +1740,9 @@
           updateStorageNotice();
           renderResponsePerformance();
           refreshModelAdvice();
-          $("library").close();
+          setWorkspace("chat");
           $("notice").textContent = activeGPU
-            ? "Modèle prêt dans le moteur direct. Ouvrez Performances pour le calibrer sur votre machine."
+            ? "Modèle chargé. Vous pouvez commencer la discussion."
             : activeLM
               ? ready()
                 ? "Modèle chargé dans LM Studio. L’historique est conservé."
@@ -4053,11 +2993,21 @@
         updateMeasureButton();
       }
       function setWorkspace(name) {
-        const chat = name === "chat";
-        $("chatView").classList.toggle("hidden", !chat);
-        $("performanceView").classList.toggle("hidden", chat);
-        $("chatTab").setAttribute("aria-selected", String(chat));
-        $("performanceTab").setAttribute("aria-selected", String(!chat));
+        const pages = {
+          chat: ["chatView", "chatTab", "Discussions"],
+          library: ["libraryView", "libraryTab", "Modèles"],
+          performance: ["performanceView", "performanceTab", "Optimisations"],
+        };
+        if (!pages[name]) return;
+        for (const [key, [view, tab]] of Object.entries(pages)) {
+          $(view).classList.toggle("hidden", key !== name);
+          $(tab).setAttribute("aria-selected", String(key === name));
+          $(tab).tabIndex = key === name ? 0 : -1;
+        }
+        $("workspaceName").textContent = pages[name][2];
+        $("contextButton").classList.toggle("hidden", name !== "chat");
+        $("settingsButton").classList.toggle("hidden", name !== "chat");
+        document.title = "local-llm · " + pages[name][2];
       }
       function syncLength() {
         const lmLimit =
@@ -4762,6 +3712,10 @@
       }
       const emptyBackup = $("empty").cloneNode(true);
       function bindSuggestions() {
+        if ($("welcomeChoose"))
+          $("welcomeChoose").onclick = () => $("libraryButton").click();
+        if ($("welcomeAdvice"))
+          $("welcomeAdvice").onclick = () => $("recommendButton").click();
         document.querySelectorAll("[data-prompt]").forEach((b) => {
           b.onclick = () => {
             $("prompt").value = b.dataset.prompt;
@@ -4904,7 +3858,10 @@
         updateStorageNotice();
       }
       function renderChatList() {
-        const chats = conversations.visible();
+        const query = $("chatSearch").value.trim().toLowerCase();
+        const chats = conversations
+          .visible()
+          .filter((chat) => chat.title.toLowerCase().includes(query));
         const available = $("chatList").clientHeight;
         const chatPageSize = Math.max(
           1,
@@ -5079,6 +4036,14 @@
       $("closeSidebar").onclick = closeSidebar;
       $("sidebarBackdrop").onclick = closeSidebar;
       document.addEventListener("keydown", (event) => {
+        if (
+          (event.metaKey || event.ctrlKey) &&
+          event.key.toLowerCase() === "n" &&
+          !event.altKey
+        ) {
+          event.preventDefault();
+          newConversation();
+        }
         if (event.key === "Escape" && $("sidebar").classList.contains("open")) {
           closeSidebar();
           $("openSidebar").focus();
@@ -5218,6 +4183,23 @@
         setWorkspace("performance");
         closeSidebar();
       };
+      document
+        .querySelector(".workspace-tabs")
+        .addEventListener("keydown", (event) => {
+          if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key))
+            return;
+          event.preventDefault();
+          const tabs = ["chatTab", "libraryTab", "performanceTab"].map($);
+          const index = tabs.indexOf(document.activeElement);
+          const next =
+            event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? 2
+                : (index + (event.key === "ArrowDown" ? 1 : -1) + 3) % 3;
+          tabs[next].click();
+          tabs[next].focus();
+        });
       $("completionSelect").onchange = renderResponsePerformance;
       $("runComparison").onclick = comparison;
       $("lmGuide").open = true;
@@ -5274,10 +4256,17 @@
         $("libraryButton").click();
       };
       $("libraryButton").onclick = () => {
-        $("library").showModal();
+        setWorkspace("library");
+        closeSidebar();
         $("modelSearch").focus();
       };
-      $("closeLibrary").onclick = () => $("library").close();
+      $("libraryTab").onclick = () => $("libraryButton").click();
+      $("addCheckpoint").onclick = () => {
+        $("importModel").open = true;
+        $("checkpointPath").scrollIntoView({ block: "center" });
+        $("checkpointPath").focus();
+      };
+      $("closeLibrary").onclick = () => setWorkspace("chat");
       $("scanModels").onclick = async () => {
         if (busy) return;
         setBusy(true);
@@ -5430,6 +4419,11 @@
       };
       $("newChat").onclick = newConversation;
       $("modelSearch").oninput = () => renderCatalog(catalogData);
+      $("modelFilter").onchange = () => renderCatalog(catalogData);
+      $("chatSearch").oninput = () => {
+        chatPage = 0;
+        renderChatList();
+      };
       $("recommendButton").onclick = () => $("recommendations").showModal();
       $("closeRecommendations").onclick = () => $("recommendations").close();
       async function recommendations() {
